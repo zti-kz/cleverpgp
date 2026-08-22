@@ -111,6 +111,12 @@ def _visible_strings(widget: QWidget) -> list[str]:
     strings.extend(label.text() for label in widget.findChildren(QLabel))
     strings.extend(button.text() for button in widget.findChildren(QPushButton))
     strings.extend(line.placeholderText() for line in widget.findChildren(QLineEdit))
+    strings.extend(
+        combo.itemText(index)
+        for combo in widget.findChildren(QComboBox)
+        if combo.objectName() != "languageSelector"
+        for index in range(combo.count())
+    )
     strings.extend(button.toolTip() for button in widget.findChildren(QPushButton))
     return [value for value in strings if value]
 
@@ -134,7 +140,11 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
     window.session = profiles.unlock_with_password(password)
     window._show_dashboard()
     about = AboutDialog(window)
-    container = ContainerCreationDialog(window)
+    container = ContainerCreationDialog(
+        window,
+        minimum_capacity=32 * 1024 * 1024,
+        system_disk=True,
+    )
     source = tmp_path / "report.txt"
     source.write_text("test", encoding="utf-8")
     shell = ShellOperationDialog(repository, "encrypt", source)

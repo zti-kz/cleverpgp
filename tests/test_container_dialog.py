@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QSlider  # noqa: E402
+from PySide6.QtWidgets import QApplication, QComboBox, QSlider  # noqa: E402
 
 from biopgp.ui.container_dialog import (  # noqa: E402
     TEBIBYTE,
@@ -62,11 +62,29 @@ def test_system_disk_dialog_enforces_windows_minimum_capacity() -> None:
     application = QApplication.instance() or QApplication([])
     dialog = ContainerCreationDialog(
         minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+        system_disk=True,
     )
 
     assert dialog.data_capacity >= MIN_WINDOWS_DISK_CAPACITY
     assert dialog._capacity_choices[0] == MIN_WINDOWS_DISK_CAPACITY
     assert "32 МБ" in dialog.minimum_size_label.text()
+    assert dialog.file_system == "NTFS"
+    assert dialog.findChild(QComboBox, "fileSystemInput") is dialog.file_system_input
+
+    dialog.file_system_input.setCurrentIndex(1)
+    assert dialog.file_system == "EXFAT"
+    assert "журналирование" in dialog.file_system_description.text()
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_legacy_disk_dialog_keeps_implicit_ntfs_without_format_selector() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog()
+
+    assert dialog.file_system == "NTFS"
+    assert dialog.findChild(QComboBox, "fileSystemInput") is None
 
     dialog.close()
     application.processEvents()

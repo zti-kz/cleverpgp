@@ -139,6 +139,11 @@
     "Минимальная ёмкость зашифрованного диска — 1 МБ.": "The minimum encrypted disk capacity is 1 MB.",
     "Такой объём не поддерживается выбранной файловой системой.": "This capacity is not supported by the selected file system.",
     "Контейнер резервирует выбранную ёмкость. Файл контейнера включает служебные криптографические данные и может быть немного больше указанного объёма.": "The container reserves the selected capacity. The container file includes cryptographic metadata and may be slightly larger than the specified capacity.",
+    "Файловая система": "File system",
+    "NTFS — для Windows (рекомендуется)": "NTFS — for Windows (recommended)",
+    "exFAT — для совместимости": "exFAT — for compatibility",
+    "Журналируемая файловая система Windows с поддержкой больших файлов, контроля доступа и восстановления метаданных после сбоя.": "A journaled Windows file system supporting large files, access control, and metadata recovery after a failure.",
+    "Файловая система для обмена между Windows, Linux и другими системами. Не использует журналирование, поэтому чувствительнее к внезапному отключению.": "A file system for exchanging data between Windows, Linux, and other systems. It does not use journaling, so it is more sensitive to sudden disconnection.",
     "Введите желаемую ёмкость и выберите единицу измерения.": "Enter the desired capacity and select a unit.",
     "Защищённый диск": "Encrypted disk",
 

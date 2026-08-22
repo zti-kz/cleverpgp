@@ -139,6 +139,7 @@ def test_container_creation_and_mount_use_one_continuous_progress_task(
         container_path = tmp_path / "continuous.cpgv"
         data_capacity = MIN_DATA_CAPACITY
         volume_label = "Continuous"
+        file_system = "NTFS"
 
         def __init__(self, parent: object = None) -> None:
             pass
@@ -231,16 +232,20 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         container_path = tmp_path / "system.cpgv"
         data_capacity = 64 * 1024 * 1024
         volume_label = "System disk"
+        file_system = "EXFAT"
         requested_minimum: int | None = None
+        requested_system_mode = False
 
         def __init__(
             self,
             parent: object = None,
             *,
             minimum_capacity: int,
+            system_disk: bool,
         ) -> None:
             del parent
             type(self).requested_minimum = minimum_capacity
+            type(self).requested_system_mode = system_disk
 
         def exec(self) -> QDialog.DialogCode:
             return QDialog.DialogCode.Accepted
@@ -319,12 +324,13 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         time.sleep(0.01)
 
     assert CreationDialog.requested_minimum == 32 * 1024 * 1024
+    assert CreationDialog.requested_system_mode
     assert manager.mounted_drive == "Y:"
     assert manager.create_call is not None
     assert manager.create_call["container_path"] == tmp_path / "system.cpgv"
     assert manager.create_call["logical_capacity"] == 64 * 1024 * 1024
     assert manager.create_call["label"] == "System disk"
-    assert manager.create_call["file_system"] == "NTFS"
+    assert manager.create_call["file_system"] == "EXFAT"
 
     manager.mounted_drive = None
     window.close()

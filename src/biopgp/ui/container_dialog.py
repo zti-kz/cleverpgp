@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QStandardPaths
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -40,11 +41,13 @@ class ContainerCreationDialog(QDialog):
         parent: object = None,
         *,
         minimum_capacity: int = MINIMUM_CAPACITY,
+        system_disk: bool = False,
     ) -> None:
         super().__init__(parent)
         if minimum_capacity < MINIMUM_CAPACITY:
             raise ValueError("Minimum capacity must be at least 1 MiB.")
         self._minimum_capacity = minimum_capacity
+        self._system_disk = system_disk
         self._selected_path: Path | None = None
         self._selected_capacity = max(DEFAULT_CAPACITY, self._minimum_capacity)
         self._maximum_capacity = self._selected_capacity
@@ -52,7 +55,7 @@ class ContainerCreationDialog(QDialog):
         self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
         self.setMinimumWidth(640)
-        self.resize(680, 720)
+        self.resize(680, 820 if self._system_disk else 720)
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
         self._build_ui()
 
@@ -69,6 +72,13 @@ class ContainerCreationDialog(QDialog):
     @property
     def volume_label(self) -> str:
         return self.label_input.text().strip() or "Clever PGP"
+
+    @property
+    def file_system(self) -> str:
+        if not self._system_disk:
+            return "NTFS"
+        selected = str(self.file_system_input.currentData() or "NTFS").upper()
+        return selected if selected in ("NTFS", "EXFAT") else "NTFS"
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -187,6 +197,33 @@ class ContainerCreationDialog(QDialog):
         size_layout.addWidget(no_limit)
         outer.addWidget(size_card)
 
+        if self._system_disk:
+            format_card = QFrame()
+            format_card.setObjectName("formatCard")
+            format_layout = QVBoxLayout(format_card)
+            format_layout.setContentsMargins(16, 14, 16, 14)
+            format_layout.setSpacing(8)
+            format_title = QLabel("Файловая система")
+            format_title.setObjectName("fieldTitle")
+            self.file_system_input = QComboBox()
+            self.file_system_input.setObjectName("fileSystemInput")
+            self.file_system_input.addItem(
+                "NTFS — для Windows (рекомендуется)", "NTFS"
+            )
+            self.file_system_input.addItem(
+                "exFAT — для совместимости", "EXFAT"
+            )
+            self.file_system_description = QLabel()
+            self.file_system_description.setObjectName("muted")
+            self.file_system_description.setWordWrap(True)
+            self.file_system_input.currentIndexChanged.connect(
+                self._update_file_system_description
+            )
+            format_layout.addWidget(format_title)
+            format_layout.addWidget(self.file_system_input)
+            format_layout.addWidget(self.file_system_description)
+            outer.addWidget(format_card)
+
         label_title = QLabel("Название диска")
         label_title.setObjectName("fieldTitle")
         self.label_input = QLineEdit("Clever PGP")
@@ -217,7 +254,23 @@ class ContainerCreationDialog(QDialog):
         self.size_slider.valueChanged.connect(self._slider_changed)
         self.path_input.textChanged.connect(self._update_storage_summary)
         localize_widget_tree(self)
+        if self._system_disk:
+            self._update_file_system_description()
         self._update_storage_summary()
+
+    def _update_file_system_description(self, *_: object) -> None:
+        if self.file_system == "EXFAT":
+            description = (
+                "Файловая система для обмена между Windows, Linux и другими "
+                "системами. Не использует журналирование, поэтому чувствительнее "
+                "к внезапному отключению."
+            )
+        else:
+            description = (
+                "Журналируемая файловая система Windows с поддержкой больших "
+                "файлов, контроля доступа и восстановления метаданных после сбоя."
+            )
+        self.file_system_description.setText(tr(description))
 
     def accept(self) -> None:
         try:
@@ -465,12 +518,17 @@ QFrame#storageCard {
     border: 1px solid #1e4f70;
     border-radius: 10px;
 }
+QFrame#formatCard {
+    background: #0d2135;
+    border: 1px solid #1e4f70;
+    border-radius: 10px;
+}
 QFrame#sizeCard {
     background: #111c2e;
     border: 1px solid #1e4f70;
     border-radius: 16px;
 }
-QLineEdit {
+QLineEdit, QComboBox {
     background: #0f172a;
     border: 1px solid #334155;
     border-radius: 9px;
@@ -479,7 +537,14 @@ QLineEdit {
     padding: 0 12px;
     selection-background-color: #0284c7;
 }
-QLineEdit:focus { border-color: #38bdf8; }
+QLineEdit:focus, QComboBox:focus { border-color: #38bdf8; }
+QComboBox::drop-down { border: 0; width: 34px; }
+QComboBox QAbstractItemView {
+    background: #0f172a;
+    border: 1px solid #334155;
+    color: #f8fafc;
+    selection-background-color: #0369a1;
+}
 QPushButton {
     background: #1e293b;
     border: 1px solid #475569;

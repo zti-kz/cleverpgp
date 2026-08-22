@@ -546,6 +546,7 @@ class MainWindow(QMainWindow):
             dialog = ContainerCreationDialog(
                 self,
                 minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+                system_disk=True,
             )
         else:
             dialog = ContainerCreationDialog(self)
@@ -554,6 +555,7 @@ class MainWindow(QMainWindow):
         target = dialog.container_path
         data_capacity = dialog.data_capacity
         volume_label = dialog.volume_label
+        file_system = dialog.file_system
 
         def create_container(
             master_key: bytes, progress: Callable[[int, str], None]
@@ -565,7 +567,7 @@ class MainWindow(QMainWindow):
                         master_key,
                         logical_capacity=data_capacity,
                         label=volume_label,
-                        file_system="NTFS",
+                        file_system=file_system,
                         progress=progress,
                     )
                 except Exception as error:
