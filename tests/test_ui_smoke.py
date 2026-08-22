@@ -224,6 +224,113 @@ def test_container_creation_and_mount_use_one_continuous_progress_task(
     application.processEvents()
 
 
+def test_system_disk_creation_uses_winspd_lifecycle_manager(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class CreationDialog:
+        container_path = tmp_path / "system.cpgv"
+        data_capacity = 64 * 1024 * 1024
+        volume_label = "System disk"
+        requested_minimum: int | None = None
+
+        def __init__(
+            self,
+            parent: object = None,
+            *,
+            minimum_capacity: int,
+        ) -> None:
+            del parent
+            type(self).requested_minimum = minimum_capacity
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class SystemDiskManager:
+        def __init__(self) -> None:
+            self.mounted_drive: str | None = None
+            self.create_call: dict[str, object] | None = None
+
+        def create_and_mount(
+            self,
+            container_path: Path,
+            master_key: bytes,
+            **options: object,
+        ) -> str:
+            progress = options.pop("progress")
+            assert callable(progress)
+            progress(50, "Форматирование")
+            self.create_call = {
+                "container_path": container_path,
+                "master_key": master_key,
+                **options,
+            }
+            self.mounted_drive = "Y:"
+            progress(100, "Готово")
+            return self.mounted_drive
+
+        def unmount(self) -> None:
+            self.mounted_drive = None
+
+    def unexpected_legacy_creation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("Legacy WinFsp container path was used.")
+
+    monkeypatch.setattr(
+        main_window_module, "WindowsSystemDiskManager", SystemDiskManager
+    )
+    monkeypatch.setattr(
+        main_window_module, "ContainerCreationDialog", CreationDialog
+    )
+    monkeypatch.setattr(
+        main_window_module.EncryptedContainer,
+        "create",
+        unexpected_legacy_creation,
+    )
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices, "openUrl", lambda _url: True
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    manager = SystemDiskManager()
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=manager,
+    )
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+
+    window._create_container()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert CreationDialog.requested_minimum == 32 * 1024 * 1024
+    assert manager.mounted_drive == "Y:"
+    assert manager.create_call is not None
+    assert manager.create_call["container_path"] == tmp_path / "system.cpgv"
+    assert manager.create_call["logical_capacity"] == 64 * 1024 * 1024
+    assert manager.create_call["label"] == "System disk"
+    assert manager.create_call["file_system"] == "NTFS"
+
+    manager.mounted_drive = None
+    window.close()
+    application.processEvents()
+
+
 def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     class MountedDisk:
         mounted_drive = "Z:"

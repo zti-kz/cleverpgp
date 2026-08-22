@@ -13,6 +13,7 @@ from biopgp.ui.container_dialog import (  # noqa: E402
     ContainerCreationDialog,
 )
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
+from biopgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY  # noqa: E402
 
 
 def test_container_size_is_selected_with_a_slider(
@@ -52,6 +53,20 @@ def test_container_capacity_has_no_512_mb_product_limit(monkeypatch) -> None:
 
     assert dialog.data_capacity == 2 * TEBIBYTE
     assert dialog.size_value.text() == "2 ТБ"
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_system_disk_dialog_enforces_windows_minimum_capacity() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog(
+        minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+    )
+
+    assert dialog.data_capacity >= MIN_WINDOWS_DISK_CAPACITY
+    assert dialog._capacity_choices[0] == MIN_WINDOWS_DISK_CAPACITY
+    assert "32 МБ" in dialog.minimum_size_label.text()
 
     dialog.close()
     application.processEvents()

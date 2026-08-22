@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QApplication
 
 from biopgp.config import APP_NAME, ORGANIZATION_NAME, database_path
 from biopgp.core.file_crypto import FileCryptoService
+from biopgp.core.mount import VaultMountManager
 from biopgp.core.profile_service import ProfileService
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import set_language
 from biopgp.ui.main_window import MainWindow
 from biopgp.ui.icons import line_icon
+
+if TYPE_CHECKING:
+    from biopgp.core.windows_storage import WindowsSystemDiskManager
+
+
+def default_mount_manager() -> VaultMountManager | WindowsSystemDiskManager:
+    if os.environ.get("CLEVERPGP_DISK_BACKEND", "").casefold() == "winspd":
+        from biopgp.core.windows_storage import WindowsSystemDiskManager
+
+        return WindowsSystemDiskManager()
+    return VaultMountManager()
 
 
 def main(container_path: Path | None = None) -> int:
@@ -29,6 +43,7 @@ def main(container_path: Path | None = None) -> int:
         repository,
         profile_service,
         FileCryptoService(),
+        mount_manager=default_mount_manager(),
         startup_container=container_path,
     )
     if container_path is None:

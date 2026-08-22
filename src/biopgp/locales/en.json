@@ -138,7 +138,7 @@
     "Объём диска должен быть больше нуля.": "Disk capacity must be greater than zero.",
     "Минимальная ёмкость зашифрованного диска — 1 МБ.": "The minimum encrypted disk capacity is 1 MB.",
     "Такой объём не поддерживается выбранной файловой системой.": "This capacity is not supported by the selected file system.",
-    "Указана максимальная ёмкость диска. Контейнер не занимает всё место сразу и увеличивает фактически занятую область по мере добавления файлов.": "This is the disk's maximum capacity. The container does not occupy all space immediately; its actual size grows as files are added.",
+    "Контейнер резервирует выбранную ёмкость. Файл контейнера включает служебные криптографические данные и может быть немного больше указанного объёма.": "The container reserves the selected capacity. The container file includes cryptographic metadata and may be slightly larger than the specified capacity.",
     "Введите желаемую ёмкость и выберите единицу измерения.": "Enter the desired capacity and select a unit.",
     "Защищённый диск": "Encrypted disk",
 

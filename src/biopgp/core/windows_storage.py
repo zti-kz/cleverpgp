@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +30,30 @@ class WindowsDiskInfo:
 
 def _powershell_executable() -> str:
     return "powershell.exe"
+
+
+def winspd_driver_available() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import winreg
+
+        for view in (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_LOCAL_MACHINE,
+                    r"SOFTWARE\WinSpd",
+                    0,
+                    winreg.KEY_READ | view,
+                ) as key:
+                    install_dir = Path(str(winreg.QueryValueEx(key, "InstallDir")[0]))
+                if (install_dir / "sys" / "winspd-x64.dll").is_file():
+                    return True
+            except OSError:
+                continue
+    except (ImportError, OSError):
+        return False
+    return False
 
 
 def _run_powershell(script: str, *, timeout: float = 30.0) -> str:
@@ -157,7 +182,9 @@ def format_new_cleverpgp_disk(
     ):
         raise MountUnavailableError("Выбранный диск не принадлежит Clever PGP.")
     normalized_label = label.strip() or "Clever PGP"
-    if len(normalized_label) > 32 or any(ord(character) < 32 for character in normalized_label):
+    if len(normalized_label) > 32 or any(
+        ord(character) < 32 for character in normalized_label
+    ):
         raise ValueError("Disk label contains unsupported characters.")
     encoded_label = base64.b64encode(normalized_label.encode("utf-8")).decode("ascii")
 

@@ -35,12 +35,20 @@ DEFAULT_CAPACITY = 20 * MEBIBYTE
 
 
 class ContainerCreationDialog(QDialog):
-    def __init__(self, parent: object = None) -> None:
+    def __init__(
+        self,
+        parent: object = None,
+        *,
+        minimum_capacity: int = MINIMUM_CAPACITY,
+    ) -> None:
         super().__init__(parent)
+        if minimum_capacity < MINIMUM_CAPACITY:
+            raise ValueError("Minimum capacity must be at least 1 MiB.")
+        self._minimum_capacity = minimum_capacity
         self._selected_path: Path | None = None
-        self._selected_capacity = DEFAULT_CAPACITY
-        self._maximum_capacity = DEFAULT_CAPACITY
-        self._capacity_choices = [MINIMUM_CAPACITY, DEFAULT_CAPACITY]
+        self._selected_capacity = max(DEFAULT_CAPACITY, self._minimum_capacity)
+        self._maximum_capacity = self._selected_capacity
+        self._capacity_choices = [self._minimum_capacity, self._selected_capacity]
         self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
         self.setMinimumWidth(640)
@@ -266,9 +274,9 @@ class ContainerCreationDialog(QDialog):
     def _update_size_summary(self) -> None:
         self.size_value.setText(self._format_capacity(self._selected_capacity))
         self.size_hint.setText(tr(
-            "Указана максимальная ёмкость диска. Контейнер не занимает всё "
-            "место сразу и увеличивает фактически занятую область по мере "
-            "добавления файлов."
+            "Контейнер резервирует выбранную ёмкость. Файл контейнера включает "
+            "служебные криптографические данные и может быть немного больше "
+            "указанного объёма."
         ))
 
     def _update_storage_summary(self, *_: object) -> None:
@@ -286,7 +294,7 @@ class ContainerCreationDialog(QDialog):
             return
 
         self._current_path = path
-        slider_maximum = max(MINIMUM_CAPACITY, maximum_capacity)
+        slider_maximum = max(self._minimum_capacity, maximum_capacity)
         self._configure_slider(slider_maximum)
 
         drive_name = path.anchor.rstrip("\\/") or str(path.parent)
@@ -325,7 +333,10 @@ class ContainerCreationDialog(QDialog):
     def _configure_slider(self, maximum_capacity: int) -> None:
         previous_capacity = min(self._selected_capacity, maximum_capacity)
         self._maximum_capacity = maximum_capacity
-        self._capacity_choices = self._build_capacity_choices(maximum_capacity)
+        self._capacity_choices = self._build_capacity_choices(
+            maximum_capacity,
+            minimum_capacity=self._minimum_capacity,
+        )
         position = self._capacity_to_slider(previous_capacity, maximum_capacity)
         self.size_slider.blockSignals(True)
         self.size_slider.setRange(0, len(self._capacity_choices) - 1)
@@ -333,7 +344,10 @@ class ContainerCreationDialog(QDialog):
         self.size_slider.blockSignals(False)
         self._selected_capacity = self._slider_to_capacity(position)
         self.minimum_size_label.setText(
-            tr("Минимум: {size}", size=self._format_capacity(MINIMUM_CAPACITY))
+            tr(
+                "Минимум: {size}",
+                size=self._format_capacity(self._minimum_capacity),
+            )
         )
         self.maximum_size_label.setText(
             tr("Максимум: {size}", size=self._format_capacity(maximum_capacity))
@@ -345,24 +359,28 @@ class ContainerCreationDialog(QDialog):
         return self._capacity_choices[index]
 
     def _capacity_to_slider(self, capacity: int, maximum_capacity: int) -> int:
-        target = max(MINIMUM_CAPACITY, min(maximum_capacity, capacity))
+        target = max(self._minimum_capacity, min(maximum_capacity, capacity))
         return min(
             range(len(self._capacity_choices)),
             key=lambda index: abs(self._capacity_choices[index] - target),
         )
 
     @staticmethod
-    def _build_capacity_choices(maximum_capacity: int) -> list[int]:
-        maximum = max(MINIMUM_CAPACITY, maximum_capacity)
-        choices = {MINIMUM_CAPACITY, maximum}
+    def _build_capacity_choices(
+        maximum_capacity: int,
+        *,
+        minimum_capacity: int = MINIMUM_CAPACITY,
+    ) -> list[int]:
+        maximum = max(minimum_capacity, maximum_capacity)
+        choices = {minimum_capacity, maximum}
         for unit in (MEBIBYTE, GIBIBYTE, TEBIBYTE, PEBIBYTE, EXBIBYTE):
             for amount in range(1, 101):
                 capacity = amount * unit
-                if capacity <= maximum:
+                if minimum_capacity <= capacity <= maximum:
                     choices.add(capacity)
             for amount in range(110, 1001, 10):
                 capacity = amount * unit
-                if capacity <= maximum:
+                if minimum_capacity <= capacity <= maximum:
                     choices.add(capacity)
         return sorted(choices)
 

@@ -35,6 +35,11 @@ from biopgp.core.mount import VaultMountManager, mount_backend_available
 from biopgp.core.models import UnlockMode
 from biopgp.core.profile_service import ProfileService, UnlockedSession
 from biopgp.core.storage import ProfileRepository
+from biopgp.core.windows_storage import (
+    WindowsSystemDiskManager,
+    winspd_driver_available,
+)
+from biopgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY
 from biopgp.localization import (
     available_languages,
     current_language,
@@ -81,7 +86,7 @@ class MainWindow(QMainWindow):
         repository: ProfileRepository,
         profile_service: ProfileService,
         file_crypto: FileCryptoService,
-        mount_manager: VaultMountManager | None = None,
+        mount_manager: VaultMountManager | WindowsSystemDiskManager | None = None,
         startup_container: Path | None = None,
     ) -> None:
         super().__init__()
@@ -428,11 +433,26 @@ class MainWindow(QMainWindow):
         container_layout.addWidget(create_container_button)
         container_layout.addWidget(open_container_button)
 
-        if not mount_backend_available():
-            install_button = QPushButton("Установить компонент виртуального диска")
-            install_button.setIcon(line_icon("shield"))
-            install_button.clicked.connect(self._install_mount_backend)
-            container_layout.addWidget(install_button)
+        disk_backend_available = self._disk_backend_available()
+        if self._uses_windows_system_disk and not disk_backend_available:
+            create_container_button.setEnabled(False)
+            open_container_button.setEnabled(False)
+        if not disk_backend_available:
+            if self._uses_windows_system_disk:
+                unavailable = QLabel(
+                    "Тестовый системный режим недоступен: компонент WinSpd "
+                    "не установлен."
+                )
+                unavailable.setObjectName("muted")
+                unavailable.setWordWrap(True)
+                container_layout.addWidget(unavailable)
+            else:
+                install_button = QPushButton(
+                    "Установить компонент виртуального диска"
+                )
+                install_button.setIcon(line_icon("shield"))
+                install_button.clicked.connect(self._install_mount_backend)
+                container_layout.addWidget(install_button)
         container_layout.addStretch()
 
         action_columns.addWidget(file_panel, 1)
@@ -522,7 +542,13 @@ class MainWindow(QMainWindow):
         )
 
     def _create_container(self) -> None:
-        dialog = ContainerCreationDialog(self)
+        if self._uses_windows_system_disk:
+            dialog = ContainerCreationDialog(
+                self,
+                minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+            )
+        else:
+            dialog = ContainerCreationDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         target = dialog.container_path
@@ -532,6 +558,23 @@ class MainWindow(QMainWindow):
         def create_container(
             master_key: bytes, progress: Callable[[int, str], None]
         ) -> tuple[Path, str | None, str | None]:
+            if self._uses_windows_system_disk:
+                try:
+                    drive = self.mount_manager.create_and_mount(
+                        target,
+                        master_key,
+                        logical_capacity=data_capacity,
+                        label=volume_label,
+                        file_system="NTFS",
+                        progress=progress,
+                    )
+                except Exception as error:
+                    if target.is_file():
+                        progress(100, "Контейнер создан без подключения")
+                        return target, None, str(error)
+                    raise
+                return target, drive, None
+
             def creation_progress(value: int, message: str) -> None:
                 progress(max(1, round(value * 0.6)), message)
 
@@ -577,6 +620,15 @@ class MainWindow(QMainWindow):
                 )
 
         self._start_key_progress_task(create_container, created)
+
+    @property
+    def _uses_windows_system_disk(self) -> bool:
+        return isinstance(self.mount_manager, WindowsSystemDiskManager)
+
+    def _disk_backend_available(self) -> bool:
+        if self._uses_windows_system_disk:
+            return winspd_driver_available()
+        return mount_backend_available()
 
     def _enroll_face(self) -> None:
         try:

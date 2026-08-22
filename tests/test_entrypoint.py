@@ -1,8 +1,9 @@
+import os
 from unittest.mock import patch
 from pathlib import Path
 
 from biopgp.__main__ import main
-from biopgp.app import main as application_main
+from biopgp.app import default_mount_manager, main as application_main
 
 
 def test_shell_mode_is_dispatched_to_shell_entrypoint() -> None:
@@ -114,3 +115,25 @@ def test_direct_container_open_uses_compact_window(tmp_path: Path) -> None:
     assert result == 0
     window_type.return_value.show.assert_called_once_with()
     window_type.return_value.showMaximized.assert_not_called()
+
+
+def test_winspd_backend_is_enabled_only_by_explicit_environment_setting() -> None:
+    with (
+        patch.dict(os.environ, {"CLEVERPGP_DISK_BACKEND": "winspd"}),
+        patch(
+            "biopgp.core.windows_storage.WindowsSystemDiskManager"
+        ) as manager_type,
+    ):
+        manager = default_mount_manager()
+
+    assert manager is manager_type.return_value
+
+
+def test_default_backend_remains_winfsp() -> None:
+    with (
+        patch.dict(os.environ, {"CLEVERPGP_DISK_BACKEND": ""}),
+        patch("biopgp.app.VaultMountManager") as manager_type,
+    ):
+        manager = default_mount_manager()
+
+    assert manager is manager_type.return_value

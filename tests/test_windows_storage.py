@@ -15,6 +15,7 @@ from biopgp.core.windows_storage import (
     disk_drive_letters,
     format_ephemeral_cleverpgp_disk,
     select_new_cleverpgp_disk,
+    winspd_driver_available,
 )
 
 
@@ -155,6 +156,11 @@ def test_disk_drive_letters_normalizes_powershell_json(
 ) -> None:
     with patch("biopgp.core.windows_storage._run_powershell", return_value=raw):
         assert disk_drive_letters(7) == expected
+
+
+def test_winspd_driver_is_unavailable_outside_windows() -> None:
+    with patch("biopgp.core.windows_storage.sys.platform", "linux"):
+        assert not winspd_driver_available()
 
 
 def test_system_manager_mounts_formatted_volume_and_waits_for_removal(
