@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+
+from biopgp.core.errors import ProfileExistsError
+from biopgp.core.models import BiometricProfile, Profile, UnlockMode
+
+SCHEMA_VERSION = 2
+
+
+class ProfileRepository:
+    """SQLite storage for the single local MVP profile."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = Path(path)
+
+    def initialize(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS profile (
+                    singleton_slot INTEGER PRIMARY KEY CHECK (singleton_slot = 1),
+                    profile_id TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    unlock_mode TEXT NOT NULL,
+                    kdf_salt BLOB NOT NULL,
+                    kdf_opslimit INTEGER NOT NULL,
+                    kdf_memlimit INTEGER NOT NULL,
+                    encrypted_master_key BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS biometric_profile (
+                    singleton_slot INTEGER PRIMARY KEY CHECK (singleton_slot = 1),
+                    profile_id TEXT NOT NULL,
+                    protected_biometric_key BLOB NOT NULL,
+                    encrypted_template BLOB NOT NULL,
+                    encrypted_master_key BLOB NOT NULL,
+                    model_id TEXT NOT NULL,
+                    model_sha256 TEXT NOT NULL,
+                    match_threshold REAL NOT NULL,
+                    enrolled_at TEXT NOT NULL,
+                    FOREIGN KEY(profile_id) REFERENCES profile(profile_id) ON DELETE CASCADE
+                );
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO metadata(key, value) VALUES('schema_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(SCHEMA_VERSION),),
+            )
+
+    def has_profile(self) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM profile WHERE singleton_slot = 1"
+            ).fetchone()
+        return row is not None
+
+    def get_setting(self, key: str) -> str | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key = ?", (key,)
+            ).fetchone()
+        return None if row is None else str(row["value"])
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO metadata(key, value) VALUES(?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+
+    def save_profile(self, profile: Profile) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO profile(
+                        singleton_slot, profile_id, display_name, unlock_mode,
+                        kdf_salt, kdf_opslimit, kdf_memlimit,
+                        encrypted_master_key, created_at
+                    ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        profile.profile_id,
+                        profile.display_name,
+                        profile.unlock_mode.value,
+                        profile.kdf_salt,
+                        profile.kdf_opslimit,
+                        profile.kdf_memlimit,
+                        profile.encrypted_master_key,
+                        profile.created_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ProfileExistsError("Локальный профиль уже существует.") from error
+
+    def get_profile(self) -> Profile | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT profile_id, display_name, unlock_mode, kdf_salt,
+                       kdf_opslimit, kdf_memlimit, encrypted_master_key,
+                       created_at
+                FROM profile
+                WHERE singleton_slot = 1
+                """
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return Profile(
+            profile_id=row["profile_id"],
+            display_name=row["display_name"],
+            unlock_mode=UnlockMode(row["unlock_mode"]),
+            kdf_salt=bytes(row["kdf_salt"]),
+            kdf_opslimit=int(row["kdf_opslimit"]),
+            kdf_memlimit=int(row["kdf_memlimit"]),
+            encrypted_master_key=bytes(row["encrypted_master_key"]),
+            created_at=row["created_at"],
+        )
+
+    def update_unlock_mode(self, unlock_mode: UnlockMode) -> None:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE profile SET unlock_mode = ? WHERE singleton_slot = 1",
+                (unlock_mode.value,),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError("Profile does not exist")
+
+    def has_biometric_profile(self) -> bool:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM biometric_profile WHERE singleton_slot = 1"
+            ).fetchone()
+        return row is not None
+
+    def save_biometric_profile(self, profile: BiometricProfile) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO biometric_profile(
+                    singleton_slot, profile_id, protected_biometric_key,
+                    encrypted_template, encrypted_master_key, model_id,
+                    model_sha256, match_threshold, enrolled_at
+                ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(singleton_slot) DO UPDATE SET
+                    profile_id = excluded.profile_id,
+                    protected_biometric_key = excluded.protected_biometric_key,
+                    encrypted_template = excluded.encrypted_template,
+                    encrypted_master_key = excluded.encrypted_master_key,
+                    model_id = excluded.model_id,
+                    model_sha256 = excluded.model_sha256,
+                    match_threshold = excluded.match_threshold,
+                    enrolled_at = excluded.enrolled_at
+                """,
+                (
+                    profile.profile_id,
+                    profile.protected_biometric_key,
+                    profile.encrypted_template,
+                    profile.encrypted_master_key,
+                    profile.model_id,
+                    profile.model_sha256,
+                    profile.match_threshold,
+                    profile.enrolled_at,
+                ),
+            )
+
+    def get_biometric_profile(self) -> BiometricProfile | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT profile_id, protected_biometric_key, encrypted_template,
+                       encrypted_master_key, model_id, model_sha256,
+                       match_threshold, enrolled_at
+                FROM biometric_profile
+                WHERE singleton_slot = 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return BiometricProfile(
+            profile_id=row["profile_id"],
+            protected_biometric_key=bytes(row["protected_biometric_key"]),
+            encrypted_template=bytes(row["encrypted_template"]),
+            encrypted_master_key=bytes(row["encrypted_master_key"]),
+            model_id=row["model_id"],
+            model_sha256=row["model_sha256"],
+            match_threshold=float(row["match_threshold"]),
+            enrolled_at=row["enrolled_at"],
+        )
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        connection = sqlite3.connect(self.path, timeout=10)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 10000")
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
