@@ -180,3 +180,6 @@ Clever PGP распространяется на условиях GNU GPL v3 и�
 
 WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos.
 [Официальный репозиторий WinFsp](https://github.com/winfsp/winfsp).
+
+WinSpd - Windows Storage Proxy Driver, Copyright (C) Bill Zissimopoulos.
+[Официальный репозиторий WinSpd](https://github.com/winfsp/winspd).

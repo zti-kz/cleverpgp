@@ -23,6 +23,7 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     ) in text
     assert "GNU GPL v3 или более поздняя версия" in text
     assert "WinFsp - Windows File System Proxy" in text
+    assert "WinSpd - Windows Storage Proxy Driver" in text
     assert "Bill Zissimopoulos" in text
     assert "Автор и разработчик:" not in text
     assert "Криптографическая защита файлов и дисков" in text

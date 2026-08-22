@@ -12,6 +12,17 @@ Repository and license: https://github.com/winfsp/winfsp
 The unmodified official WinFsp installer is distributed under GPLv3 with the
 project's special exception for Free/Libre and Open Source Software.
 
+## WinSpd
+
+WinSpd - Windows Storage Proxy Driver, Copyright (C) Bill Zissimopoulos.
+
+Repository and license: https://github.com/winfsp/winspd
+
+The unmodified official WinSpd installer may be distributed under GPLv3 with
+the project's special exception for Free/Libre and Open Source Software.
+Clever PGP uses the platform DLL without modifying WinSpd and remains free
+software under GPLv3-or-later.
+
 ## Other principal components
 
 - Python — Python Software Foundation License;

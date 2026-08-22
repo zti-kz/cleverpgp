@@ -25,6 +25,10 @@ WINFSP_NOTICE = (
     "WinFsp - Windows File System Proxy, Copyright (C) Bill Zissimopoulos. "
     '<a href="https://github.com/winfsp/winfsp">github.com/winfsp/winfsp</a>'
 )
+WINSPD_NOTICE = (
+    "WinSpd - Windows Storage Proxy Driver, Copyright (C) Bill Zissimopoulos. "
+    '<a href="https://github.com/winfsp/winspd">github.com/winfsp/winspd</a>'
+)
 
 
 class AboutDialog(QDialog):
@@ -143,6 +147,13 @@ class AboutDialog(QDialog):
         winfsp_label.setOpenExternalLinks(True)
         winfsp_label.setWordWrap(True)
         outer.addWidget(winfsp_label)
+        winspd_label = QLabel(WINSPD_NOTICE)
+        winspd_label.setObjectName("thirdParty")
+        winspd_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        winspd_label.setTextFormat(Qt.TextFormat.RichText)
+        winspd_label.setOpenExternalLinks(True)
+        winspd_label.setWordWrap(True)
+        outer.addWidget(winspd_label)
         scroll.setWidget(body)
         root.addWidget(scroll)
 
