@@ -17,7 +17,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from biopgp.core.container import CONTAINER_SUFFIX, EncryptedContainer
+from biopgp.core.block_container import (
+    CONTAINER_SUFFIX,
+    BlockVaultContainer as EncryptedContainer,
+)
 from biopgp.core.errors import ValidationError
 from biopgp.localization import localize_widget_tree, tr
 from biopgp.ui.icons import line_icon

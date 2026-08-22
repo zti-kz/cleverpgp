@@ -13,7 +13,7 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
 
     assert "Clever PGP" in text
-    assert "Версия 0.5.6" in text
+    assert "Версия 0.5.7" in text
     assert ".cpgp" in text
     assert ".cpgv" in text
     assert "Алмас Оскенбаев" in text
@@ -30,6 +30,8 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     assert "Научная основа проекта" not in text
     assert "криптографически стойкий генератор" in text
     assert "аутентифицированным шифрованием" in text
+    assert "только для затронутых логических блоков" in text
+    assert "предыдущее завершённое состояние" in text
     assert "Argon2id" not in text
     assert "XChaCha20" not in text
     assert "libsodium" not in text

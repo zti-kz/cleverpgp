@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from biopgp.core.errors import BioPGPError
-from biopgp.core.container import EncryptedContainer
+from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
 from biopgp.core.file_crypto import FileCryptoService
 from biopgp.core.mount import VaultMountManager, mount_backend_available
 from biopgp.core.models import UnlockMode

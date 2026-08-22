@@ -13,7 +13,8 @@ from ctypes.util import find_library
 from pathlib import Path
 from typing import Any
 
-from biopgp.core.container import EncryptedContainer, VaultNode
+from biopgp.core.block_container import BlockVaultContainer
+from biopgp.core.container import VaultNode
 from biopgp.core.errors import (
     ContainerDirectoryNotEmptyError,
     ContainerEntryExistsError,
@@ -33,7 +34,7 @@ BLOCK_SIZE = 4096
 class VaultFuseOperations:
     """Maps the encrypted in-memory filesystem to the cross-platform FUSE API."""
 
-    def __init__(self, container: EncryptedContainer, status_connection: Any = None):
+    def __init__(self, container: BlockVaultContainer, status_connection: Any = None):
         self.container = container
         self.status_connection = status_connection
         self._dirty = False
@@ -344,11 +345,11 @@ def _mount_process(
     mount_point: str,
     status_connection: Any,
 ) -> None:
-    container: EncryptedContainer | None = None
+    container: BlockVaultContainer | None = None
     try:
         from refuse.high import FUSE
 
-        container = EncryptedContainer.open(Path(container_path), master_key)
+        container = BlockVaultContainer.open(Path(container_path), master_key)
         operations = VaultFuseOperations(container, status_connection)
         FUSE(operations, mount_point, **mount_fuse_options(container.label))
     except Exception as error:

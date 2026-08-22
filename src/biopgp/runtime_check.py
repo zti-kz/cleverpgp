@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
+from time import perf_counter
 
 
 def _sha256(path: Path) -> str:
@@ -61,7 +62,7 @@ def run(marker: Path) -> int:
 def run_virtual_disk(marker: Path) -> int:
     from nacl import secret, utils
 
-    from biopgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
+    from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
     from biopgp.core.mount import VaultMountManager, mount_backend_available
 
     if not mount_backend_available():
@@ -77,13 +78,15 @@ def run_virtual_disk(marker: Path) -> int:
         container = EncryptedContainer.create(
             container_path,
             master_key,
-            data_capacity=MIN_DATA_CAPACITY,
+            data_capacity=16 * 1024 * 1024,
             label="Clever PGP Check",
         )
         container.close(save=False)
 
         manager = VaultMountManager()
-        payload = b"Clever PGP packaged virtual disk check\n" * 128
+        payload = hashlib.sha512(
+            b"Clever PGP packaged virtual disk check"
+        ).digest() * (128 * 1024)
         drive = manager.mount(container_path, master_key)
         try:
             drive_root = Path(f"{drive}\\")
@@ -93,8 +96,13 @@ def run_virtual_disk(marker: Path) -> int:
             if not drive_root.exists():
                 raise RuntimeError("Подключённый диск не появился в Windows.")
             mounted_file = drive_root / "packaged-check.txt"
+            started = perf_counter()
             mounted_file.write_bytes(payload)
-            if mounted_file.read_bytes() != payload:
+            write_seconds = perf_counter() - started
+            started = perf_counter()
+            mounted_payload = mounted_file.read_bytes()
+            read_seconds = perf_counter() - started
+            if mounted_payload != payload:
                 raise RuntimeError("Проверка чтения подключённого диска не пройдена.")
         finally:
             manager.unmount()
@@ -104,7 +112,16 @@ def run_virtual_disk(marker: Path) -> int:
                 raise RuntimeError("Запись не сохранилась внутри контейнера.")
 
     marker.write_text(
-        json.dumps({"status": "ok", "drive": drive}, ensure_ascii=False),
+        json.dumps(
+            {
+                "status": "ok",
+                "drive": drive,
+                "payload_mib": len(payload) / (1024 * 1024),
+                "write_mib_s": len(payload) / (1024 * 1024) / write_seconds,
+                "read_mib_s": len(payload) / (1024 * 1024) / read_seconds,
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     return 0

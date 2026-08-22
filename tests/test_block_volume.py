@@ -90,6 +90,37 @@ def test_block_tampering_and_block_swaps_are_detected(tmp_path: Path) -> None:
             reopened.read_blocks(0, 1)
 
 
+def test_old_ciphertext_cannot_be_replayed_in_a_new_write_context(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "replay.cpgv"
+    with EncryptedBlockVolume.create(
+        path, key, logical_capacity=1024 * 1024
+    ) as volume:
+        volume.write_blocks(
+            5, b"old".ljust(LOGICAL_BLOCK_SIZE, b"!"), context=b"generation-one"
+        )
+        volume.flush()
+        data_start = HEADER_PREFIX.size + HEADER_AREA_SIZE
+        slot_offset = data_start + 5 * PHYSICAL_SLOT_SIZE
+        with path.open("rb") as stream:
+            stream.seek(slot_offset)
+            old_slot = stream.read(PHYSICAL_SLOT_SIZE)
+        volume.write_blocks(
+            5, b"new".ljust(LOGICAL_BLOCK_SIZE, b"?"), context=b"generation-two"
+        )
+        volume.flush()
+
+    with path.open("r+b") as stream:
+        stream.seek(slot_offset)
+        stream.write(old_slot)
+
+    with EncryptedBlockVolume.open(path, key) as reopened:
+        with pytest.raises(BlockIntegrityError):
+            reopened.read_blocks(5, 1, context=b"generation-two")
+
+
 def test_wrong_profile_and_header_tampering_are_rejected(tmp_path: Path) -> None:
     key = master_key()
     path = tmp_path / "header.cpgv"

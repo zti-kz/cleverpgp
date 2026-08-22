@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from nacl import secret, utils
 
+from biopgp.core.block_container import BlockVaultContainer
 from biopgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
 from biopgp.core.mount import (
     VaultFuseOperations,
@@ -46,6 +47,25 @@ def test_fuse_operations_translate_missing_path(tmp_path: Path) -> None:
         operations("getattr", "/missing")
     assert caught.value.errno == errno.ENOENT
     container.close()
+
+
+def test_fuse_operations_use_block_container_without_full_payload_save(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container = BlockVaultContainer.create(
+        tmp_path / "block-mounted.cpgv", key, data_capacity=2 * MIN_DATA_CAPACITY
+    )
+    operations = VaultFuseOperations(container)
+    handle = operations("create", "/movie.bin", 0o644)
+    payload = b"m" * MIN_DATA_CAPACITY
+
+    assert operations("write", "/movie.bin", payload, 0, handle) == len(payload)
+    operations("flush", "/movie.bin", handle)
+    container.close(save=False)
+
+    with BlockVaultContainer.open(tmp_path / "block-mounted.cpgv", key) as reopened:
+        assert reopened.read_file("/movie.bin") == payload
 
 
 def test_mount_backend_is_absent_on_clean_test_machine() -> None:

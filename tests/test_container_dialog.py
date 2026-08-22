@@ -12,7 +12,7 @@ from biopgp.ui.container_dialog import (  # noqa: E402
     MEBIBYTE,
     ContainerCreationDialog,
 )
-from biopgp.core.container import EncryptedContainer  # noqa: E402
+from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
 
 
 def test_container_size_is_selected_with_a_slider(

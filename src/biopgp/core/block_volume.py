@@ -16,7 +16,7 @@ from pathlib import Path
 from nacl import bindings, exceptions, hash, secret, utils
 from nacl.encoding import RawEncoder
 
-from biopgp.core.errors import BioPGPError, OutputExistsError, ValidationError
+from biopgp.core.errors import ContainerError, OutputExistsError, ValidationError
 
 MAGIC = b"CPGPBLK2"
 FORMAT_VERSION = 2
@@ -33,7 +33,7 @@ ALGORITHM = "XCHACHA20-POLY1305-BLOCK-V1"
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
 
 
-class BlockVolumeError(BioPGPError):
+class BlockVolumeError(ContainerError):
     """Base class for block volume errors safe to show to the user."""
 
 
@@ -246,8 +246,15 @@ class EncryptedBlockVolume:
     def label(self) -> str:
         return str(self._metadata["label"])
 
-    def read_blocks(self, block_address: int, block_count: int) -> bytes:
+    def read_blocks(
+        self,
+        block_address: int,
+        block_count: int,
+        *,
+        context: bytes = b"",
+    ) -> bytes:
         self._validate_range(block_address, block_count)
+        authenticated_context = self._validate_context(context)
         result = bytearray()
         with self._lock:
             self._ensure_open()
@@ -259,7 +266,11 @@ class EncryptedBlockVolume:
                     result.extend(
                         bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
                             slot[NONCE_SIZE:],
-                            self._block_aad(self._volume_id, block_index),
+                            self._block_aad(
+                                self._volume_id,
+                                block_index,
+                                authenticated_context,
+                            ),
                             slot[:NONCE_SIZE],
                             bytes(self._volume_key),
                         )
@@ -270,7 +281,13 @@ class EncryptedBlockVolume:
                     ) from error
         return bytes(result)
 
-    def write_blocks(self, block_address: int, data: bytes) -> None:
+    def write_blocks(
+        self,
+        block_address: int,
+        data: bytes,
+        *,
+        context: bytes = b"",
+    ) -> None:
         payload = bytes(data)
         if not payload or len(payload) % LOGICAL_BLOCK_SIZE:
             raise ValidationError(
@@ -278,6 +295,7 @@ class EncryptedBlockVolume:
             )
         block_count = len(payload) // LOGICAL_BLOCK_SIZE
         self._validate_range(block_address, block_count)
+        authenticated_context = self._validate_context(context)
         encrypted = bytearray()
         for offset in range(block_count):
             start = offset * LOGICAL_BLOCK_SIZE
@@ -288,6 +306,7 @@ class EncryptedBlockVolume:
                     block_index,
                     self._volume_id,
                     bytes(self._volume_key),
+                    authenticated_context,
                 )
             )
         with self._lock:
@@ -359,21 +378,34 @@ class EncryptedBlockVolume:
         return HEADER_PREFIX.size + HEADER_AREA_SIZE + block_address * PHYSICAL_SLOT_SIZE
 
     @staticmethod
-    def _block_aad(volume_id: bytes, block_index: int) -> bytes:
-        return MAGIC + volume_id + struct.pack(">Q", block_index)
+    def _block_aad(
+        volume_id: bytes, block_index: int, context: bytes = b""
+    ) -> bytes:
+        return MAGIC + volume_id + struct.pack(">Q", block_index) + context
 
     @classmethod
     def _encrypt_block(
-        cls, plaintext: bytes, block_index: int, volume_id: bytes, volume_key: bytes
+        cls,
+        plaintext: bytes,
+        block_index: int,
+        volume_id: bytes,
+        volume_key: bytes,
+        context: bytes = b"",
     ) -> bytes:
         nonce = utils.random(NONCE_SIZE)
         ciphertext = bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
             plaintext,
-            cls._block_aad(volume_id, block_index),
+            cls._block_aad(volume_id, block_index, context),
             nonce,
             volume_key,
         )
         return nonce + ciphertext
+
+    @staticmethod
+    def _validate_context(context: bytes) -> bytes:
+        if not isinstance(context, bytes) or len(context) > 64:
+            raise ValidationError("Некорректный контекст логического блока.")
+        return context
 
     @staticmethod
     def _canonical_metadata(metadata: dict[str, object]) -> bytes:
