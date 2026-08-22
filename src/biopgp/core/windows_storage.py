@@ -20,6 +20,7 @@ from biopgp.core.winspd import (
     create_windows_block_volume,
     open_windows_block_volume,
 )
+from biopgp.core.windows_shell import WindowsDriveContextMenu
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +285,7 @@ class WindowsSystemDiskManager:
     def __init__(self, process_manager: WinSpdProcessManager | None = None) -> None:
         self._process_manager = process_manager or WinSpdProcessManager()
         self._control_store = DiskControlStore()
+        self._context_menu = WindowsDriveContextMenu()
         self._control_record: DiskControlRecord | None = None
         self._disk: WindowsDiskInfo | None = None
         self._drive: str | None = None
@@ -306,6 +308,7 @@ class WindowsSystemDiskManager:
         label: str,
         file_system: str = "NTFS",
         overwrite: bool = False,
+        context_menu_labels: tuple[str, str] | None = None,
         progress: Callable[[int, str], None] | None = None,
     ) -> str:
         if self.mounted_drive is not None:
@@ -364,7 +367,10 @@ class WindowsSystemDiskManager:
             self._process_manager.stop()
             raise
         try:
-            control_record = self._publish_control_record(drive)
+            control_record = self._publish_control_record(
+                drive,
+                context_menu_labels=context_menu_labels,
+            )
         except Exception:
             self._process_manager.stop()
             wait_for_disk_removal(disk.number)
@@ -381,6 +387,7 @@ class WindowsSystemDiskManager:
         container_path: Path,
         master_key: bytes,
         *,
+        context_menu_labels: tuple[str, str] | None = None,
         progress: Callable[[int, str], None] | None = None,
     ) -> str:
         if self.mounted_drive is not None:
@@ -409,7 +416,10 @@ class WindowsSystemDiskManager:
             self._process_manager.stop()
             raise
         try:
-            control_record = self._publish_control_record(drive)
+            control_record = self._publish_control_record(
+                drive,
+                context_menu_labels=context_menu_labels,
+            )
         except Exception:
             self._process_manager.stop()
             wait_for_disk_removal(disk.number)
@@ -432,17 +442,41 @@ class WindowsSystemDiskManager:
             self._disk = None
             self._drive = None
 
-    def _publish_control_record(self, drive: str) -> DiskControlRecord | None:
+    def _publish_control_record(
+        self,
+        drive: str,
+        *,
+        context_menu_labels: tuple[str, str] | None,
+    ) -> DiskControlRecord | None:
         endpoint = getattr(self._process_manager, "control_endpoint", None)
         process_id = getattr(self._process_manager, "process_id", None)
         if endpoint is None or process_id is None:
             return None
-        return self._control_store.publish(
+        record = self._control_store.publish(
             endpoint,
             drive=drive,
             process_id=process_id,
         )
+        open_label, unmount_label = context_menu_labels or (
+            "Открыть зашифрованный диск",
+            "Отключить зашифрованный диск",
+        )
+        try:
+            self._context_menu.register(
+                drive,
+                open_label=open_label,
+                unmount_label=unmount_label,
+            )
+        except OSError:
+            pass
+        return record
 
     def _clear_control_record(self) -> None:
+        if self._control_record is None:
+            return
+        try:
+            self._context_menu.remove()
+        except OSError:
+            pass
         self._control_store.remove(self._control_record)
         self._control_record = None

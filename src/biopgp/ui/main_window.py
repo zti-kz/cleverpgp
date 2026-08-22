@@ -568,6 +568,10 @@ class MainWindow(QMainWindow):
                         logical_capacity=data_capacity,
                         label=volume_label,
                         file_system=file_system,
+                        context_menu_labels=(
+                            tr("Открыть зашифрованный диск"),
+                            tr("Отключить зашифрованный диск"),
+                        ),
                         progress=progress,
                     )
                 except Exception as error:
@@ -667,10 +671,28 @@ class MainWindow(QMainWindow):
         self._mount_container(Path(source_name))
 
     def _mount_container(self, source: Path) -> None:
+        def mount_container(
+            master_key: bytes,
+            progress: Callable[[int, str], None],
+        ) -> str:
+            if self._uses_windows_system_disk:
+                return self.mount_manager.mount(
+                    source,
+                    master_key,
+                    context_menu_labels=(
+                        tr("Открыть зашифрованный диск"),
+                        tr("Отключить зашифрованный диск"),
+                    ),
+                    progress=progress,
+                )
+            return self.mount_manager.mount(
+                source,
+                master_key,
+                progress=progress,
+            )
+
         self._start_key_progress_task(
-            lambda master_key, progress: self.mount_manager.mount(
-                source, master_key, progress=progress
-            ),
+            mount_container,
             self._container_mounted,
         )
 

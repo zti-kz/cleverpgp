@@ -238,6 +238,22 @@ def test_system_manager_publishes_and_removes_external_control_state(
         def remove(selected: object | None) -> None:
             FakeStore.removed = selected
 
+    class FakeContextMenu:
+        registered: tuple[str, str, str] | None = None
+        removed = False
+
+        def register(
+            self,
+            drive: str,
+            *,
+            open_label: str,
+            unmount_label: str,
+        ) -> None:
+            type(self).registered = (drive, open_label, unmount_label)
+
+        def remove(self) -> None:
+            type(self).removed = True
+
     with (
         patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
@@ -249,7 +265,12 @@ def test_system_manager_publishes_and_removes_external_control_state(
     ):
         manager = WindowsSystemDiskManager(process_manager)  # type: ignore[arg-type]
         manager._control_store = FakeStore()  # type: ignore[assignment]
-        assert manager.mount(container_path, key) == "Z:"
+        manager._context_menu = FakeContextMenu()  # type: ignore[assignment]
+        assert manager.mount(
+            container_path,
+            key,
+            context_menu_labels=("Open disk", "Unmount disk"),
+        ) == "Z:"
         manager.unmount()
 
     assert FakeStore.published == (
@@ -258,3 +279,5 @@ def test_system_manager_publishes_and_removes_external_control_state(
         4321,
     )
     assert FakeStore.removed is record
+    assert FakeContextMenu.registered == ("Z:", "Open disk", "Unmount disk")
+    assert FakeContextMenu.removed

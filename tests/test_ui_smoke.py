@@ -254,6 +254,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         def __init__(self) -> None:
             self.mounted_drive: str | None = None
             self.create_call: dict[str, object] | None = None
+            self.mount_call: dict[str, object] | None = None
 
         def create_and_mount(
             self,
@@ -270,6 +271,23 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
                 **options,
             }
             self.mounted_drive = "Y:"
+            progress(100, "Готово")
+            return self.mounted_drive
+
+        def mount(
+            self,
+            container_path: Path,
+            master_key: bytes,
+            **options: object,
+        ) -> str:
+            progress = options.pop("progress")
+            assert callable(progress)
+            self.mount_call = {
+                "container_path": container_path,
+                "master_key": master_key,
+                **options,
+            }
+            self.mounted_drive = "X:"
             progress(100, "Готово")
             return self.mounted_drive
 
@@ -331,6 +349,24 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.create_call["logical_capacity"] == 64 * 1024 * 1024
     assert manager.create_call["label"] == "System disk"
     assert manager.create_call["file_system"] == "EXFAT"
+    assert manager.create_call["context_menu_labels"] == (
+        "Открыть зашифрованный диск",
+        "Отключить зашифрованный диск",
+    )
+
+    manager.mounted_drive = None
+    window._mount_container(tmp_path / "existing-system.cpgv")
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert manager.mounted_drive == "X:"
+    assert manager.mount_call is not None
+    assert manager.mount_call["context_menu_labels"] == (
+        "Открыть зашифрованный диск",
+        "Отключить зашифрованный диск",
+    )
 
     manager.mounted_drive = None
     window.close()

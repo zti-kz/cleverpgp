@@ -455,6 +455,12 @@ def unmount_drive(drive: str, *, timeout: float = 12.0) -> str:
         raise MountUnavailableError(f"Не удалось отключить диск {normalized}.")
     if system_record is not None:
         DiskControlStore.remove(system_record)
+        try:
+            from biopgp.core.windows_shell import WindowsDriveContextMenu
+
+            WindowsDriveContextMenu().remove()
+        except OSError:
+            pass
     return normalized
 
 

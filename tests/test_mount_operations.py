@@ -103,9 +103,18 @@ def test_windows_unmount_uses_system_disk_control_when_fuse_marker_is_absent(
         def remove(selected: object) -> None:
             FakeControlStore.removed = selected
 
+    class FakeContextMenu:
+        removed = False
+
+        def remove(self) -> None:
+            type(self).removed = True
+
     drive_checks = iter((True, True, False, False))
     monkeypatch.setattr(
         "biopgp.core.disk_control.DiskControlStore", FakeControlStore
+    )
+    monkeypatch.setattr(
+        "biopgp.core.windows_shell.WindowsDriveContextMenu", FakeContextMenu
     )
     with (
         patch("biopgp.core.mount.platform.system", return_value="Windows"),
@@ -120,3 +129,4 @@ def test_windows_unmount_uses_system_disk_control_when_fuse_marker_is_absent(
 
     assert FakeControlStore.sent == (record, "stop")
     assert FakeControlStore.removed is record
+    assert FakeContextMenu.removed

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -30,6 +31,10 @@ def run(marker: Path) -> int:
     from biopgp.config import bundled_models_directory
     from biopgp.core.file_crypto import FileCryptoService
     from biopgp.core.winspd import WinSpdLibrary
+    from biopgp.core.windows_shell import (
+        SYSTEM_DRIVE_MENU_KEY,
+        drive_context_menu_values,
+    )
 
     aead = Aead(utils.random(Aead.KEY_SIZE))
     message = b"BioPGP packaged runtime check"
@@ -45,6 +50,20 @@ def run(marker: Path) -> int:
 
     FileCryptoService()
     WinSpdLibrary()
+    shell_values = drive_context_menu_values(
+        "Z:",
+        command_prefix=(sys.executable,),
+        icon_path=Path(sys.executable),
+        open_label="Open",
+        unmount_label="Unmount",
+    )
+    shell_lookup = {
+        (value.subkey, value.name): value.value for value in shell_values
+    }
+    if shell_lookup.get((SYSTEM_DRIVE_MENU_KEY, "AppliesTo")) != (
+        'System.ItemPathDisplay:="Z:\\' + '"'
+    ):
+        raise RuntimeError("Проверка контекстного меню системного диска не пройдена.")
     marker.write_text(
         json.dumps(
             {
@@ -55,6 +74,7 @@ def run(marker: Path) -> int:
                 "cffi_backend": str(getattr(_cffi_backend, "__version__", "loaded")),
                 "models": len(MODEL_ASSETS),
                 "winspd": "loaded",
+                "windows_shell": "drive-scoped",
             },
             ensure_ascii=False,
             indent=2,
