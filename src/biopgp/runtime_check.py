@@ -135,6 +135,7 @@ def run_virtual_disk(marker: Path) -> int:
 def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
     from nacl import secret, utils
 
+    from biopgp.core.disk_control import send_disk_control_command
     from biopgp.core.winspd import (
         WinSpdLibrary,
         WinSpdProcessManager,
@@ -186,6 +187,18 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 )
             if not manager.running:
                 raise RuntimeError("Фоновый процесс системного диска остановился.")
+            endpoint = manager.control_endpoint
+            if endpoint is None:
+                raise RuntimeError("Локальный канал управления диском не создан.")
+            send_disk_control_command(endpoint, "ping")
+            send_disk_control_command(endpoint, "stop")
+            deadline = time.monotonic() + 10
+            while manager.running and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if manager.running:
+                raise RuntimeError(
+                    "Внешняя команда не остановила процесс системного диска."
+                )
         finally:
             manager.stop()
         elapsed = perf_counter() - started
@@ -198,6 +211,7 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 "elapsed_seconds": elapsed,
                 "provider_process": "separate",
                 "key_transport": "multiprocessing-pipe",
+                "external_control": "authenticated-loopback",
             },
             ensure_ascii=False,
             indent=2,

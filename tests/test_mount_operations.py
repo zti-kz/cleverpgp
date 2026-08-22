@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from nacl import secret, utils
@@ -12,6 +13,7 @@ from biopgp.core.mount import (
     VaultFuseOperations,
     mount_backend_available,
     mount_fuse_options,
+    unmount_drive,
 )
 
 
@@ -73,8 +75,6 @@ def test_mount_backend_is_absent_on_clean_test_machine() -> None:
 
 
 def test_windows_mount_is_owned_by_the_current_user() -> None:
-    from unittest.mock import patch
-
     with patch("biopgp.core.mount.platform.system", return_value="Windows"):
         options = mount_fuse_options("Clever PGP")
 
@@ -82,3 +82,41 @@ def test_windows_mount_is_owned_by_the_current_user() -> None:
     assert options["gid"] == -1
     assert options["umask"] == 0
     assert options["create_umask"] == 0
+
+
+def test_windows_unmount_uses_system_disk_control_when_fuse_marker_is_absent(
+    monkeypatch,
+) -> None:
+    record = object()
+
+    class FakeControlStore:
+        removed: object | None = None
+        sent: tuple[object, str] | None = None
+
+        def find_by_drive(self, drive: str) -> object | None:
+            return record if drive == "Z:" else None
+
+        def send(self, selected: object, command: str) -> None:
+            type(self).sent = (selected, command)
+
+        @staticmethod
+        def remove(selected: object) -> None:
+            FakeControlStore.removed = selected
+
+    drive_checks = iter((True, True, False, False))
+    monkeypatch.setattr(
+        "biopgp.core.disk_control.DiskControlStore", FakeControlStore
+    )
+    with (
+        patch("biopgp.core.mount.platform.system", return_value="Windows"),
+        patch("biopgp.core.mount.Path.open", side_effect=OSError),
+        patch(
+            "biopgp.core.mount._drive_in_use",
+            side_effect=lambda _drive: next(drive_checks),
+        ),
+        patch("biopgp.core.mount.time.sleep"),
+    ):
+        assert unmount_drive("z:\\") == "Z:"
+
+    assert FakeControlStore.sent == (record, "stop")
+    assert FakeControlStore.removed is record

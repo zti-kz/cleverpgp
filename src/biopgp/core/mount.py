@@ -433,19 +433,28 @@ def unmount_drive(drive: str, *, timeout: float = 12.0) -> str:
     if not _drive_in_use(normalized):
         raise MountUnavailableError(f"Диск {normalized} уже отключён.")
     control = Path(f"{normalized}/{CONTROL_PATH.lstrip('/')}")
+    system_record = None
     try:
         with control.open("rb"):
             pass
-    except OSError as error:
-        raise MountUnavailableError(
-            f"Диск {normalized} не является диском Clever PGP."
-        ) from error
+    except OSError:
+        from biopgp.core.disk_control import DiskControlStore
+
+        control_store = DiskControlStore()
+        system_record = control_store.find_by_drive(normalized)
+        if system_record is None:
+            raise MountUnavailableError(
+                f"Диск {normalized} не является диском Clever PGP."
+            )
+        control_store.send(system_record, "stop")
 
     deadline = time.monotonic() + timeout
     while _drive_in_use(normalized) and time.monotonic() < deadline:
         time.sleep(0.05)
     if _drive_in_use(normalized):
         raise MountUnavailableError(f"Не удалось отключить диск {normalized}.")
+    if system_record is not None:
+        DiskControlStore.remove(system_record)
     return normalized
 
 

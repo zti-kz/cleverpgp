@@ -17,6 +17,7 @@ from biopgp.core.block_volume import (
     BlockVolumeError,
     EncryptedBlockVolume,
 )
+from biopgp.core.disk_control import DiskControlEndpoint, DiskControlServer
 from biopgp.core.errors import MountUnavailableError, ValidationError
 
 ERROR_SUCCESS = 0
@@ -535,12 +536,14 @@ class WinSpdBlockDevice:
 
 
 class WinSpdProcessManager:
-    """Run the block provider separately and exchange commands over a private pipe."""
+    """Run the provider separately with private-parent and authenticated controls."""
 
     def __init__(self) -> None:
         self._process: multiprocessing.Process | None = None
         self._control: Any = None
         self._device_name: str | None = None
+        self._control_endpoint: DiskControlEndpoint | None = None
+        self._process_id: int | None = None
 
     @property
     def running(self) -> bool:
@@ -551,6 +554,8 @@ class WinSpdProcessManager:
             process.join(0)
             self._process = None
             self._device_name = None
+            self._control_endpoint = None
+            self._process_id = None
             if self._control is not None:
                 self._control.close()
                 self._control = None
@@ -559,6 +564,14 @@ class WinSpdProcessManager:
     @property
     def device_name(self) -> str | None:
         return self._device_name if self.running else None
+
+    @property
+    def control_endpoint(self) -> DiskControlEndpoint | None:
+        return self._control_endpoint if self.running else None
+
+    @property
+    def process_id(self) -> int | None:
+        return self._process_id if self.running else None
 
     def start(
         self,
@@ -594,7 +607,7 @@ class WinSpdProcessManager:
         if progress is not None:
             progress(35, "Запуск системного диска")
         started_at = time.monotonic()
-        response: tuple[str, str] | None = None
+        response: tuple[str, Any] | None = None
         while time.monotonic() - started_at < timeout:
             if parent_control.poll(0.1):
                 response = parent_control.recv()
@@ -607,7 +620,18 @@ class WinSpdProcessManager:
                     min(90, 35 + round(elapsed / timeout * 55)),
                     "Подключение системного диска",
                 )
-        if response is None or response[0] != "ready":
+        endpoint: DiskControlEndpoint | None = None
+        if response is not None and response[0] == "ready":
+            try:
+                port, token, volume_id = response[1]
+                endpoint = DiskControlEndpoint(
+                    bytes(volume_id),
+                    int(port),
+                    bytes(token),
+                )
+            except (TypeError, ValueError):
+                endpoint = None
+        if endpoint is None:
             if process.is_alive():
                 parent_control.send("stop")
                 process.join(3)
@@ -615,11 +639,15 @@ class WinSpdProcessManager:
                 process.terminate()
                 process.join(3)
             parent_control.close()
-            detail = response[1] if response is not None else "Процесс диска не ответил."
-            raise MountUnavailableError(detail)
+            detail = response[1] if response is not None else None
+            raise MountUnavailableError(
+                str(detail) if detail else "Процесс диска не ответил."
+            )
         self._process = process
         self._control = parent_control
         self._device_name = device_name
+        self._control_endpoint = endpoint
+        self._process_id = process.pid
         if progress is not None:
             progress(100, "Системный диск подключён")
         return device_name
@@ -643,6 +671,8 @@ class WinSpdProcessManager:
         self._process = None
         self._control = None
         self._device_name = None
+        self._control_endpoint = None
+        self._process_id = None
 
 
 def _winspd_provider_process(
@@ -654,21 +684,38 @@ def _winspd_provider_process(
 ) -> None:
     volume: EncryptedBlockVolume | None = None
     device: WinSpdBlockDevice | None = None
+    control_server: DiskControlServer | None = None
     try:
         volume = open_windows_block_volume(Path(container_path), master_key)
+        control_server = DiskControlServer()
         device = WinSpdBlockDevice(
             volume,
             library=WinSpdLibrary(Path(dll_path) if dll_path else None),
             pipe_name=device_name,
         )
         device.start()
-        control.send(("ready", ""))
+        control.send(
+            (
+                "ready",
+                (control_server.port, control_server.token, volume.volume_id),
+            )
+        )
+        parent_control_available = True
         while True:
-            if control.poll(0.25):
-                if control.recv() == "stop":
+            if control_server.poll(timeout=0.1) == "stop":
+                break
+            if parent_control_available:
+                try:
+                    parent_command = control.recv() if control.poll(0) else None
+                except (BrokenPipeError, EOFError, OSError):
+                    parent_control_available = False
+                    control.close()
+                    parent_command = None
+                if parent_command == "stop":
                     break
             if device.last_error is not None:
-                control.send(("error", str(device.last_error)))
+                if parent_control_available:
+                    control.send(("error", str(device.last_error)))
                 break
     except (BlockVolumeError, WinSpdError, OSError, ValueError) as error:
         try:
@@ -676,9 +723,14 @@ def _winspd_provider_process(
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
+        if control_server is not None:
+            control_server.close()
         if device is not None:
             device.stop()
         if volume is not None:
             volume.close()
         master_key = b""
-        control.close()
+        try:
+            control.close()
+        except OSError:
+            pass

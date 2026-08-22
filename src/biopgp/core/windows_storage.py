@@ -10,6 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from biopgp.core.errors import MountUnavailableError
+from biopgp.core.disk_control import (
+    DiskControlRecord,
+    DiskControlStore,
+)
 from biopgp.core.winspd import (
     WinSpdLibrary,
     WinSpdProcessManager,
@@ -279,6 +283,8 @@ class WindowsSystemDiskManager:
 
     def __init__(self, process_manager: WinSpdProcessManager | None = None) -> None:
         self._process_manager = process_manager or WinSpdProcessManager()
+        self._control_store = DiskControlStore()
+        self._control_record: DiskControlRecord | None = None
         self._disk: WindowsDiskInfo | None = None
         self._drive: str | None = None
 
@@ -286,6 +292,7 @@ class WindowsSystemDiskManager:
     def mounted_drive(self) -> str | None:
         if self._process_manager.running:
             return self._drive
+        self._clear_control_record()
         self._disk = None
         self._drive = None
         return None
@@ -356,8 +363,15 @@ class WindowsSystemDiskManager:
         except Exception:
             self._process_manager.stop()
             raise
+        try:
+            control_record = self._publish_control_record(drive)
+        except Exception:
+            self._process_manager.stop()
+            wait_for_disk_removal(disk.number)
+            raise
         self._disk = disk
         self._drive = drive
+        self._control_record = control_record
         if progress is not None:
             progress(100, "Системный диск готов")
         return drive
@@ -394,16 +408,41 @@ class WindowsSystemDiskManager:
         except Exception:
             self._process_manager.stop()
             raise
+        try:
+            control_record = self._publish_control_record(drive)
+        except Exception:
+            self._process_manager.stop()
+            wait_for_disk_removal(disk.number)
+            raise
         self._disk = disk
         self._drive = drive
+        self._control_record = control_record
         if progress is not None:
             progress(100, "Системный диск подключён")
         return drive
 
     def unmount(self) -> None:
         disk = self._disk
-        self._process_manager.stop()
-        if disk is not None:
-            wait_for_disk_removal(disk.number)
-        self._disk = None
-        self._drive = None
+        try:
+            self._process_manager.stop()
+            if disk is not None:
+                wait_for_disk_removal(disk.number)
+        finally:
+            self._clear_control_record()
+            self._disk = None
+            self._drive = None
+
+    def _publish_control_record(self, drive: str) -> DiskControlRecord | None:
+        endpoint = getattr(self._process_manager, "control_endpoint", None)
+        process_id = getattr(self._process_manager, "process_id", None)
+        if endpoint is None or process_id is None:
+            return None
+        return self._control_store.publish(
+            endpoint,
+            drive=drive,
+            process_id=process_id,
+        )
+
+    def _clear_control_record(self) -> None:
+        self._control_store.remove(self._control_record)
+        self._control_record = None

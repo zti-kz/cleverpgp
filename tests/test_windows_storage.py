@@ -7,6 +7,7 @@ import pytest
 from nacl import secret, utils
 
 from biopgp.core.block_volume import EncryptedBlockVolume
+from biopgp.core.disk_control import DiskControlEndpoint
 from biopgp.core.errors import MountUnavailableError
 from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 from biopgp.core.windows_storage import (
@@ -195,3 +196,65 @@ def test_system_manager_mounts_formatted_volume_and_waits_for_removal(
     assert process_manager.started == (container_path, key)
     assert process_manager.stopped
     removed.assert_called_once_with(7)
+
+
+def test_system_manager_publishes_and_removes_external_control_state(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "controlled.cpgv"
+    volume = EncryptedBlockVolume.create(
+        container_path,
+        key,
+        logical_capacity=1024 * 1024,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    )
+    volume.close()
+    process_manager = FakeProcessManager()
+    process_manager.control_endpoint = DiskControlEndpoint(
+        b"v" * 16,
+        23456,
+        b"t" * 32,
+    )
+    process_manager.process_id = 4321
+    system_disk = disk(7, "CleverPGP", 1024 * 1024)
+    record = object()
+
+    class FakeStore:
+        published: tuple[object, str, int] | None = None
+        removed: object | None = None
+
+        def publish(
+            self,
+            endpoint: object,
+            *,
+            drive: str,
+            process_id: int,
+        ) -> object:
+            type(self).published = (endpoint, drive, process_id)
+            return record
+
+        @staticmethod
+        def remove(selected: object | None) -> None:
+            FakeStore.removed = selected
+
+    with (
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=system_disk,
+        ),
+        patch("biopgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
+        patch("biopgp.core.windows_storage.wait_for_disk_removal"),
+    ):
+        manager = WindowsSystemDiskManager(process_manager)  # type: ignore[arg-type]
+        manager._control_store = FakeStore()  # type: ignore[assignment]
+        assert manager.mount(container_path, key) == "Z:"
+        manager.unmount()
+
+    assert FakeStore.published == (
+        process_manager.control_endpoint,
+        "Z:",
+        4321,
+    )
+    assert FakeStore.removed is record
