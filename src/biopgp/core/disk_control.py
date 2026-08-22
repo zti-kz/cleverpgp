@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from biopgp.config import app_data_directory
-from biopgp.core.errors import MountUnavailableError
+from biopgp.core.errors import BioPGPError, MountUnavailableError
 
 CONTROL_PROTOCOL_VERSION = 1
 CONTROL_TOKEN_SIZE = 32
@@ -214,11 +214,20 @@ class DiskControlStore:
 
     def find_by_drive(self, drive: str) -> DiskControlRecord | None:
         normalized_drive = _normalize_drive(drive)
-        for path in self._state_paths():
-            record = self._read_record(path)
-            if record is not None and record.drive == normalized_drive:
+        for record in self.records():
+            if record.drive == normalized_drive:
                 return record
         return None
+
+    def records(self) -> tuple[DiskControlRecord, ...]:
+        """Return only structurally valid current-user mount records."""
+
+        records: list[DiskControlRecord] = []
+        for path in self._state_paths():
+            record = self._read_record(path)
+            if record is not None:
+                records.append(record)
+        return tuple(records)
 
     def endpoint(self, record: DiskControlRecord) -> DiskControlEndpoint:
         token = self._secret_protector().unprotect(
@@ -227,8 +236,20 @@ class DiskControlStore:
         )
         return DiskControlEndpoint(record.volume_id, record.port, token)
 
-    def send(self, record: DiskControlRecord, command: str) -> None:
-        send_disk_control_command(self.endpoint(record), command)
+    def send(
+        self,
+        record: DiskControlRecord,
+        command: str,
+        *,
+        timeout: float = 3.0,
+    ) -> None:
+        try:
+            endpoint = self.endpoint(record)
+        except (BioPGPError, OSError, ValueError) as error:
+            raise MountUnavailableError(
+                "Защищённая запись системного диска повреждена или недоступна."
+            ) from error
+        send_disk_control_command(endpoint, command, timeout=timeout)
 
     @staticmethod
     def remove(record: DiskControlRecord | None) -> None:

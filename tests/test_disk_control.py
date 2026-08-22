@@ -78,6 +78,7 @@ def test_control_store_protects_token_and_finds_drive(tmp_path: Path) -> None:
     found = store.find_by_drive("Z:")
 
     assert found is not None
+    assert store.records() == (found,)
     assert found.drive == "Z:"
     assert base64.b64decode(payload["protected_token"]) != token
     assert store.endpoint(found) == endpoint
@@ -91,3 +92,4 @@ def test_control_store_ignores_malformed_state(tmp_path: Path) -> None:
     store = DiskControlStore(tmp_path, FakeProtector())
 
     assert store.find_by_drive("Z:") is None
+    assert store.records() == ()

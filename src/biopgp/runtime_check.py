@@ -156,12 +156,14 @@ def run_virtual_disk(marker: Path) -> int:
 def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
     from nacl import secret, utils
 
-    from biopgp.core.disk_control import send_disk_control_command
+    from biopgp.core.disk_control import DiskControlStore, send_disk_control_command
     from biopgp.core.disk_host import WinSpdHostManager
+    from biopgp.core.errors import MountUnavailableError
     from biopgp.core.winspd import (
         WinSpdLibrary,
         create_windows_block_volume,
     )
+    from biopgp.core.windows_storage import WindowsSystemDiskManager
 
     test_tool = Path(stgtest_path).expanduser().resolve()
     if not test_tool.is_file():
@@ -212,14 +214,41 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             if endpoint is None:
                 raise RuntimeError("Локальный канал управления диском не создан.")
             send_disk_control_command(endpoint, "ping")
-            send_disk_control_command(endpoint, "stop")
-            deadline = time.monotonic() + 10
-            while manager.running and time.monotonic() < deadline:
-                time.sleep(0.05)
-            if manager.running:
+            process_id = manager.process_id
+            if process_id is None:
+                raise RuntimeError("Идентификатор дискового процесса не получен.")
+            control_store = DiskControlStore(Path(directory) / "mount-state")
+            record = control_store.publish(
+                endpoint,
+                drive="Z:",
+                process_id=process_id,
+            )
+
+            class NoopContextMenu:
+                @staticmethod
+                def remove() -> None:
+                    pass
+
+            def provider_running(_drive: str) -> bool:
+                try:
+                    send_disk_control_command(endpoint, "ping", timeout=0.2)
+                    return True
+                except MountUnavailableError:
+                    return False
+
+            recovered = WindowsSystemDiskManager(
+                WinSpdHostManager(),
+                control_store=control_store,
+                context_menu=NoopContextMenu(),  # type: ignore[arg-type]
+                drive_available=provider_running,
+            )
+            if recovered.mounted_drive != "Z:":
                 raise RuntimeError(
-                    "Внешняя команда не остановила процесс системного диска."
+                    "Новый менеджер не восстановил самостоятельный дисковый процесс."
                 )
+            recovered.unmount()
+            if record.path.exists():
+                raise RuntimeError("Запись отключённого диска не была удалена.")
         finally:
             manager.stop()
         elapsed = perf_counter() - started
@@ -233,6 +262,7 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 "provider_process": "detached-host",
                 "key_transport": "dpapi-one-time-request",
                 "external_control": "authenticated-loopback",
+                "restart_recovery": "verified",
             },
             ensure_ascii=False,
             indent=2,

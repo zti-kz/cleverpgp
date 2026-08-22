@@ -282,18 +282,47 @@ def wait_for_disk_removal(number: int, *, timeout: float = 15.0) -> None:
 class WindowsSystemDiskManager:
     """Create, mount and detach Clever PGP disks backed by the Windows file system."""
 
-    def __init__(self, process_manager: WinSpdHostManager | None = None) -> None:
+    def __init__(
+        self,
+        process_manager: WinSpdHostManager | None = None,
+        *,
+        control_store: DiskControlStore | None = None,
+        context_menu: WindowsDriveContextMenu | None = None,
+        drive_available: Callable[[str], bool] | None = None,
+        recover_existing: bool = True,
+    ) -> None:
         self._process_manager = process_manager or WinSpdHostManager()
-        self._control_store = DiskControlStore()
-        self._context_menu = WindowsDriveContextMenu()
+        self._control_store = control_store or DiskControlStore()
+        self._context_menu = context_menu or WindowsDriveContextMenu()
+        self._drive_available = drive_available or _drive_path_available
+        self._recovery_enabled = recover_existing
         self._control_record: DiskControlRecord | None = None
         self._disk: WindowsDiskInfo | None = None
         self._drive: str | None = None
+        if recover_existing:
+            self._recover_existing_control_record()
 
     @property
     def mounted_drive(self) -> str | None:
         if self._process_manager.running:
             return self._drive
+        if self._recovery_enabled and self._control_record is None:
+            self._recover_existing_control_record()
+            if self._control_record is not None:
+                return self._drive
+        if self._control_record is not None and self._drive is not None:
+            try:
+                self._control_store.send(
+                    self._control_record,
+                    "ping",
+                    timeout=0.35,
+                )
+                return self._drive
+            except MountUnavailableError:
+                # A host can be briefly busy while Windows flushes the volume.
+                # Keep recoverable state while its assigned drive still exists.
+                if self._drive_available(self._drive):
+                    return self._drive
         self._clear_control_record()
         self._disk = None
         self._drive = None
@@ -433,12 +462,56 @@ class WindowsSystemDiskManager:
 
     def unmount(self) -> None:
         disk = self._disk
-        self._process_manager.stop()
-        if disk is not None:
-            wait_for_disk_removal(disk.number)
+        drive = self._drive
+        if self._process_manager.running:
+            self._process_manager.stop()
+            if disk is not None:
+                wait_for_disk_removal(disk.number)
+            elif drive is not None:
+                wait_for_drive_removal(
+                    drive,
+                    drive_available=self._drive_available,
+                )
+        elif self._control_record is not None:
+            self._control_store.send(self._control_record, "stop")
+            if drive is not None:
+                wait_for_drive_removal(
+                    drive,
+                    drive_available=self._drive_available,
+                )
         self._clear_control_record()
         self._disk = None
         self._drive = None
+
+    def _recover_existing_control_record(self) -> None:
+        active: list[DiskControlRecord] = []
+        stale: list[DiskControlRecord] = []
+        for record in self._control_store.records():
+            if not self._control_record_responds(record):
+                stale.append(record)
+            else:
+                active.append(record)
+        for record in stale:
+            self._control_store.remove(record)
+        if active:
+            self._control_record = active[0]
+            self._drive = active[0].drive
+            return
+        if stale:
+            try:
+                self._context_menu.remove()
+            except OSError:
+                pass
+
+    def _control_record_responds(self, record: DiskControlRecord) -> bool:
+        for attempt in range(2):
+            try:
+                self._control_store.send(record, "ping", timeout=0.5)
+                return True
+            except MountUnavailableError:
+                if attempt == 0:
+                    time.sleep(0.05)
+        return False
 
     def _publish_control_record(
         self,
@@ -486,3 +559,24 @@ class WindowsSystemDiskManager:
             pass
         self._control_store.remove(self._control_record)
         self._control_record = None
+
+
+def wait_for_drive_removal(
+    drive: str,
+    *,
+    timeout: float = 15.0,
+    drive_available: Callable[[str], bool] | None = None,
+) -> None:
+    probe = drive_available or _drive_path_available
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not probe(drive):
+            return
+        time.sleep(0.05)
+    raise MountUnavailableError(
+        f"Системный диск {drive} не подтвердил безопасное отключение."
+    )
+
+
+def _drive_path_available(drive: str) -> bool:
+    return Path(f"{drive}\\").exists()
