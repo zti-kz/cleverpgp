@@ -1,15 +1,41 @@
 from __future__ import annotations
 
 from unittest.mock import patch
+from pathlib import Path
 
 import pytest
+from nacl import secret, utils
 
+from biopgp.core.block_volume import EncryptedBlockVolume
 from biopgp.core.errors import MountUnavailableError
+from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 from biopgp.core.windows_storage import (
     WindowsDiskInfo,
+    WindowsSystemDiskManager,
+    disk_drive_letters,
     format_ephemeral_cleverpgp_disk,
     select_new_cleverpgp_disk,
 )
+
+
+class FakeProcessManager:
+    def __init__(self) -> None:
+        self.running = False
+        self.started: tuple[Path, bytes] | None = None
+        self.stopped = False
+
+    def start(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        **_kwargs: object,
+    ) -> None:
+        self.started = (container_path, master_key)
+        self.running = True
+
+    def stop(self) -> None:
+        self.running = False
+        self.stopped = True
 
 
 def disk(
@@ -95,3 +121,71 @@ def test_format_command_revalidates_target_before_destructive_operation() -> Non
     assert "$partition.Offset -ne [UInt64]1048576" in script
     assert script.index("Get-Disk -Number 7") < script.index("Format-Volume")
     assert script.index("$partition.Offset") < script.index("Format-Volume")
+
+
+def test_unicode_volume_label_is_encoded_not_interpolated() -> None:
+    expected_size = 128 * 1024 * 1024
+    candidate = disk(7, "CleverPGP", expected_size)
+    with patch(
+        "biopgp.core.windows_storage._run_powershell",
+        return_value='{"DriveLetter":"Z"}',
+    ) as run_powershell:
+        format_ephemeral_cleverpgp_disk(
+            candidate,
+            expected_size=expected_size,
+            file_system="NTFS",
+        )
+
+    script = run_powershell.call_args.args[0]
+    assert "[Convert]::FromBase64String" in script
+    assert "-NewFileSystemLabel $label" in script
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('"Z"', ["Z:"]),
+        ('["Y","Z"]', ["Y:", "Z:"]),
+        ("[]", []),
+    ],
+)
+def test_disk_drive_letters_normalizes_powershell_json(
+    raw: str,
+    expected: list[str],
+) -> None:
+    with patch("biopgp.core.windows_storage._run_powershell", return_value=raw):
+        assert disk_drive_letters(7) == expected
+
+
+def test_system_manager_mounts_formatted_volume_and_waits_for_removal(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "system.cpgv"
+    volume = EncryptedBlockVolume.create(
+        container_path,
+        key,
+        logical_capacity=1024 * 1024,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    )
+    volume.close()
+    process_manager = FakeProcessManager()
+    system_disk = disk(7, "CleverPGP", 1024 * 1024)
+
+    with (
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=system_disk,
+        ),
+        patch("biopgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
+        patch("biopgp.core.windows_storage.wait_for_disk_removal") as removed,
+    ):
+        manager = WindowsSystemDiskManager(process_manager)  # type: ignore[arg-type]
+        assert manager.mount(container_path, key) == "Z:"
+        assert manager.mounted_drive == "Z:"
+        manager.unmount()
+
+    assert process_manager.started == (container_path, key)
+    assert process_manager.stopped
+    removed.assert_called_once_with(7)

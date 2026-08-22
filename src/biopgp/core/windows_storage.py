@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from biopgp.core.errors import MountUnavailableError
+from biopgp.core.winspd import (
+    WinSpdLibrary,
+    WinSpdProcessManager,
+    create_windows_block_volume,
+    open_windows_block_volume,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,11 +139,12 @@ def wait_for_new_cleverpgp_disk(
     )
 
 
-def format_ephemeral_cleverpgp_disk(
+def format_new_cleverpgp_disk(
     disk: WindowsDiskInfo,
     *,
     expected_size: int,
     file_system: str = "NTFS",
+    label: str = "Clever PGP",
 ) -> str:
     normalized_file_system = file_system.upper()
     if normalized_file_system not in ("NTFS", "EXFAT"):
@@ -146,9 +156,14 @@ def format_ephemeral_cleverpgp_disk(
         for marker in ("cleverpgp", "winspd")
     ):
         raise MountUnavailableError("Выбранный диск не принадлежит Clever PGP.")
+    normalized_label = label.strip() or "Clever PGP"
+    if len(normalized_label) > 32 or any(ord(character) < 32 for character in normalized_label):
+        raise ValueError("Disk label contains unsupported characters.")
+    encoded_label = base64.b64encode(normalized_label.encode("utf-8")).decode("ascii")
 
     script = f"""
 $ErrorActionPreference = 'Stop'
+$label = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_label}'))
 $disk = Get-Disk -Number {disk.number}
 if ([UInt64]$disk.Size -ne [UInt64]{expected_size}) {{ throw 'Disk size changed.' }}
 if ($disk.FriendlyName -notmatch 'CleverPGP|WinSpd') {{ throw 'Disk identity changed.' }}
@@ -161,7 +176,7 @@ if (-not $partition.DriveLetter) {{
     $partition | Add-PartitionAccessPath -AssignDriveLetter
     $partition = Get-Partition -DiskNumber {disk.number} -PartitionNumber $partition.PartitionNumber
 }}
-$partition | Format-Volume -FileSystem {normalized_file_system} -NewFileSystemLabel 'CleverPGP Check' -AllocationUnitSize 4096 -Force -Confirm:$false | Out-Null
+$partition | Format-Volume -FileSystem {normalized_file_system} -NewFileSystemLabel $label -AllocationUnitSize 4096 -Force -Confirm:$false | Out-Null
 $partition = Get-Partition -DiskNumber {disk.number} -PartitionNumber $partition.PartitionNumber
 if (-not $partition.DriveLetter) {{ throw 'Windows did not assign a drive letter.' }}
 [PSCustomObject]@{{ DriveLetter = [String]$partition.DriveLetter }} | ConvertTo-Json -Compress
@@ -174,6 +189,55 @@ if (-not $partition.DriveLetter) {{ throw 'Windows did not assign a drive letter
     return f"{drive_letter}:"
 
 
+def format_ephemeral_cleverpgp_disk(
+    disk: WindowsDiskInfo,
+    *,
+    expected_size: int,
+    file_system: str = "NTFS",
+) -> str:
+    return format_new_cleverpgp_disk(
+        disk,
+        expected_size=expected_size,
+        file_system=file_system,
+        label="CleverPGP Check",
+    )
+
+
+def disk_drive_letters(number: int) -> list[str]:
+    if not isinstance(number, int) or number < 0:
+        raise ValueError("Disk number must be non-negative.")
+    raw = _run_powershell(
+        f"@(Get-Partition -DiskNumber {number} | Where-Object {{ $_.DriveLetter }} | "
+        "ForEach-Object { [String]$_.DriveLetter }) | ConvertTo-Json -Compress"
+    )
+    if not raw:
+        return []
+    decoded = json.loads(raw)
+    values = decoded if isinstance(decoded, list) else [decoded]
+    letters: list[str] = []
+    for value in values:
+        letter = str(value).upper()
+        if len(letter) == 1 and letter.isalpha():
+            letters.append(f"{letter}:")
+    return letters
+
+
+def wait_for_drive_letter(number: int, *, timeout: float = 15.0) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        letters = disk_drive_letters(number)
+        if len(letters) == 1:
+            return letters[0]
+        if len(letters) > 1:
+            raise MountUnavailableError(
+                "Системный диск Clever PGP получил несколько букв."
+            )
+        time.sleep(0.2)
+    raise MountUnavailableError(
+        "Windows не назначила букву системному диску. Возможно, он ещё не отформатирован."
+    )
+
+
 def wait_for_disk_removal(number: int, *, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -181,3 +245,138 @@ def wait_for_disk_removal(number: int, *, timeout: float = 15.0) -> None:
             return
         time.sleep(0.2)
     raise MountUnavailableError("Временный системный диск не отключился.")
+
+
+class WindowsSystemDiskManager:
+    """Create, mount and detach Clever PGP disks backed by the Windows file system."""
+
+    def __init__(self, process_manager: WinSpdProcessManager | None = None) -> None:
+        self._process_manager = process_manager or WinSpdProcessManager()
+        self._disk: WindowsDiskInfo | None = None
+        self._drive: str | None = None
+
+    @property
+    def mounted_drive(self) -> str | None:
+        if self._process_manager.running:
+            return self._drive
+        self._disk = None
+        self._drive = None
+        return None
+
+    def create_and_mount(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        *,
+        logical_capacity: int,
+        label: str,
+        file_system: str = "NTFS",
+        overwrite: bool = False,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> str:
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый системный диск Clever PGP."
+            )
+        library = WinSpdLibrary()
+
+        def creation_progress(completed: int, total: int) -> None:
+            if progress is not None:
+                fraction = completed / total if total else 1.0
+                progress(
+                    5 + round(fraction * 55),
+                    "Подготовка зашифрованных блоков",
+                )
+
+        if progress is not None:
+            progress(3, "Проверка параметров системного диска")
+        volume = create_windows_block_volume(
+            container_path,
+            master_key,
+            logical_capacity=logical_capacity,
+            library=library,
+            label=label,
+            overwrite=overwrite,
+            progress=creation_progress,
+        )
+        volume.close()
+        before = list_windows_disks()
+        try:
+            self._process_manager.start(
+                container_path,
+                master_key,
+                device_name=None,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda value, message: progress(
+                        60 + round(value * 0.2), message
+                    )
+                ),
+            )
+            disk = wait_for_new_cleverpgp_disk(
+                before,
+                expected_size=logical_capacity,
+            )
+            if progress is not None:
+                progress(85, "Форматирование системного диска")
+            drive = format_new_cleverpgp_disk(
+                disk,
+                expected_size=logical_capacity,
+                file_system=file_system,
+                label=label,
+            )
+        except Exception:
+            self._process_manager.stop()
+            raise
+        self._disk = disk
+        self._drive = drive
+        if progress is not None:
+            progress(100, "Системный диск готов")
+        return drive
+
+    def mount(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        *,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> str:
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый системный диск Clever PGP."
+            )
+        volume = open_windows_block_volume(container_path, master_key)
+        try:
+            logical_capacity = volume.logical_capacity
+        finally:
+            volume.close()
+        before = list_windows_disks()
+        try:
+            self._process_manager.start(
+                container_path,
+                master_key,
+                device_name=None,
+                progress=progress,
+            )
+            disk = wait_for_new_cleverpgp_disk(
+                before,
+                expected_size=logical_capacity,
+            )
+            drive = wait_for_drive_letter(disk.number)
+        except Exception:
+            self._process_manager.stop()
+            raise
+        self._disk = disk
+        self._drive = drive
+        if progress is not None:
+            progress(100, "Системный диск подключён")
+        return drive
+
+    def unmount(self) -> None:
+        disk = self._disk
+        self._process_manager.stop()
+        if disk is not None:
+            wait_for_disk_removal(disk.number)
+        self._disk = None
+        self._drive = None
