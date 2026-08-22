@@ -12,9 +12,9 @@ from time import perf_counter
 
 from nacl import secret, utils
 
+from biopgp.core.disk_host import WinSpdHostManager
 from biopgp.core.winspd import (
     WinSpdLibrary,
-    WinSpdProcessManager,
     create_windows_block_volume,
 )
 from biopgp.core.windows_storage import (
@@ -60,7 +60,7 @@ def main() -> int:
         )
         volume.close()
 
-        manager = WinSpdProcessManager()
+        manager = WinSpdHostManager()
         selected_disk = None
         drive = ""
         try:
@@ -102,6 +102,9 @@ def main() -> int:
         json.dumps(
             {
                 "status": "ok",
+                "provider_process": "detached-host",
+                "key_transport": "dpapi-one-time-request",
+                "external_control": "authenticated-loopback",
                 "disk_number": selected_disk.number,
                 "friendly_name": selected_disk.friendly_name,
                 "capacity_mib": args.capacity_mib,
