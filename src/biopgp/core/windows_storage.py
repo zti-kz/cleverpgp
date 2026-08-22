@@ -14,9 +14,9 @@ from biopgp.core.disk_control import (
     DiskControlRecord,
     DiskControlStore,
 )
+from biopgp.core.disk_host import WinSpdHostManager
 from biopgp.core.winspd import (
     WinSpdLibrary,
-    WinSpdProcessManager,
     create_windows_block_volume,
     open_windows_block_volume,
 )
@@ -282,8 +282,8 @@ def wait_for_disk_removal(number: int, *, timeout: float = 15.0) -> None:
 class WindowsSystemDiskManager:
     """Create, mount and detach Clever PGP disks backed by the Windows file system."""
 
-    def __init__(self, process_manager: WinSpdProcessManager | None = None) -> None:
-        self._process_manager = process_manager or WinSpdProcessManager()
+    def __init__(self, process_manager: WinSpdHostManager | None = None) -> None:
+        self._process_manager = process_manager or WinSpdHostManager()
         self._control_store = DiskControlStore()
         self._context_menu = WindowsDriveContextMenu()
         self._control_record: DiskControlRecord | None = None
@@ -433,14 +433,12 @@ class WindowsSystemDiskManager:
 
     def unmount(self) -> None:
         disk = self._disk
-        try:
-            self._process_manager.stop()
-            if disk is not None:
-                wait_for_disk_removal(disk.number)
-        finally:
-            self._clear_control_record()
-            self._disk = None
-            self._drive = None
+        self._process_manager.stop()
+        if disk is not None:
+            wait_for_disk_removal(disk.number)
+        self._clear_control_record()
+        self._disk = None
+        self._drive = None
 
     def _publish_control_record(
         self,

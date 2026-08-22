@@ -8,6 +8,10 @@ from pathlib import Path
 def main(argv: list[str] | None = None) -> int:
     multiprocessing.freeze_support()
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["--winspd-host"] and len(arguments) == 2:
+        from biopgp.core.disk_host import run_disk_host
+
+        return run_disk_host(Path(arguments[1]))
     if arguments[:1] == ["--runtime-check"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:

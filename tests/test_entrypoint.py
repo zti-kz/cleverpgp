@@ -80,6 +80,15 @@ def test_winspd_pipe_check_mode_is_dispatched(tmp_path: Path) -> None:
     runtime_check.assert_called_once_with(marker, stgtest)
 
 
+def test_winspd_host_mode_is_dispatched(tmp_path: Path) -> None:
+    request = tmp_path / ("request-" + "a" * 32 + ".json")
+    with patch("biopgp.core.disk_host.run_disk_host", return_value=0) as host:
+        result = main(["--winspd-host", str(request)])
+
+    assert result == 0
+    host.assert_called_once_with(request)
+
+
 def test_application_opens_main_window_maximized() -> None:
     with (
         patch("biopgp.app.QApplication") as application_type,

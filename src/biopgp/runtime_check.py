@@ -156,9 +156,9 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
     from nacl import secret, utils
 
     from biopgp.core.disk_control import send_disk_control_command
+    from biopgp.core.disk_host import WinSpdHostManager
     from biopgp.core.winspd import (
         WinSpdLibrary,
-        WinSpdProcessManager,
         create_windows_block_volume,
     )
 
@@ -177,7 +177,7 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             library=library,
         )
         volume.close()
-        manager = WinSpdProcessManager()
+        manager = WinSpdHostManager()
         manager.start(
             container_path,
             master_key,
@@ -229,8 +229,8 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 "status": "ok",
                 "operations": 2000,
                 "elapsed_seconds": elapsed,
-                "provider_process": "separate",
-                "key_transport": "multiprocessing-pipe",
+                "provider_process": "detached-host",
+                "key_transport": "dpapi-one-time-request",
                 "external_control": "authenticated-loopback",
             },
             ensure_ascii=False,

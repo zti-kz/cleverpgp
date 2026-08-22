@@ -281,3 +281,26 @@ def test_system_manager_publishes_and_removes_external_control_state(
     assert FakeStore.removed is record
     assert FakeContextMenu.registered == ("Z:", "Open disk", "Unmount disk")
     assert FakeContextMenu.removed
+
+
+def test_system_manager_retains_state_when_safe_unmount_is_not_confirmed() -> None:
+    class RefusingProcessManager:
+        running = True
+        control_endpoint = None
+        process_id = None
+
+        def stop(self) -> None:
+            raise MountUnavailableError("files are busy")
+
+    record = object()
+    manager = WindowsSystemDiskManager(RefusingProcessManager())  # type: ignore[arg-type]
+    manager._drive = "Z:"
+    manager._disk = disk(7, "CleverPGP", 128 * 1024 * 1024)
+    manager._control_record = record  # type: ignore[assignment]
+
+    with pytest.raises(MountUnavailableError, match="files are busy"):
+        manager.unmount()
+
+    assert manager._drive == "Z:"
+    assert manager._disk is not None
+    assert manager._control_record is record

@@ -993,7 +993,15 @@ class MainWindow(QMainWindow):
         mounted = drive is not None
         self._tray_open_drive_action.setEnabled(mounted and not self._busy)
         self._tray_unmount_action.setEnabled(mounted and not self._busy)
-        self._tray_exit_action.setEnabled(not mounted and not self._busy)
+        detached_disk = mounted and self._uses_windows_system_disk
+        self._tray_exit_action.setText(
+            tr("Закрыть Clever PGP — диск останется подключённым")
+            if detached_disk
+            else tr("Завершить Clever PGP")
+        )
+        self._tray_exit_action.setEnabled(
+            not self._busy and (not mounted or detached_disk)
+        )
         self._tray_icon.setToolTip(
             tr("Clever PGP — диск {drive} подключён", drive=drive)
             if mounted
@@ -1036,7 +1044,12 @@ class MainWindow(QMainWindow):
             self._show_from_tray()
 
     def _exit_from_tray(self) -> None:
-        if self.mount_manager.mounted_drive is not None or self._busy:
+        if self._busy:
+            return
+        if (
+            self.mount_manager.mounted_drive is not None
+            and not self._uses_windows_system_disk
+        ):
             return
         self._close_background_window()
 

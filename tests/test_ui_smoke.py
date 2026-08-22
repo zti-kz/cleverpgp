@@ -367,6 +367,9 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         "Открыть зашифрованный диск",
         "Отключить зашифрованный диск",
     )
+    window._sync_tray_state()
+    assert window._tray_exit_action.isEnabled()
+    assert "диск останется подключённым" in window._tray_exit_action.text()
 
     manager.mounted_drive = None
     window.close()
@@ -409,6 +412,7 @@ def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     assert not event.isAccepted()
     assert window.isHidden()
     assert mounted_disk.unmount_calls == 0
+    assert not window._tray_exit_action.isEnabled()
 
     mounted_disk.mounted_drive = None
     window.close()

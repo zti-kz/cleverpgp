@@ -45,6 +45,7 @@
     "Открыть Clever PGP": "Open Clever PGP",
     "Открыть зашифрованный диск": "Open encrypted disk",
     "Завершить Clever PGP": "Exit Clever PGP",
+    "Закрыть Clever PGP — диск останется подключённым": "Close Clever PGP — keep the disk mounted",
     "Clever PGP — диск {drive} подключён": "Clever PGP — disk {drive} is mounted",
     "Установить компонент виртуального диска": "Install virtual disk component",
     "Заблокировать": "Lock",
