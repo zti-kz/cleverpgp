@@ -31,6 +31,18 @@ def main(argv: list[str] | None = None) -> int:
                 encoding="utf-8",
             )
             return 1
+    if arguments[:1] == ["--winspd-pipe-check"] and len(arguments) == 3:
+        marker = Path(arguments[1])
+        try:
+            from biopgp.runtime_check import run_winspd_pipe
+
+            return run_winspd_pipe(marker, Path(arguments[2]))
+        except BaseException as error:
+            marker.write_text(
+                f"Clever PGP WinSpd check failed: {error!r}",
+                encoding="utf-8",
+            )
+            return 1
     if arguments[:1] == ["--shell"]:
         from biopgp.shell import main as shell_main
 

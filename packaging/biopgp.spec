@@ -1,9 +1,12 @@
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
 
 project_directory = Path(SPEC).resolve().parents[1]
+winspd_dll = os.environ.get("CLEVERPGP_WINSPD_DLL_SOURCE")
+winspd_binaries = [(winspd_dll, ".")] if winspd_dll else []
 hidden_imports = [
     "_cffi_backend",
     "cv2",
@@ -14,7 +17,7 @@ hidden_imports = [
 analysis = Analysis(
     [str(project_directory / "src" / "biopgp" / "__main__.py")],
     pathex=[str(project_directory / "src")],
-    binaries=[],
+    binaries=winspd_binaries,
     datas=[
         (str(project_directory / "models"), "models"),
         (str(project_directory / "assets"), "assets"),

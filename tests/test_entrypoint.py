@@ -67,6 +67,18 @@ def test_virtual_disk_check_mode_is_dispatched(tmp_path: Path) -> None:
     runtime_check.assert_called_once_with(marker)
 
 
+def test_winspd_pipe_check_mode_is_dispatched(tmp_path: Path) -> None:
+    marker = tmp_path / "winspd.json"
+    stgtest = tmp_path / "stgtest-x64.exe"
+    with patch(
+        "biopgp.runtime_check.run_winspd_pipe", return_value=0
+    ) as runtime_check:
+        result = main(["--winspd-pipe-check", str(marker), str(stgtest)])
+
+    assert result == 0
+    runtime_check.assert_called_once_with(marker, stgtest)
+
+
 def test_application_opens_main_window_maximized() -> None:
     with (
         patch("biopgp.app.QApplication") as application_type,

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from time import perf_counter
 
@@ -27,6 +29,7 @@ def run(marker: Path) -> int:
     from biopgp.biometrics.model_assets import MODEL_ASSETS
     from biopgp.config import bundled_models_directory
     from biopgp.core.file_crypto import FileCryptoService
+    from biopgp.core.winspd import WinSpdLibrary
 
     aead = Aead(utils.random(Aead.KEY_SIZE))
     message = b"BioPGP packaged runtime check"
@@ -41,6 +44,7 @@ def run(marker: Path) -> int:
             raise RuntimeError(f"Модель не найдена или повреждена: {asset.filename}")
 
     FileCryptoService()
+    WinSpdLibrary()
     marker.write_text(
         json.dumps(
             {
@@ -50,6 +54,7 @@ def run(marker: Path) -> int:
                 "numpy": numpy.__version__,
                 "cffi_backend": str(getattr(_cffi_backend, "__version__", "loaded")),
                 "models": len(MODEL_ASSETS),
+                "winspd": "loaded",
             },
             ensure_ascii=False,
             indent=2,
@@ -121,6 +126,81 @@ def run_virtual_disk(marker: Path) -> int:
                 "read_mib_s": len(payload) / (1024 * 1024) / read_seconds,
             },
             ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return 0
+
+
+def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
+    from nacl import secret, utils
+
+    from biopgp.core.winspd import (
+        WinSpdLibrary,
+        WinSpdProcessManager,
+        create_windows_block_volume,
+    )
+
+    test_tool = Path(stgtest_path).expanduser().resolve()
+    if not test_tool.is_file():
+        raise RuntimeError("Официальная утилита проверки WinSpd не найдена.")
+    pipe_name = rf"\\.\pipe\cleverpgp-packaged-{uuid.uuid4().hex}"
+    with tempfile.TemporaryDirectory(prefix="cleverpgp-packaged-winspd-") as directory:
+        container_path = Path(directory) / "packaged-winspd.cpgv"
+        master_key = utils.random(secret.SecretBox.KEY_SIZE)
+        library = WinSpdLibrary()
+        volume = create_windows_block_volume(
+            container_path,
+            master_key,
+            logical_capacity=32 * 1024 * 1024,
+            library=library,
+        )
+        volume.close()
+        manager = WinSpdProcessManager()
+        manager.start(
+            container_path,
+            master_key,
+            device_name=pipe_name,
+        )
+        started = perf_counter()
+        try:
+            result = subprocess.run(
+                [
+                    str(test_tool),
+                    pipe_name + r"\0",
+                    "2000",
+                    "WRFU",
+                    "*",
+                    "*",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode:
+                raise RuntimeError(
+                    result.stderr.strip()
+                    or result.stdout.strip()
+                    or f"stgtest завершился с кодом {result.returncode}."
+                )
+            if not manager.running:
+                raise RuntimeError("Фоновый процесс системного диска остановился.")
+        finally:
+            manager.stop()
+        elapsed = perf_counter() - started
+
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "operations": 2000,
+                "elapsed_seconds": elapsed,
+                "provider_process": "separate",
+                "key_transport": "multiprocessing-pipe",
+            },
+            ensure_ascii=False,
+            indent=2,
         ),
         encoding="utf-8",
     )

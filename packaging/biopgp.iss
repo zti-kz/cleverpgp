@@ -7,6 +7,9 @@
 #ifndef WinFspInstaller
   #error WinFspInstaller must be defined by build_installer.ps1
 #endif
+#ifndef WinSpdInstaller
+  #error WinSpdInstaller must be defined by build_installer.ps1
+#endif
 #ifndef ReleaseDirectory
   #error ReleaseDirectory must be defined by build_installer.ps1
 #endif
@@ -74,6 +77,7 @@ Source: "{#ProjectDirectory}\packaging\*"; DestDir: "{app}\Source\packaging"; Fl
 Source: "{#ProjectDirectory}\assets\*"; DestDir: "{app}\Source\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#ProjectDirectory}\models\licenses\*"; DestDir: "{app}\Source\models\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#WinFspInstaller}"; DestDir: "{tmp}"; DestName: "winfsp-biopgp.msi"; Flags: ignoreversion deleteafterinstall
+Source: "{#WinSpdInstaller}"; DestDir: "{tmp}"; DestName: "winspd-cleverpgp.msi"; Flags: ignoreversion deleteafterinstall
 
 [InstallDelete]
 Type: files; Name: "{app}\BioPGP.exe"
@@ -123,6 +127,7 @@ Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount\c
 
 [Run]
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winfsp-biopgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinFspInstalled
+Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winspd-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент системного диска..."; Flags: waituntilterminated; Check: not IsWinSpdInstalled
 Filename: "{app}\{#AppExecutable}"; Description: "Запустить Clever PGP"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
@@ -135,4 +140,15 @@ begin
     RegQueryStringValue(HKLM64, 'SOFTWARE\WinFsp', 'InstallDir', InstallDirectory);
   if Result then
     Result := FileExists(AddBackslash(InstallDirectory) + 'bin\winfsp-x64.dll');
+end;
+
+function IsWinSpdInstalled: Boolean;
+var
+  InstallDirectory: String;
+begin
+  Result :=
+    RegQueryStringValue(HKLM32, 'SOFTWARE\WinSpd', 'InstallDir', InstallDirectory) or
+    RegQueryStringValue(HKLM64, 'SOFTWARE\WinSpd', 'InstallDir', InstallDirectory);
+  if Result then
+    Result := FileExists(AddBackslash(InstallDirectory) + 'sys\winspd-x64.dll');
 end;

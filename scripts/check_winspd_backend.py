@@ -9,8 +9,11 @@ from pathlib import Path
 
 from nacl import secret, utils
 
-from biopgp.core.block_volume import EncryptedBlockVolume
-from biopgp.core.winspd import WinSpdBlockDevice, WinSpdLibrary
+from biopgp.core.winspd import (
+    WinSpdLibrary,
+    WinSpdProcessManager,
+    create_windows_block_volume,
+)
 
 
 def main() -> int:
@@ -31,44 +34,48 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cleverpgp-winspd-") as folder:
         path = Path(folder) / "integration.cpgv"
         key = utils.random(secret.SecretBox.KEY_SIZE)
-        with EncryptedBlockVolume.create(
+        library = WinSpdLibrary(args.dll)
+        volume = create_windows_block_volume(
             path,
             key,
-            logical_capacity=16 * 1024 * 1024,
-        ) as volume:
-            device = WinSpdBlockDevice(
-                volume,
-                library=WinSpdLibrary(args.dll),
-                pipe_name=pipe_name,
+            logical_capacity=32 * 1024 * 1024,
+            library=library,
+        )
+        volume.close()
+        manager = WinSpdProcessManager()
+        manager.start(
+            path,
+            key,
+            device_name=pipe_name,
+            dll_path=args.dll,
+        )
+        try:
+            time.sleep(0.15)
+            command = [
+                str(args.stgtest.resolve()),
+                pipe_name + r"\0",
+                str(args.operations),
+                args.pattern,
+                "*",
+                "*",
+            ]
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
-            device.start()
-            try:
-                time.sleep(0.15)
-                command = [
-                    str(args.stgtest.resolve()),
-                    pipe_name + r"\0",
-                    str(args.operations),
-                    args.pattern,
-                    "*",
-                    "*",
-                ]
-                result = subprocess.run(
-                    command,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if result.stdout:
-                    print(result.stdout.rstrip())
-                if result.stderr:
-                    print(result.stderr.rstrip())
-                if result.returncode:
-                    return result.returncode
-                if device.last_error is not None:
-                    raise device.last_error
-            finally:
-                device.stop()
+            if result.stdout:
+                print(result.stdout.rstrip())
+            if result.stderr:
+                print(result.stderr.rstrip())
+            if result.returncode:
+                return result.returncode
+            if not manager.running:
+                raise RuntimeError("WinSpd provider stopped unexpectedly.")
+        finally:
+            manager.stop()
 
     print("WinSpd encrypted block backend: OK")
     return 0

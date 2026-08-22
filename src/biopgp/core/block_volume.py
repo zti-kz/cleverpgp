@@ -31,6 +31,7 @@ MIN_LOGICAL_CAPACITY = 1024 * 1024
 INITIALIZATION_BATCH_BLOCKS = 256
 ALGORITHM = "XCHACHA20-POLY1305-BLOCK-V1"
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
+GENERIC_STORAGE_FORMAT = "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
 
 
 class BlockVolumeError(ContainerError):
@@ -81,6 +82,7 @@ class EncryptedBlockVolume:
         logical_capacity: int,
         label: str = "Clever PGP",
         overwrite: bool = False,
+        storage_format: str = GENERIC_STORAGE_FORMAT,
         progress: Callable[[int, int], None] | None = None,
     ) -> EncryptedBlockVolume:
         target = Path(path).expanduser().resolve()
@@ -93,6 +95,8 @@ class EncryptedBlockVolume:
             raise OutputExistsError(f"Контейнер уже существует: {target}")
         if not target.parent.is_dir():
             raise ValidationError("Папка для контейнера не существует.")
+        if not storage_format or len(storage_format) > 63:
+            raise ValidationError("Некорректное назначение блочного хранилища.")
 
         required_size = cls.physical_size(block_count)
         free_bytes = int(shutil.disk_usage(target.parent).free)
@@ -111,6 +115,7 @@ class EncryptedBlockVolume:
             "key_wrap": KEY_WRAP,
             "label": label,
             "logical_block_size": LOGICAL_BLOCK_SIZE,
+            "storage_format": storage_format,
             "volume_id": base64.b64encode(volume_id).decode("ascii"),
             "wrapped_volume_key": base64.b64encode(wrapped_key).decode("ascii"),
         }
@@ -245,6 +250,15 @@ class EncryptedBlockVolume:
     @property
     def label(self) -> str:
         return str(self._metadata["label"])
+
+    @property
+    def volume_id(self) -> bytes:
+        return self._volume_id
+
+    @property
+    def storage_format(self) -> str | None:
+        value = self._metadata.get("storage_format")
+        return str(value) if isinstance(value, str) and value else None
 
     def read_blocks(
         self,
@@ -456,6 +470,11 @@ class EncryptedBlockVolume:
             raise InvalidBlockVolumeError("Некорректное число блоков диска.")
         if not str(metadata.get("label", "")):
             raise InvalidBlockVolumeError("В заголовке отсутствует название диска.")
+        storage_format = metadata.get("storage_format")
+        if storage_format is not None and (
+            not isinstance(storage_format, str) or not storage_format
+        ):
+            raise InvalidBlockVolumeError("Некорректное назначение блочного хранилища.")
         for name in ("volume_id", "wrapped_volume_key", "header_auth"):
             if not isinstance(metadata.get(name), str):
                 raise InvalidBlockVolumeError("Заголовок диска содержит неверные поля.")

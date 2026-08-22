@@ -35,6 +35,7 @@ def test_block_volume_supports_independent_random_access(tmp_path: Path) -> None
     ) as volume:
         assert volume.logical_capacity == capacity
         assert volume.label == "Блочный диск"
+        assert volume.storage_format == "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
         assert volume.read_blocks(0, 2) == bytes(2 * LOGICAL_BLOCK_SIZE)
         volume.write_blocks(3, b"A" * LOGICAL_BLOCK_SIZE)
         volume.write_blocks(8, b"B" * (2 * LOGICAL_BLOCK_SIZE))

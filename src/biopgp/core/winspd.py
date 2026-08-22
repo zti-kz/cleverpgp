@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import ctypes
+import multiprocessing
 import os
 import struct
 import sys
 import threading
+import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any
 
-from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
-from biopgp.core.errors import ValidationError
+from biopgp.core.block_volume import (
+    LOGICAL_BLOCK_SIZE,
+    BlockVolumeError,
+    EncryptedBlockVolume,
+)
+from biopgp.core.errors import MountUnavailableError, ValidationError
 
 ERROR_SUCCESS = 0
 SCSISTAT_GOOD = 0
@@ -27,6 +34,7 @@ FLAG_CACHE_SUPPORTED = 0x00000002
 FLAG_UNMAP_SUPPORTED = 0x00000004
 DEFAULT_MAX_TRANSFER_LENGTH = 1024 * 1024
 MIN_WINDOWS_DISK_CAPACITY = 32 * 1024 * 1024
+WINDOWS_BLOCK_STORAGE_FORMAT = "CLEVERPGP-WINDOWS-BLOCK-DISK-V1"
 
 
 class WinSpdError(RuntimeError):
@@ -128,6 +136,9 @@ def _candidate_dll_paths() -> Iterable[Path]:
     executable_dir = Path(sys.executable).resolve().parent
     architecture = "x64" if struct.calcsize("P") == 8 else "x86"
     yield executable_dir / f"winspd-{architecture}.dll"
+    frozen_directory = getattr(sys, "_MEIPASS", None)
+    if frozen_directory:
+        yield Path(frozen_directory) / f"winspd-{architecture}.dll"
 
     for environment_name in ("ProgramFiles", "ProgramFiles(x86)"):
         root = os.environ.get(environment_name)
@@ -260,6 +271,47 @@ def initialize_windows_partition(
     volume.flush()
 
 
+def create_windows_block_volume(
+    path: Path,
+    master_key: bytes,
+    *,
+    logical_capacity: int,
+    library: WinSpdLibrary,
+    label: str = "Clever PGP",
+    overwrite: bool = False,
+    progress: Callable[[int, int], None] | None = None,
+) -> EncryptedBlockVolume:
+    if logical_capacity < MIN_WINDOWS_DISK_CAPACITY:
+        raise ValidationError("Системный зашифрованный диск должен быть не меньше 32 МБ.")
+    volume = EncryptedBlockVolume.create(
+        path,
+        master_key,
+        logical_capacity=logical_capacity,
+        label=label,
+        overwrite=overwrite,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+        progress=progress,
+    )
+    try:
+        initialize_windows_partition(volume, library)
+        return volume
+    except Exception:
+        volume.close()
+        Path(path).expanduser().resolve().unlink(missing_ok=True)
+        raise
+
+
+def open_windows_block_volume(
+    path: Path,
+    master_key: bytes,
+) -> EncryptedBlockVolume:
+    volume = EncryptedBlockVolume.open(path, master_key)
+    if volume.storage_format != WINDOWS_BLOCK_STORAGE_FORMAT:
+        volume.close()
+        raise WinSpdError("Это не системный зашифрованный диск Clever PGP.")
+    return volume
+
+
 class WinSpdBlockDevice:
     """Expose EncryptedBlockVolume through WinSpd SCSI block operations.
 
@@ -300,7 +352,7 @@ class WinSpdBlockDevice:
             (ctypes.c_void_p * 12)(),
         )
         self._params = StorageUnitParams()
-        self._params.Guid[:] = uuid.uuid4().bytes_le
+        self._params.Guid[:] = uuid.UUID(bytes=volume.volume_id).bytes_le
         self._params.BlockCount = volume.block_count
         self._params.BlockLength = LOGICAL_BLOCK_SIZE
         _set_fixed_bytes(self._params.ProductId, b"CleverPGP")
@@ -480,3 +532,153 @@ class WinSpdBlockDevice:
         except Exception as error:
             self._record_error(error, status, write=True)
         return 1
+
+
+class WinSpdProcessManager:
+    """Run the block provider separately and exchange commands over a private pipe."""
+
+    def __init__(self) -> None:
+        self._process: multiprocessing.Process | None = None
+        self._control: Any = None
+        self._device_name: str | None = None
+
+    @property
+    def running(self) -> bool:
+        process = self._process
+        if process is not None and process.is_alive():
+            return True
+        if process is not None:
+            process.join(0)
+            self._process = None
+            self._device_name = None
+            if self._control is not None:
+                self._control.close()
+                self._control = None
+        return False
+
+    @property
+    def device_name(self) -> str | None:
+        return self._device_name if self.running else None
+
+    def start(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        *,
+        device_name: str | None = None,
+        dll_path: Path | None = None,
+        progress: Callable[[int, str], None] | None = None,
+        timeout: float = 15.0,
+    ) -> str | None:
+        if self.running:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый системный диск Clever PGP."
+            )
+        source = Path(container_path).expanduser().resolve()
+        if progress is not None:
+            progress(10, "Проверка системного зашифрованного диска")
+        parent_control, child_control = multiprocessing.Pipe(duplex=True)
+        process = multiprocessing.Process(
+            target=_winspd_provider_process,
+            args=(
+                str(source),
+                bytes(master_key),
+                device_name,
+                str(Path(dll_path).resolve()) if dll_path is not None else None,
+                child_control,
+            ),
+            name="Clever PGP Windows block disk",
+        )
+        process.start()
+        child_control.close()
+        if progress is not None:
+            progress(35, "Запуск системного диска")
+        started_at = time.monotonic()
+        response: tuple[str, str] | None = None
+        while time.monotonic() - started_at < timeout:
+            if parent_control.poll(0.1):
+                response = parent_control.recv()
+                break
+            if not process.is_alive():
+                break
+            if progress is not None:
+                elapsed = time.monotonic() - started_at
+                progress(
+                    min(90, 35 + round(elapsed / timeout * 55)),
+                    "Подключение системного диска",
+                )
+        if response is None or response[0] != "ready":
+            if process.is_alive():
+                parent_control.send("stop")
+                process.join(3)
+            if process.is_alive():
+                process.terminate()
+                process.join(3)
+            parent_control.close()
+            detail = response[1] if response is not None else "Процесс диска не ответил."
+            raise MountUnavailableError(detail)
+        self._process = process
+        self._control = parent_control
+        self._device_name = device_name
+        if progress is not None:
+            progress(100, "Системный диск подключён")
+        return device_name
+
+    def stop(self, *, timeout: float = 12.0) -> None:
+        process = self._process
+        control = self._control
+        if process is None:
+            return
+        if process.is_alive() and control is not None:
+            try:
+                control.send("stop")
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+            process.join(timeout)
+        if process.is_alive():
+            process.terminate()
+            process.join(3)
+        if control is not None:
+            control.close()
+        self._process = None
+        self._control = None
+        self._device_name = None
+
+
+def _winspd_provider_process(
+    container_path: str,
+    master_key: bytes,
+    device_name: str | None,
+    dll_path: str | None,
+    control: Any,
+) -> None:
+    volume: EncryptedBlockVolume | None = None
+    device: WinSpdBlockDevice | None = None
+    try:
+        volume = open_windows_block_volume(Path(container_path), master_key)
+        device = WinSpdBlockDevice(
+            volume,
+            library=WinSpdLibrary(Path(dll_path) if dll_path else None),
+            pipe_name=device_name,
+        )
+        device.start()
+        control.send(("ready", ""))
+        while True:
+            if control.poll(0.25):
+                if control.recv() == "stop":
+                    break
+            if device.last_error is not None:
+                control.send(("error", str(device.last_error)))
+                break
+    except (BlockVolumeError, WinSpdError, OSError, ValueError) as error:
+        try:
+            control.send(("error", str(error)))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        if device is not None:
+            device.stop()
+        if volume is not None:
+            volume.close()
+        master_key = b""
+        control.close()

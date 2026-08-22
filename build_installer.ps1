@@ -26,6 +26,14 @@ $ReleaseDirectory = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 $WinFspInstaller = Join-Path $VendorDirectory "winfsp-2.2.26194.msi"
 $WinFspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.2B3/winfsp-2.2.26194.msi"
 $WinFspSha256 = "7B41020618CDCC33D699D0E15C1DF660F0762A09B57080049C565857AC00BD9D"
+$WinSpdInstaller = Join-Path $VendorDirectory "winspd-1.0.20357.msi"
+$WinSpdUrl = "https://github.com/winfsp/winspd/releases/download/v1.0B1/winspd-1.0.20357.msi"
+$WinSpdSha256 = "F1157EEF805DCBEC78A477F2B4EE5ABC0049C8A9329444E5D18CAB01D3604265"
+$WinSpdExtractDirectory = Join-Path $VendorDirectory "winspd-package"
+$WinSpdDll = Join-Path $WinSpdExtractDirectory "WinSpd\sys\winspd-x64.dll"
+$WinSpdDllSha256 = "35433B6E99C4B282A7EC07757F2206851F28DABF7BBCFFD90BF60F317E865F7B"
+$WinSpdStgTest = Join-Path $WinSpdExtractDirectory "WinSpd\bin\stgtest-x64.exe"
+$WinSpdStgTestSha256 = "FF53AE37AD610AA851765596B3E821BD28CF2F0F68AD30991C79B423A3FB0AB7"
 $InnoInstaller = Join-Path $ToolsDirectory "innosetup-7.1.0-x64.exe"
 $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe"
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
@@ -111,6 +119,53 @@ function Invoke-CodeSigning([string]$Path) {
     }
 }
 
+function Expand-VerifiedWinSpdPackage {
+    if (
+        (Test-Path -LiteralPath $WinSpdDll -PathType Leaf) -and
+        (Test-Path -LiteralPath $WinSpdStgTest -PathType Leaf)
+    ) {
+        $ExistingDllHash = (Get-FileHash -LiteralPath $WinSpdDll -Algorithm SHA256).Hash
+        $ExistingTestHash = (Get-FileHash -LiteralPath $WinSpdStgTest -Algorithm SHA256).Hash
+        if (
+            $ExistingDllHash -eq $WinSpdDllSha256 -and
+            $ExistingTestHash -eq $WinSpdStgTestSha256
+        ) {
+            return
+        }
+    }
+    Reset-BuildDirectory $WinSpdExtractDirectory
+    $MsiArguments = @(
+        "/a",
+        "`"$WinSpdInstaller`"",
+        "/qn",
+        "TARGETDIR=`"$WinSpdExtractDirectory`""
+    )
+    $MsiProcess = Start-Process `
+        -FilePath (Join-Path $env:SystemRoot "System32\msiexec.exe") `
+        -ArgumentList $MsiArguments `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden
+    if ($MsiProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $WinSpdDll -PathType Leaf)) {
+        throw "Не удалось извлечь официальный компонент WinSpd для сборки."
+    }
+    $DllHash = (Get-FileHash -LiteralPath $WinSpdDll -Algorithm SHA256).Hash
+    if ($DllHash -ne $WinSpdDllSha256) {
+        throw "Проверка SHA-256 библиотеки WinSpd не пройдена: $DllHash"
+    }
+    $TestHash = (Get-FileHash -LiteralPath $WinSpdStgTest -Algorithm SHA256).Hash
+    if ($TestHash -ne $WinSpdStgTestSha256) {
+        throw "Проверка SHA-256 утилиты WinSpd не пройдена: $TestHash"
+    }
+    $DllSignature = Get-AuthenticodeSignature -LiteralPath $WinSpdDll
+    if (
+        $DllSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $DllSignature.SignerCertificate.Subject -notlike "CN=NAVIMATICS LLC*"
+    ) {
+        throw "Цифровая подпись библиотеки WinSpd не подтверждена."
+    }
+}
+
 if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
     throw "Сначала подготовьте среду разработки Clever PGP с помощью setup.ps1."
 }
@@ -132,6 +187,11 @@ if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 }
 New-Item -ItemType Directory -Path $VendorDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $ToolsDirectory -Force | Out-Null
+
+Write-Host "Подготовка системных компонентов диска..."
+Download-VerifiedFile $WinSpdUrl $WinSpdInstaller $WinSpdSha256
+Expand-VerifiedWinSpdPackage
+$env:CLEVERPGP_WINSPD_DLL_SOURCE = $WinSpdDll
 
 Write-Host "Сборка приложения..."
 & $PythonExecutable -m PyInstaller `
@@ -170,6 +230,35 @@ if ($RuntimeProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $RuntimeMark
     throw "Проверка собранного CleverPGP.exe не пройдена: $RuntimeDetails"
 }
 Write-Host "Собранное приложение и криптографический backend проверены."
+
+$WinSpdRuntimeMarker = Join-Path $BuildDirectory "winspd-runtime-check.json"
+Assert-ProjectChild $WinSpdRuntimeMarker
+if (Test-Path -LiteralPath $WinSpdRuntimeMarker) {
+    Remove-Item -LiteralPath $WinSpdRuntimeMarker -Force
+}
+$WinSpdRuntimeArguments = @(
+    "--winspd-pipe-check",
+    "`"$WinSpdRuntimeMarker`"",
+    "`"$WinSpdStgTest`""
+)
+$WinSpdRuntimeProcess = Start-Process `
+    -FilePath $BundledExecutable `
+    -ArgumentList $WinSpdRuntimeArguments `
+    -Wait `
+    -PassThru `
+    -WindowStyle Hidden
+if (
+    $WinSpdRuntimeProcess.ExitCode -ne 0 -or
+    -not (Test-Path -LiteralPath $WinSpdRuntimeMarker -PathType Leaf)
+) {
+    $WinSpdRuntimeDetails = if (Test-Path -LiteralPath $WinSpdRuntimeMarker) {
+        Get-Content -LiteralPath $WinSpdRuntimeMarker -Raw
+    } else {
+        "Проверочный файл не создан."
+    }
+    throw "Проверка системного диска собранного CleverPGP.exe не пройдена: $WinSpdRuntimeDetails"
+}
+Write-Host "Системный блочный процесс собранного приложения проверен."
 
 $VirtualDiskMarker = Join-Path $BuildDirectory "virtual-disk-runtime-check.json"
 Assert-ProjectChild $VirtualDiskMarker
@@ -229,6 +318,7 @@ $CompilerArguments = @(
     "/DAppSourceDirectory=$BundledApplication",
     "/DProjectDirectory=$ProjectDirectory",
     "/DWinFspInstaller=$WinFspInstaller",
+    "/DWinSpdInstaller=$WinSpdInstaller",
     "/DReleaseDirectory=$ReleaseDirectory",
     $InnoScript
 )

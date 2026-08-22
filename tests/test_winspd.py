@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ctypes
+import uuid
 from pathlib import Path
 
+import pytest
 from nacl import secret, utils
 
 from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
@@ -14,7 +16,10 @@ from biopgp.core.winspd import (
     StorageUnitStatus,
     UnmapDescriptor,
     WinSpdBlockDevice,
+    WinSpdError,
+    WINDOWS_BLOCK_STORAGE_FORMAT,
     initialize_windows_partition,
+    open_windows_block_volume,
 )
 
 
@@ -94,6 +99,7 @@ def test_windows_partition_is_initialized_inside_encrypted_blocks() -> None:
 def test_callbacks_read_write_flush_and_unmap(tmp_path: Path) -> None:
     volume, device = make_device(tmp_path)
     try:
+        assert bytes(device._params.Guid) == uuid.UUID(bytes=volume.volume_id).bytes_le
         status = StorageUnitStatus()
         payload = b"sector-data".ljust(LOGICAL_BLOCK_SIZE, b"!")
         source = ctypes.create_string_buffer(payload)
@@ -130,3 +136,32 @@ def test_callback_reports_out_of_range_instead_of_escaping(tmp_path: Path) -> No
         assert device.last_error is not None
     finally:
         volume.close()
+
+
+def test_windows_backend_rejects_a_generic_block_volume(tmp_path: Path) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    path = tmp_path / "generic.cpgv"
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+    )
+    volume.close()
+
+    with pytest.raises(WinSpdError):
+        open_windows_block_volume(path, key)
+
+
+def test_windows_backend_opens_its_explicit_storage_format(tmp_path: Path) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    path = tmp_path / "windows.cpgv"
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    )
+    volume.close()
+
+    with open_windows_block_volume(path, key) as reopened:
+        assert reopened.storage_format == WINDOWS_BLOCK_STORAGE_FORMAT

@@ -45,6 +45,7 @@ from biopgp.core.errors import (
 
 FILESYSTEM_MAGIC = b"CPGPFS3\0"
 FILESYSTEM_VERSION = 1
+BLOCK_VAULT_STORAGE_FORMAT = "CLEVERPGP-BLOCK-VAULT-V3"
 METADATA_SLOT_BLOCKS = 256
 METADATA_SLOT_COUNT = 2
 METADATA_BLOCKS = METADATA_SLOT_BLOCKS * METADATA_SLOT_COUNT
@@ -147,6 +148,7 @@ class BlockVaultContainer:
             logical_capacity=logical_capacity,
             label=label,
             overwrite=overwrite,
+            storage_format=BLOCK_VAULT_STORAGE_FORMAT,
             progress=initialize_progress,
         )
         now = cls._now_ns()
@@ -187,6 +189,10 @@ class BlockVaultContainer:
             raise InvalidContainerError(str(error)) from error
 
         try:
+            if volume.storage_format not in (None, BLOCK_VAULT_STORAGE_FORMAT):
+                raise InvalidContainerError(
+                    "Этот диск содержит системную файловую систему Windows."
+                )
             candidates: list[
                 tuple[int, dict[int, _NodeState], int, int]
             ] = []
@@ -1063,4 +1069,5 @@ __all__ = [
     "METADATA_BLOCKS",
     "METADATA_SLOT_BLOCKS",
     "COW_RESERVE_BLOCKS",
+    "BLOCK_VAULT_STORAGE_FORMAT",
 ]
