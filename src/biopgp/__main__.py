@@ -62,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
 
     from biopgp.app import main as application_main
 
+    if arguments[:1] == ["--settings"] and len(arguments) in (1, 2):
+        return application_main(startup_action="settings")
     if arguments[:1] == ["--container"] and len(arguments) == 2:
         return application_main(Path(arguments[1]).expanduser().resolve())
     if (

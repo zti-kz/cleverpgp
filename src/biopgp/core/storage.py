@@ -145,6 +145,45 @@ class ProfileRepository:
         if cursor.rowcount != 1:
             raise ValueError("Profile does not exist")
 
+    def update_password_slot(
+        self,
+        *,
+        profile_id: str,
+        expected_encrypted_master_key: bytes,
+        kdf_salt: bytes,
+        kdf_opslimit: int,
+        kdf_memlimit: int,
+        encrypted_master_key: bytes,
+    ) -> None:
+        """Atomically replace the password wrapper for the current master key.
+
+        The previous encrypted value is part of the update predicate. This
+        prevents a second Clever PGP process from silently overwriting a newer
+        password slot with stale profile data.
+        """
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE profile
+                SET kdf_salt = ?, kdf_opslimit = ?, kdf_memlimit = ?,
+                    encrypted_master_key = ?
+                WHERE singleton_slot = 1
+                  AND profile_id = ?
+                  AND encrypted_master_key = ?
+                """,
+                (
+                    kdf_salt,
+                    kdf_opslimit,
+                    kdf_memlimit,
+                    encrypted_master_key,
+                    profile_id,
+                    expected_encrypted_master_key,
+                ),
+            )
+        if cursor.rowcount != 1:
+            raise ValueError("Profile password slot changed concurrently")
+
     def has_biometric_profile(self) -> bool:
         with self._connect() as connection:
             row = connection.execute(

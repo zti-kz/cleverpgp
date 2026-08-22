@@ -48,6 +48,14 @@ def test_unmount_mode_is_dispatched_to_drive_control() -> None:
     unmount.assert_called_once_with("Z:\\")
 
 
+def test_settings_mode_opens_access_settings_window() -> None:
+    with patch("biopgp.app.main", return_value=0) as application_main:
+        result = main(["--settings", "Z:\\"])
+
+    assert result == 0
+    application_main.assert_called_once_with(startup_action="settings")
+
+
 def test_runtime_check_mode_is_dispatched(tmp_path: Path) -> None:
     marker = tmp_path / "runtime.json"
     with patch("biopgp.runtime_check.run", return_value=0) as runtime_check:
@@ -124,6 +132,24 @@ def test_direct_container_open_uses_compact_window(tmp_path: Path) -> None:
     assert result == 0
     window_type.return_value.show.assert_called_once_with()
     window_type.return_value.showMaximized.assert_not_called()
+
+
+def test_settings_launch_opens_main_window_maximized() -> None:
+    with (
+        patch("biopgp.app.QApplication") as application_type,
+        patch("biopgp.app.ProfileRepository"),
+        patch("biopgp.app.ProfileService"),
+        patch("biopgp.app.FileCryptoService"),
+        patch("biopgp.app.MainWindow") as window_type,
+        patch("biopgp.app.line_icon"),
+    ):
+        application_type.return_value.exec.return_value = 0
+
+        result = application_main(startup_action="settings")
+
+    assert result == 0
+    assert window_type.call_args.kwargs["startup_action"] == "settings"
+    window_type.return_value.showMaximized.assert_called_once_with()
 
 
 def test_winspd_backend_is_enabled_only_by_explicit_environment_setting() -> None:

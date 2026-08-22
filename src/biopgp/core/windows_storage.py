@@ -308,7 +308,7 @@ class WindowsSystemDiskManager:
         label: str,
         file_system: str = "NTFS",
         overwrite: bool = False,
-        context_menu_labels: tuple[str, str] | None = None,
+        context_menu_labels: tuple[str, ...] | None = None,
         progress: Callable[[int, str], None] | None = None,
     ) -> str:
         if self.mounted_drive is not None:
@@ -387,7 +387,7 @@ class WindowsSystemDiskManager:
         container_path: Path,
         master_key: bytes,
         *,
-        context_menu_labels: tuple[str, str] | None = None,
+        context_menu_labels: tuple[str, ...] | None = None,
         progress: Callable[[int, str], None] | None = None,
     ) -> str:
         if self.mounted_drive is not None:
@@ -444,7 +444,7 @@ class WindowsSystemDiskManager:
         self,
         drive: str,
         *,
-        context_menu_labels: tuple[str, str] | None,
+        context_menu_labels: tuple[str, ...] | None,
     ) -> DiskControlRecord | None:
         endpoint = getattr(self._process_manager, "control_endpoint", None)
         process_id = getattr(self._process_manager, "process_id", None)
@@ -455,14 +455,22 @@ class WindowsSystemDiskManager:
             drive=drive,
             process_id=process_id,
         )
-        open_label, unmount_label = context_menu_labels or (
-            "Открыть зашифрованный диск",
-            "Отключить зашифрованный диск",
-        )
+        if context_menu_labels is None:
+            open_label = "Открыть зашифрованный диск"
+            settings_label = "Настройки доступа"
+            unmount_label = "Отключить зашифрованный диск"
+        elif len(context_menu_labels) == 2:
+            open_label, unmount_label = context_menu_labels
+            settings_label = "Настройки доступа"
+        elif len(context_menu_labels) == 3:
+            open_label, settings_label, unmount_label = context_menu_labels
+        else:
+            raise ValueError("System disk context menu requires two or three labels.")
         try:
             self._context_menu.register(
                 drive,
                 open_label=open_label,
+                settings_label=settings_label,
                 unmount_label=unmount_label,
             )
         except OSError:

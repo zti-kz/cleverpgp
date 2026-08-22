@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 from biopgp.core.container import MIN_DATA_CAPACITY  # noqa: E402
 from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
+from biopgp.core.models import BiometricProfile, UnlockMode  # noqa: E402
 from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
 from biopgp.core.storage import ProfileRepository  # noqa: E402
 from biopgp.ui.main_window import MainWindow  # noqa: E402
 from biopgp.ui import main_window as main_window_module  # noqa: E402
+from biopgp.ui.settings_dialog import AccessSettingsRequest  # noqa: E402
 
 
 def test_first_window_can_be_created(tmp_path: Path) -> None:
@@ -89,6 +91,113 @@ def test_background_task_shows_progress_and_blocks_closing(tmp_path: Path) -> No
     assert not window.dashboard_progress.isVisible()
     assert window.windowFlags() & Qt.WindowType.WindowCloseButtonHint
     assert results == ["done"]
+    window.close()
+    application.processEvents()
+
+
+def test_face_only_mode_keeps_hidden_master_password_recovery(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile = profile_service.create_profile(
+        "Test",
+        password,
+        UnlockMode.FACE_ONLY,
+    )
+    repository.save_biometric_profile(
+        BiometricProfile(
+            profile_id=profile.profile_id,
+            protected_biometric_key=b"protected-key",
+            encrypted_template=b"encrypted-template",
+            encrypted_master_key=b"biometric-master-key-slot",
+            model_id="test-model",
+            model_sha256="0" * 64,
+            match_threshold=0.7,
+            enrolled_at="2026-08-23T00:00:00+00:00",
+        )
+    )
+
+    window = MainWindow(repository, profile_service, FileCryptoService())
+    recovery = next(
+        button
+        for button in window.centralWidget().findChildren(QPushButton)
+        if button.text() == "Использовать мастер-пароль"
+    )
+
+    assert window.unlock_password_input.isHidden()
+    assert window.unlock_password_button.isHidden()
+    recovery.click()
+    assert not window.unlock_password_input.isHidden()
+    assert not window.unlock_password_button.isHidden()
+
+    window.close()
+    application.processEvents()
+
+
+def test_access_settings_changes_password_without_replacing_session_key(
+    monkeypatch, tmp_path: Path
+) -> None:
+    old_password = "correct horse battery staple"
+    new_password = "new correct horse battery staple"
+
+    class PasswordDialog:
+        request = AccessSettingsRequest(
+            "password",
+            current_password=old_password,
+            new_password=new_password,
+        )
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        main_window_module,
+        "AccessSettingsDialog",
+        PasswordDialog,
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    profile_service.create_profile("Test", old_password)
+    window = MainWindow(repository, profile_service, FileCryptoService())
+    window.session = profile_service.unlock_with_password(old_password)
+    original_key = window.session.master_key_copy()
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+
+    window._show_access_settings()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert not window._busy
+    assert window.session is not None
+    assert window.session.master_key_copy() == original_key
+    changed_session = profile_service.unlock_with_password(new_password)
+    assert changed_session.master_key_copy() == original_key
+    changed_session.lock()
+    assert "Мастер-пароль успешно изменён" in window.dashboard_status.text()
+
     window.close()
     application.processEvents()
 
@@ -351,6 +460,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.create_call["file_system"] == "EXFAT"
     assert manager.create_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
+        "Настройки доступа",
         "Отключить зашифрованный диск",
     )
 
@@ -365,6 +475,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.mount_call is not None
     assert manager.mount_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
+        "Настройки доступа",
         "Отключить зашифрованный диск",
     )
     window._sync_tray_state()
@@ -451,6 +562,14 @@ def test_unlocked_window_keeps_file_and_container_actions(tmp_path: Path) -> Non
     assert len(about_buttons) == 1
     assert about_buttons[0].text() == ""
     assert not about_buttons[0].icon().isNull()
+    settings_buttons = [
+        button
+        for button in window.centralWidget().findChildren(QPushButton)
+        if button.toolTip() == "Настройки доступа"
+    ]
+    assert len(settings_buttons) == 1
+    assert settings_buttons[0].text() == ""
+    assert not settings_buttons[0].icon().isNull()
     assert window.findChildren(QScrollArea) == []
     assert all(
         not button.icon().isNull()

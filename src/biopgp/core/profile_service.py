@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -134,6 +135,90 @@ class ProfileService:
             del password_key
 
         return UnlockedSession(master_key)
+
+    def change_master_password(
+        self,
+        current_password: str,
+        new_password: str,
+        *,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> Profile:
+        """Re-wrap the unchanged random master key with a new password key."""
+
+        report = progress or (lambda _value, _message: None)
+        report(5, "Проверка нового мастер-пароля")
+        if current_password == new_password:
+            raise ValidationError(
+                "Новый мастер-пароль должен отличаться от текущего."
+            )
+        new_password_bytes = self._validate_password(new_password)
+        profile = self.repository.get_profile()
+        if profile is None:
+            raise ProfileNotFoundError("Локальный профиль не найден.")
+
+        report(15, "Проверка текущего мастер-пароля")
+        session = self.unlock_with_password(current_password)
+        master_key = bytearray(session.master_key_copy())
+        session.lock()
+        password_key: bytes | None = None
+        try:
+            report(55, "Формирование новой парольной защиты")
+            salt = utils.random(pwhash.argon2id.SALTBYTES)
+            password_key = self._derive_password_key(
+                new_password_bytes,
+                salt,
+                self.kdf_parameters.opslimit,
+                self.kdf_parameters.memlimit,
+            )
+            encrypted_master_key = bytes(
+                secret.SecretBox(password_key).encrypt(bytes(master_key))
+            )
+            try:
+                report(90, "Сохранение нового мастер-пароля")
+                self.repository.update_password_slot(
+                    profile_id=profile.profile_id,
+                    expected_encrypted_master_key=profile.encrypted_master_key,
+                    kdf_salt=salt,
+                    kdf_opslimit=self.kdf_parameters.opslimit,
+                    kdf_memlimit=self.kdf_parameters.memlimit,
+                    encrypted_master_key=encrypted_master_key,
+                )
+            except ValueError as error:
+                raise ValidationError(
+                    "Профиль был изменён в другом процессе. Повторите операцию."
+                ) from error
+        finally:
+            for index in range(len(master_key)):
+                master_key[index] = 0
+            if password_key is not None:
+                del password_key
+
+        updated = self.repository.get_profile()
+        if updated is None:
+            raise ProfileNotFoundError("Локальный профиль не найден.")
+        report(100, "Мастер-пароль изменён")
+        return updated
+
+    def change_unlock_mode(self, unlock_mode: UnlockMode) -> Profile:
+        profile = self.repository.get_profile()
+        if profile is None:
+            raise ProfileNotFoundError("Локальный профиль не найден.")
+        try:
+            selected_mode = UnlockMode(unlock_mode)
+        except (TypeError, ValueError) as error:
+            raise ValidationError("Неизвестный режим разблокировки.") from error
+        if selected_mode in (
+            UnlockMode.FACE_ONLY,
+            UnlockMode.PASSWORD_AND_FACE,
+        ) and not self.repository.has_biometric_profile():
+            raise ValidationError(
+                "Сначала зарегистрируйте лицо, затем включите выбранный режим."
+            )
+        self.repository.update_unlock_mode(selected_mode)
+        updated = self.repository.get_profile()
+        if updated is None:
+            raise ProfileNotFoundError("Локальный профиль не найден.")
+        return updated
 
     @staticmethod
     def _validate_password(password: str) -> bytes:

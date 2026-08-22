@@ -28,7 +28,11 @@ def default_mount_manager() -> VaultMountManager | WindowsSystemDiskManager:
     return VaultMountManager()
 
 
-def main(container_path: Path | None = None) -> int:
+def main(
+    container_path: Path | None = None,
+    *,
+    startup_action: str | None = None,
+) -> int:
     application = QApplication(sys.argv)
     application.setApplicationName(APP_NAME)
     application.setOrganizationName(ORGANIZATION_NAME)
@@ -45,6 +49,7 @@ def main(container_path: Path | None = None) -> int:
         FileCryptoService(),
         mount_manager=default_mount_manager(),
         startup_container=container_path,
+        startup_action=startup_action,
     )
     if container_path is None:
         # The regular application uses the whole available desktop while

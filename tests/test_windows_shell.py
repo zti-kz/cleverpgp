@@ -99,6 +99,7 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
         command_prefix=(str(executable),),
         icon_path=executable,
         open_label="Open encrypted disk",
+        settings_label="Access settings",
         unmount_label="Unmount encrypted disk",
     )
     lookup = {(item.subkey, item.name): item.value for item in values}
@@ -113,6 +114,12 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
     assert "--unmount" in str(unmount_command)
     assert "%1" in str(unmount_command)
     assert "cmd.exe" not in str(unmount_command).lower()
+    settings_command = lookup[
+        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings\command", "")
+    ]
+    assert "--settings" in str(settings_command)
+    assert "%1" in str(settings_command)
+    assert "cmd.exe" not in str(settings_command).lower()
 
 
 def test_context_menu_registers_and_removes_only_its_own_tree(
@@ -134,6 +141,7 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
     menu.register(
         "Y:",
         open_label="Открыть зашифрованный диск",
+        settings_label="Настройки доступа",
         unmount_label="Отключить зашифрованный диск",
     )
 

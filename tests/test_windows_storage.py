@@ -239,7 +239,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
             FakeStore.removed = selected
 
     class FakeContextMenu:
-        registered: tuple[str, str, str] | None = None
+        registered: tuple[str, str, str, str] | None = None
         removed = False
 
         def register(
@@ -247,9 +247,15 @@ def test_system_manager_publishes_and_removes_external_control_state(
             drive: str,
             *,
             open_label: str,
+            settings_label: str,
             unmount_label: str,
         ) -> None:
-            type(self).registered = (drive, open_label, unmount_label)
+            type(self).registered = (
+                drive,
+                open_label,
+                settings_label,
+                unmount_label,
+            )
 
         def remove(self) -> None:
             type(self).removed = True
@@ -269,7 +275,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
         assert manager.mount(
             container_path,
             key,
-            context_menu_labels=("Open disk", "Unmount disk"),
+            context_menu_labels=("Open disk", "Access settings", "Unmount disk"),
         ) == "Z:"
         manager.unmount()
 
@@ -279,7 +285,12 @@ def test_system_manager_publishes_and_removes_external_control_state(
         4321,
     )
     assert FakeStore.removed is record
-    assert FakeContextMenu.registered == ("Z:", "Open disk", "Unmount disk")
+    assert FakeContextMenu.registered == (
+        "Z:",
+        "Open disk",
+        "Access settings",
+        "Unmount disk",
+    )
     assert FakeContextMenu.removed
 
 

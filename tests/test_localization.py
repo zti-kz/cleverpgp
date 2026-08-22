@@ -22,6 +22,7 @@ from biopgp.localization import available_languages, set_language, tr  # noqa: E
 from biopgp.ui.about_dialog import AboutDialog  # noqa: E402
 from biopgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
 from biopgp.ui.main_window import MainWindow  # noqa: E402
+from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
 from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
 
 
@@ -145,6 +146,11 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
         minimum_capacity=32 * 1024 * 1024,
         system_disk=True,
     )
+    settings = AccessSettingsDialog(
+        window.repository.get_profile().unlock_mode,
+        biometric_enrolled=False,
+        parent=window,
+    )
     source = tmp_path / "report.txt"
     source.write_text("test", encoding="utf-8")
     shell = ShellOperationDialog(repository, "encrypt", source)
@@ -152,13 +158,14 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
     russian_letters = re.compile(r"[А-Яа-яЁё]")
     untranslated = [
         value
-        for dialog in (window, about, container, shell)
+        for dialog in (window, about, container, settings, shell)
         for value in _visible_strings(dialog)
         if russian_letters.search(value)
     ]
     assert untranslated == []
 
     shell.close()
+    settings.close()
     container.close()
     about.close()
     window.close()

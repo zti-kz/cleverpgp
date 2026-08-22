@@ -53,6 +53,7 @@ from biopgp.ui.about_dialog import AboutDialog
 from biopgp.ui.container_dialog import ContainerCreationDialog
 from biopgp.ui.face_dialog import FaceEnrollmentDialog, FaceVerificationDialog
 from biopgp.ui.icons import line_icon
+from biopgp.ui.settings_dialog import AccessSettingsDialog
 
 
 class BackgroundWorker(QObject):
@@ -88,6 +89,7 @@ class MainWindow(QMainWindow):
         file_crypto: FileCryptoService,
         mount_manager: VaultMountManager | WindowsSystemDiskManager | None = None,
         startup_container: Path | None = None,
+        startup_action: str | None = None,
     ) -> None:
         super().__init__()
         self.repository = repository
@@ -99,6 +101,7 @@ class MainWindow(QMainWindow):
         self.mount_manager = mount_manager or VaultMountManager()
         self._direct_container_launch = startup_container is not None
         self._direct_mount_pending = False
+        self._startup_action = startup_action
         self.startup_container = (
             startup_container.expanduser().resolve()
             if startup_container is not None
@@ -230,13 +233,16 @@ class MainWindow(QMainWindow):
             UnlockMode.PASSWORD_ONLY,
             UnlockMode.PASSWORD_AND_FACE,
         ) or not biometric_enrolled
+        password_recovery = (
+            profile.unlock_mode is UnlockMode.FACE_ONLY and biometric_enrolled
+        )
         face_allowed = profile.unlock_mode in (
             UnlockMode.PASSWORD_OR_FACE,
             UnlockMode.FACE_ONLY,
             UnlockMode.PASSWORD_AND_FACE,
         )
 
-        if password_allowed:
+        if password_allowed or password_recovery:
             self.unlock_password_input = QLineEdit()
             self.unlock_password_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.unlock_password_input.setPlaceholderText("Мастер-пароль")
@@ -251,6 +257,10 @@ class MainWindow(QMainWindow):
             unlock_button.setIcon(line_icon("unlock"))
             unlock_button.clicked.connect(self._unlock)
             content.addWidget(unlock_button)
+            self.unlock_password_button = unlock_button
+            if password_recovery:
+                self.unlock_password_input.hide()
+                unlock_button.hide()
 
         if face_allowed and profile.unlock_mode is not UnlockMode.PASSWORD_AND_FACE:
             face_button = QPushButton(
@@ -270,6 +280,14 @@ class MainWindow(QMainWindow):
             mfa_note.setObjectName("muted")
             content.addWidget(mfa_note)
 
+        if password_recovery:
+            show_recovery_button = QPushButton("Использовать мастер-пароль")
+            show_recovery_button.setIcon(line_icon("unlock"))
+            show_recovery_button.clicked.connect(
+                lambda: self._show_recovery_password(show_recovery_button)
+            )
+            content.addWidget(show_recovery_button)
+
         recovery_note = QLabel(
             "Мастер-пароль остаётся локальной альтернативой, если камера недоступна. "
             "У разработчика нет универсального ключа восстановления."
@@ -288,6 +306,14 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(page)
         if password_allowed:
             self.unlock_password_input.setFocus()
+
+    def _show_recovery_password(self, trigger: QPushButton) -> None:
+        if not hasattr(self, "unlock_password_input"):
+            return
+        self.unlock_password_input.show()
+        self.unlock_password_button.show()
+        trigger.hide()
+        self.unlock_password_input.setFocus()
 
     def _unlock(self) -> None:
         try:
@@ -345,6 +371,9 @@ class MainWindow(QMainWindow):
             self._mount_startup_container()
         else:
             self._show_dashboard()
+            if self._startup_action == "settings":
+                self._startup_action = None
+                QTimer.singleShot(0, self._show_access_settings)
 
     def _show_dashboard(self) -> None:
         profile = self.repository.get_profile()
@@ -480,6 +509,54 @@ class MainWindow(QMainWindow):
         localize_widget_tree(page)
         self.setCentralWidget(page)
 
+    def _show_access_settings(self) -> None:
+        profile = self.repository.get_profile()
+        if profile is None or self.session is None or not self.session.is_unlocked:
+            self._show_unlock()
+            return
+        dialog = AccessSettingsDialog(
+            profile.unlock_mode,
+            biometric_enrolled=self.repository.has_biometric_profile(),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.request is None:
+            return
+        request = dialog.request
+        if request.operation == "face":
+            self._enroll_face()
+            return
+        if request.operation == "unlock_mode" and request.unlock_mode is not None:
+            selected_mode = request.unlock_mode
+
+            def change_mode(progress: Callable[[int, str], None]) -> object:
+                progress(20, "Проверка режима разблокировки")
+                changed = self.profile_service.change_unlock_mode(selected_mode)
+                progress(100, "Режим разблокировки изменён")
+                return changed
+
+            def mode_changed(_result: object) -> None:
+                self._show_dashboard()
+                self._set_dashboard_status(tr("Режим разблокировки изменён."))
+
+            self._start_progress_task(change_mode, mode_changed)
+            return
+        if request.operation == "password":
+            current_password = request.current_password
+            new_password = request.new_password
+
+            def change_password(progress: Callable[[int, str], None]) -> object:
+                return self.profile_service.change_master_password(
+                    current_password,
+                    new_password,
+                    progress=progress,
+                )
+
+            def password_changed(_result: object) -> None:
+                self._show_dashboard()
+                self._set_dashboard_status(tr("Мастер-пароль успешно изменён."))
+
+            self._start_progress_task(change_password, password_changed)
+
     def _encrypt_file(self) -> None:
         source_name, _ = QFileDialog.getOpenFileName(self, tr("Выберите файл"))
         if not source_name:
@@ -570,6 +647,7 @@ class MainWindow(QMainWindow):
                         file_system=file_system,
                         context_menu_labels=(
                             tr("Открыть зашифрованный диск"),
+                            tr("Настройки доступа"),
                             tr("Отключить зашифрованный диск"),
                         ),
                         progress=progress,
@@ -681,6 +759,7 @@ class MainWindow(QMainWindow):
                     master_key,
                     context_menu_labels=(
                         tr("Открыть зашифрованный диск"),
+                        tr("Настройки доступа"),
                         tr("Отключить зашифрованный диск"),
                     ),
                     progress=progress,
@@ -1095,6 +1174,15 @@ class MainWindow(QMainWindow):
             lambda _index: self._change_language(language_selector.currentData())
         )
         header.addWidget(language_selector, 0, Qt.AlignmentFlag.AlignTop)
+        if self.session is not None and self.session.is_unlocked:
+            settings_button = QPushButton()
+            settings_button.setObjectName("headerIconButton")
+            settings_button.setIcon(line_icon("settings", "#bae6fd"))
+            settings_button.setFixedSize(46, 46)
+            settings_button.setToolTip("Настройки доступа")
+            settings_button.setAccessibleName("Настройки доступа")
+            settings_button.clicked.connect(self._show_access_settings)
+            header.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignTop)
         about_button = QPushButton()
         about_button.setObjectName("headerIconButton")
         about_button.setIcon(line_icon("info", "#bae6fd"))

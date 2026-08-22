@@ -41,6 +41,7 @@ def drive_context_menu_values(
     command_prefix: Iterable[str],
     icon_path: Path,
     open_label: str,
+    settings_label: str,
     unmount_label: str,
 ) -> tuple[RegistryValue, ...]:
     normalized_drive = _normalize_drive(drive)
@@ -54,7 +55,11 @@ def drive_context_menu_values(
     unmount_command = subprocess.list2cmdline(
         [*prefix, "--unmount", "%1"]
     )
+    settings_command = subprocess.list2cmdline(
+        [*prefix, "--settings", "%1"]
+    )
     open_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Open"
+    settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
     unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
     return (
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "MUIVerb", "Clever PGP"),
@@ -64,6 +69,9 @@ def drive_context_menu_values(
         RegistryValue(open_key, "MUIVerb", open_label),
         RegistryValue(open_key, "Icon", icon),
         RegistryValue(open_key + r"\command", "", open_command),
+        RegistryValue(settings_key, "MUIVerb", settings_label),
+        RegistryValue(settings_key, "Icon", icon),
+        RegistryValue(settings_key + r"\command", "", settings_command),
         RegistryValue(unmount_key, "MUIVerb", unmount_label),
         RegistryValue(unmount_key, "Icon", icon),
         RegistryValue(unmount_key, "CommandFlags", 0x20, "dword"),
@@ -92,6 +100,7 @@ class WindowsDriveContextMenu:
         drive: str,
         *,
         open_label: str,
+        settings_label: str,
         unmount_label: str,
     ) -> None:
         if sys.platform != "win32" and self._registry is None:
@@ -105,6 +114,7 @@ class WindowsDriveContextMenu:
             command_prefix=self._command_prefix,
             icon_path=self._icon_path,
             open_label=open_label,
+            settings_label=settings_label,
             unmount_label=unmount_label,
         )
         view = getattr(registry, "KEY_WOW64_64KEY", 0)
