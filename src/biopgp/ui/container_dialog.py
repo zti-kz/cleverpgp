@@ -318,7 +318,14 @@ class ContainerCreationDialog(QDialog):
             self.storage_warning.show()
             self.create_button.setEnabled(False)
             return
-        self.create_button.setEnabled(not path.exists())
+        if path.exists():
+            self.storage_warning.setText(
+                tr("Файл с таким именем уже существует. Выберите другое имя.")
+            )
+            self.storage_warning.show()
+            self.create_button.setEnabled(False)
+            return
+        self.create_button.setEnabled(True)
 
     @staticmethod
     def _format_capacity(capacity: int) -> str:
@@ -346,7 +353,13 @@ class ContainerCreationDialog(QDialog):
             QStandardPaths.StandardLocation.DocumentsLocation
         )
         base = Path(documents) if documents else Path.cwd()
-        return base / f"{tr('Защищённый диск')}{CONTAINER_SUFFIX}"
+        stem = tr("Защищённый диск")
+        candidate = base / f"{stem}{CONTAINER_SUFFIX}"
+        index = 2
+        while candidate.exists():
+            candidate = base / f"{stem} ({index}){CONTAINER_SUFFIX}"
+            index += 1
+        return candidate
 
 
 CONTAINER_DIALOG_STYLESHEET = """

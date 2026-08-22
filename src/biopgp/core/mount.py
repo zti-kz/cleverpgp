@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import errno
+import ctypes
 import multiprocessing
 import os
 import platform
 import stat
 import threading
 import time
-import ctypes
+from collections.abc import Callable
 from ctypes.util import find_library
 from pathlib import Path
 from typing import Any
@@ -256,8 +257,15 @@ class VaultMountManager:
         return None
 
     def mount(
-        self, container_path: Path, master_key: bytes, drive: str | None = None
+        self,
+        container_path: Path,
+        master_key: bytes,
+        drive: str | None = None,
+        *,
+        progress: Callable[[int, str], None] | None = None,
     ) -> str:
+        if progress is not None:
+            progress(5, "Проверка компонента виртуального диска")
         if self.mounted_drive is not None:
             raise MountUnavailableError("Сначала отключите уже открытый диск Clever PGP.")
         if not mount_backend_available():
@@ -266,6 +274,8 @@ class VaultMountManager:
                 "Обычное шифрование файлов работает без него."
             )
         mount_point = normalize_drive(drive or next_available_drive())
+        if progress is not None:
+            progress(15, "Проверка контейнера")
         receive_status, send_status = multiprocessing.Pipe(duplex=False)
         process = multiprocessing.Process(
             target=_mount_process,
@@ -274,7 +284,21 @@ class VaultMountManager:
         )
         process.start()
         send_status.close()
-        if not receive_status.poll(12):
+        started_at = time.monotonic()
+        ready = False
+        while time.monotonic() - started_at < 12:
+            if receive_status.poll(0.2):
+                ready = True
+                break
+            if not process.is_alive():
+                break
+            if progress is not None:
+                elapsed = time.monotonic() - started_at
+                progress(
+                    min(90, 25 + round(elapsed / 12 * 65)),
+                    "Подключение зашифрованного диска",
+                )
+        if not ready:
             process.terminate()
             process.join(3)
             raise MountUnavailableError("Виртуальный диск не ответил вовремя.")
@@ -288,6 +312,8 @@ class VaultMountManager:
             raise MountUnavailableError(message or "Не удалось подключить контейнер.")
         self._process = process
         self._drive = mount_point
+        if progress is not None:
+            progress(100, "Диск подключён")
         return mount_point
 
     def unmount(self) -> None:

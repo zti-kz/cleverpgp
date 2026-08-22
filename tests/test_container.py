@@ -29,7 +29,7 @@ def master_key() -> bytes:
     return utils.random(secret.SecretBox.KEY_SIZE)
 
 
-def test_container_is_fixed_size_and_contains_no_plaintext(tmp_path: Path) -> None:
+def test_container_is_compact_and_contains_no_plaintext(tmp_path: Path) -> None:
     key = master_key()
     path = tmp_path / f"private{CONTAINER_SUFFIX}"
 
@@ -45,8 +45,9 @@ def test_container_is_fixed_size_and_contains_no_plaintext(tmp_path: Path) -> No
     assert raw.startswith(MAGIC)
     assert b"this must never be visible" not in raw
     assert b"secret.txt" not in raw
-    assert path.stat().st_size == initial_size
-    assert initial_size > MIN_DATA_CAPACITY + DATABASE_RESERVE + HEADER_AREA_SIZE
+    assert path.stat().st_size >= initial_size
+    assert initial_size < MIN_DATA_CAPACITY
+    assert path.stat().st_size < MIN_DATA_CAPACITY
 
 
 def test_container_crud_survives_reopen(tmp_path: Path) -> None:
@@ -148,9 +149,42 @@ def test_container_capacity_is_not_limited_to_512_mb(tmp_path: Path) -> None:
     )
     container.close()
 
-    assert path.stat().st_size > one_gibibyte
+    assert path.stat().st_size < MIN_DATA_CAPACITY
     with EncryptedContainer.open(path, key) as reopened:
         assert reopened.data_capacity == one_gibibyte
+
+
+def test_container_creation_reports_percentage_progress(tmp_path: Path) -> None:
+    updates: list[tuple[int, str]] = []
+
+    container = EncryptedContainer.create(
+        tmp_path / "progress.cpgv",
+        master_key(),
+        data_capacity=MIN_DATA_CAPACITY,
+        progress=lambda value, message: updates.append((value, message)),
+    )
+    container.close(save=False)
+
+    values = [value for value, _message in updates]
+    assert values == sorted(values)
+    assert values[0] > 0
+    assert values[-1] == 100
+    assert all(message for _value, message in updates)
+
+
+def test_container_rejects_trailing_data(tmp_path: Path) -> None:
+    key = master_key()
+    path = tmp_path / "trailing.cpgv"
+    container = EncryptedContainer.create(
+        path, key, data_capacity=MIN_DATA_CAPACITY
+    )
+    container.close(save=False)
+
+    with path.open("ab") as stream:
+        stream.write(b"unexpected")
+
+    with pytest.raises(InvalidContainerError):
+        EncryptedContainer.open(path, key)
 
 
 def test_container_rejects_capacity_larger_than_selected_drive(

@@ -54,19 +54,25 @@ class BackgroundWorker(QObject):
     succeeded = Signal(object)
     failed = Signal(str)
     finished = Signal()
+    progress = Signal(int, str)
 
-    def __init__(self, operation: Callable[[], object]) -> None:
+    def __init__(
+        self, operation: Callable[[Callable[[int, str], None]], object]
+    ) -> None:
         super().__init__()
         self.operation = operation
 
     @Slot()
     def run(self) -> None:
         try:
-            self.succeeded.emit(self.operation())
+            self.succeeded.emit(self.operation(self._report_progress))
         except Exception as error:
             self.failed.emit(str(error))
         finally:
             self.finished.emit()
+
+    def _report_progress(self, value: int, message: str) -> None:
+        self.progress.emit(max(0, min(100, int(value))), message)
 
 
 class MainWindow(QMainWindow):
@@ -100,6 +106,7 @@ class MainWindow(QMainWindow):
         self._task_result: object = None
         self._task_error: str | None = None
         self._task_success_handler: Callable[[object], None] | None = None
+        self._task_determinate = False
 
         title_suffix = (
             f" — {self.startup_container.name}" if self.startup_container else ""
@@ -267,7 +274,8 @@ class MainWindow(QMainWindow):
         content.addWidget(recovery_note)
 
         self.auth_progress = QProgressBar()
-        self.auth_progress.setRange(0, 0)
+        self.auth_progress.setRange(0, 100)
+        self.auth_progress.setValue(0)
         self.auth_progress.hide()
         content.addWidget(self.auth_progress)
 
@@ -437,7 +445,8 @@ class MainWindow(QMainWindow):
         content.addWidget(self.dashboard_status)
 
         self.dashboard_progress = QProgressBar()
-        self.dashboard_progress.setRange(0, 0)
+        self.dashboard_progress.setRange(0, 100)
+        self.dashboard_progress.setValue(0)
         self.dashboard_progress.hide()
         content.addWidget(self.dashboard_progress)
         footer = QHBoxLayout()
@@ -467,8 +476,12 @@ class MainWindow(QMainWindow):
             return
         self._run_file_operation(
             tr("Зашифровано"),
-            lambda key: self.file_crypto.encrypt_file(
-                source, Path(target_name), key, overwrite=True
+            lambda key, progress: self.file_crypto.encrypt_file(
+                source,
+                Path(target_name),
+                key,
+                overwrite=True,
+                progress=progress,
             ),
         )
 
@@ -489,15 +502,21 @@ class MainWindow(QMainWindow):
             return
         self._run_file_operation(
             tr("Расшифровано"),
-            lambda key: self.file_crypto.decrypt_file(
-                source, Path(target_name), key, overwrite=True
+            lambda key, progress: self.file_crypto.decrypt_file(
+                source,
+                Path(target_name),
+                key,
+                overwrite=True,
+                progress=progress,
             ),
         )
 
     def _run_file_operation(
-        self, message: str, operation: Callable[[bytes], Path]
+        self,
+        message: str,
+        operation: Callable[[bytes, Callable[[int, str], None]], Path],
     ) -> None:
-        self._start_key_task(
+        self._start_key_progress_task(
             operation,
             lambda result: self._set_dashboard_status(f"{message}: {result}"),
         )
@@ -510,12 +529,15 @@ class MainWindow(QMainWindow):
         data_capacity = dialog.data_capacity
         volume_label = dialog.volume_label
 
-        def create_container(master_key: bytes) -> Path:
+        def create_container(
+            master_key: bytes, progress: Callable[[int, str], None]
+        ) -> Path:
             container = EncryptedContainer.create(
                 target,
                 master_key,
                 data_capacity=data_capacity,
                 label=volume_label,
+                progress=progress,
             )
             container.close(save=False)
             return target
@@ -528,7 +550,7 @@ class MainWindow(QMainWindow):
             if mount_backend_available():
                 self._mount_container(created_path)
 
-        self._start_key_task(create_container, created)
+        self._start_key_progress_task(create_container, created)
 
     def _enroll_face(self) -> None:
         try:
@@ -565,8 +587,10 @@ class MainWindow(QMainWindow):
         self._mount_container(Path(source_name))
 
     def _mount_container(self, source: Path) -> None:
-        self._start_key_task(
-            lambda master_key: self.mount_manager.mount(source, master_key),
+        self._start_key_progress_task(
+            lambda master_key, progress: self.mount_manager.mount(
+                source, master_key, progress=progress
+            ),
             self._container_mounted,
         )
 
@@ -664,17 +688,53 @@ class MainWindow(QMainWindow):
 
         self._start_task(protected_operation, on_success)
 
+    def _start_key_progress_task(
+        self,
+        operation: Callable[[bytes, Callable[[int, str], None]], object],
+        on_success: Callable[[object], None],
+    ) -> None:
+        if self.session is None:
+            self._show_unlock()
+            return
+        key_buffer = bytearray(self.session.master_key_copy())
+
+        def protected_operation(progress: Callable[[int, str], None]) -> object:
+            try:
+                return operation(bytes(key_buffer), progress)
+            finally:
+                for index in range(len(key_buffer)):
+                    key_buffer[index] = 0
+
+        self._start_progress_task(protected_operation, on_success)
+
     def _start_task(
         self,
         operation: Callable[[], object],
         on_success: Callable[[object], None],
+    ) -> None:
+        self._start_worker(lambda _progress: operation(), on_success, determinate=False)
+
+    def _start_progress_task(
+        self,
+        operation: Callable[[Callable[[int, str], None]], object],
+        on_success: Callable[[object], None],
+    ) -> None:
+        self._start_worker(operation, on_success, determinate=True)
+
+    def _start_worker(
+        self,
+        operation: Callable[[Callable[[int, str], None]], object],
+        on_success: Callable[[object], None],
+        *,
+        determinate: bool,
     ) -> None:
         if self._busy:
             return
         self._task_result = None
         self._task_error = None
         self._task_success_handler = on_success
-        self._set_busy(True)
+        self._task_determinate = determinate
+        self._set_busy(True, determinate=determinate)
 
         self._task_thread = QThread(self)
         self._task_worker = BackgroundWorker(operation)
@@ -682,6 +742,7 @@ class MainWindow(QMainWindow):
         self._task_thread.started.connect(self._task_worker.run)
         self._task_worker.succeeded.connect(self._task_succeeded)
         self._task_worker.failed.connect(self._task_failed)
+        self._task_worker.progress.connect(self._task_progress)
         self._task_worker.finished.connect(self._task_thread.quit)
         self._task_worker.finished.connect(self._task_worker.deleteLater)
         self._task_thread.finished.connect(self._task_finished)
@@ -696,6 +757,18 @@ class MainWindow(QMainWindow):
     def _task_failed(self, message: str) -> None:
         self._task_error = message or "Операция завершилась ошибкой."
 
+    @Slot(int, str)
+    def _task_progress(self, value: int, message: str) -> None:
+        formatted = f"{value}%"
+        if message:
+            formatted += f" — {tr(message)}"
+        for name in ("dashboard_progress", "auth_progress"):
+            progress = getattr(self, name, None)
+            if progress is not None:
+                progress.setRange(0, 100)
+                progress.setValue(value)
+                progress.setFormat(formatted)
+
     @Slot()
     def _task_finished(self) -> None:
         result = self._task_result
@@ -706,6 +779,7 @@ class MainWindow(QMainWindow):
         self._task_result = None
         self._task_error = None
         self._task_success_handler = None
+        self._task_determinate = False
         self._set_busy(False)
         if error is not None:
             if self._direct_mount_pending:
@@ -719,13 +793,22 @@ class MainWindow(QMainWindow):
             except (BioPGPError, OSError, TypeError, ValueError) as caught:
                 self._show_error(str(caught))
 
-    def _set_busy(self, busy: bool) -> None:
+    def _set_busy(self, busy: bool, *, determinate: bool = False) -> None:
         self._busy = busy
         restore_window = self.isVisible()
-        if hasattr(self, "dashboard_progress"):
-            self.dashboard_progress.setVisible(busy)
-        if hasattr(self, "auth_progress"):
-            self.auth_progress.setVisible(busy)
+        for name in ("dashboard_progress", "auth_progress"):
+            progress = getattr(self, name, None)
+            if progress is None:
+                continue
+            if busy:
+                if determinate:
+                    progress.setRange(0, 100)
+                    progress.setValue(0)
+                    progress.setFormat(tr("0% — Подготовка"))
+                else:
+                    progress.setRange(0, 0)
+                    progress.setFormat("")
+            progress.setVisible(busy)
         if hasattr(self, "dashboard_status") and busy:
             self.dashboard_status.hide()
         central = self.centralWidget()
@@ -1089,5 +1172,19 @@ QPushButton:disabled {
     color: #64748b;
     background: #1e293b;
     border-color: #334155;
+}
+QProgressBar {
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    color: #f8fafc;
+    min-height: 28px;
+    max-height: 28px;
+    text-align: center;
+    font-weight: 650;
+}
+QProgressBar::chunk {
+    background: #0284c7;
+    border-radius: 7px;
 }
 """

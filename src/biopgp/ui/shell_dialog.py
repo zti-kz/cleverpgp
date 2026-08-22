@@ -29,6 +29,7 @@ class ShellFileWorker(QObject):
     succeeded = Signal(str)
     failed = Signal(str)
     finished = Signal()
+    progress = Signal(int, str)
 
     def __init__(
         self,
@@ -65,6 +66,7 @@ class ShellFileWorker(QObject):
                         self.target,
                         master_key,
                         overwrite=self.overwrite,
+                        progress=self._report_progress,
                     )
                 else:
                     result = service.decrypt_file(
@@ -72,6 +74,7 @@ class ShellFileWorker(QObject):
                         self.target,
                         master_key,
                         overwrite=self.overwrite,
+                        progress=self._report_progress,
                     )
             finally:
                 del master_key
@@ -83,6 +86,9 @@ class ShellFileWorker(QObject):
             if session is not None:
                 session.lock()
             self.finished.emit()
+
+    def _report_progress(self, value: int, message: str) -> None:
+        self.progress.emit(max(0, min(100, int(value))), message)
 
 
 class ShellOperationDialog(QDialog):
@@ -158,7 +164,9 @@ class ShellOperationDialog(QDialog):
         layout.addWidget(note)
 
         self.progress = QProgressBar()
-        self.progress.setRange(0, 0)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setFormat(tr("0% — Подготовка"))
         self.progress.hide()
         layout.addWidget(self.progress)
 
@@ -245,6 +253,8 @@ class ShellOperationDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
         self.show()
         self.progress.show()
+        self.progress.setValue(0)
+        self.progress.setFormat(tr("0% — Подготовка"))
         self.status.hide()
 
         self.thread = QThread(self)
@@ -260,6 +270,7 @@ class ShellOperationDialog(QDialog):
         self.thread.started.connect(self.worker.run)
         self.worker.succeeded.connect(self._succeeded)
         self.worker.failed.connect(self._failed)
+        self.worker.progress.connect(self._progress_changed)
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self._thread_finished)
@@ -286,6 +297,13 @@ class ShellOperationDialog(QDialog):
         self.status.style().polish(self.status)
         self.status.show()
         self.operation_succeeded = False
+
+    @Slot(int, str)
+    def _progress_changed(self, value: int, message: str) -> None:
+        self.progress.setValue(value)
+        self.progress.setFormat(
+            f"{value}%" + (f" — {tr(message)}" if message else "")
+        )
 
     @Slot()
     def _thread_finished(self) -> None:
@@ -351,6 +369,15 @@ QPushButton {
 QPushButton#primary { background: #0284c7; border-color: #0ea5e9; }
 QPushButton:hover { background: #334155; }
 QPushButton#primary:hover { background: #0369a1; }
-QProgressBar { border: 0; background: #263449; min-height: 8px; max-height: 8px; }
-QProgressBar::chunk { background: #38bdf8; }
+QProgressBar {
+    border: 1px solid #475569;
+    border-radius: 8px;
+    background: #1e293b;
+    color: #f8fafc;
+    min-height: 28px;
+    max-height: 28px;
+    text-align: center;
+    font-weight: 650;
+}
+QProgressBar::chunk { background: #0284c7; border-radius: 7px; }
 """

@@ -137,3 +137,36 @@ def test_old_file_signature_is_rejected(
 
     with pytest.raises(InvalidEncryptedFileError):
         service.decrypt_file(encrypted, tmp_path / "restored.txt", key)
+
+
+def test_file_operations_report_real_percentage_progress(
+    tmp_path: Path, service: FileCryptoService
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    source = tmp_path / "large.bin"
+    encrypted = tmp_path / "large.bin.cpgp"
+    restored = tmp_path / "large.restored.bin"
+    source.write_bytes(utils.random(2 * 1024 * 1024 + 123))
+    encrypted_updates: list[tuple[int, str]] = []
+    decrypted_updates: list[tuple[int, str]] = []
+
+    service.encrypt_file(
+        source,
+        encrypted,
+        key,
+        progress=lambda value, message: encrypted_updates.append((value, message)),
+    )
+    service.decrypt_file(
+        encrypted,
+        restored,
+        key,
+        progress=lambda value, message: decrypted_updates.append((value, message)),
+    )
+
+    for updates in (encrypted_updates, decrypted_updates):
+        values = [value for value, _message in updates]
+        assert values == sorted(values)
+        assert values[-1] == 100
+        assert len(set(values)) >= 4
+        assert all(message for _value, message in updates)
+    assert restored.read_bytes() == source.read_bytes()

@@ -33,7 +33,7 @@ from biopgp.core.errors import (
 )
 
 MAGIC = b"CPGPVAULT"
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 PREFIX = struct.Struct(">9sBI")
 HEADER_AREA_SIZE = 4096
 DATABASE_LENGTH = struct.Struct(">Q")
@@ -44,7 +44,9 @@ MAX_FORMAT_FILE_SIZE = (1 << 63) - 1
 ALGORITHM = "XCHACHA20-POLY1305-IETF"
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
 CONTAINER_SUFFIX = ".cpgv"
-STORAGE_FORMAT = "SPARSE-AEAD-V1"
+STORAGE_FORMAT = "COMPACT-AEAD-V2"
+
+ProgressCallback = Callable[[int, str], None]
 
 _T = TypeVar("_T")
 
@@ -61,11 +63,12 @@ class VaultNode:
 
 
 class EncryptedContainer:
-    """A fixed-size, authenticated container whose plaintext exists only in RAM.
+    """An authenticated container whose plaintext exists only in RAM.
 
-    Version 1 deliberately targets the small MVP volume. Its encrypted payload is
-    a serialized in-memory SQLite file. Future large volumes can retain the public
-    API while replacing this payload with independently encrypted blocks.
+    Version 2 stores only the encrypted bytes that are currently in use. The
+    selected disk capacity remains a hard limit exposed to the mounted file
+    system, but creating an empty multi-gigabyte disk no longer requires Windows
+    to size the backing file to that full capacity.
     """
 
     def __init__(
@@ -93,7 +96,9 @@ class EncryptedContainer:
         data_capacity: int = 20 * 1024 * 1024,
         label: str = "Clever PGP",
         overwrite: bool = False,
+        progress: ProgressCallback | None = None,
     ) -> EncryptedContainer:
+        cls._report_progress(progress, 5, "Проверка параметров диска")
         target = Path(path).expanduser().resolve()
         cls._validate_master_key(master_key)
         cls._validate_capacity(data_capacity)
@@ -109,6 +114,7 @@ class EncryptedContainer:
                 "Недостаточно свободного места на выбранном накопителе."
             )
 
+        cls._report_progress(progress, 20, "Создание ключа контейнера")
         container_key = utils.random(secret.SecretBox.KEY_SIZE)
         wrapped_key = bytes(secret.SecretBox(master_key).encrypt(container_key))
         metadata: dict[str, object] = {
@@ -122,13 +128,14 @@ class EncryptedContainer:
             "storage_format": STORAGE_FORMAT,
             "wrapped_container_key": base64.b64encode(wrapped_key).decode("ascii"),
         }
+        cls._report_progress(progress, 35, "Формирование защищённого заголовка")
         raw_header = cls._encode_header(metadata)
         connection = cls._new_database(label)
         container = cls(
             target, container_key, raw_header, metadata, connection
         )
         try:
-            container.save()
+            container.save(progress=progress, progress_start=45, progress_end=100)
         except Exception:
             container.close(save=False)
             raise
@@ -195,11 +202,7 @@ class EncryptedContainer:
                 raw_header = raw_prefix + header_area
                 metadata = cls._decode_header(header_area)
                 payload_capacity = cls._payload_capacity(metadata)
-                storage_format = cls._storage_format(metadata)
-                expected_size = cls._container_file_size(payload_capacity)
-                if source.stat().st_size != expected_size:
-                    raise InvalidContainerError("Размер контейнера не соответствует заголовку.")
-
+                cls._storage_format(metadata)
                 wrapped_key = base64.b64decode(
                     str(metadata["wrapped_container_key"]), validate=True
                 )
@@ -237,6 +240,10 @@ class EncryptedContainer:
                     bindings.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES,
                 )
                 ciphertext = cls._read_exact(stream, ciphertext_size)
+                if stream.read(1):
+                    raise InvalidContainerError(
+                        "После данных контейнера обнаружены лишние байты."
+                    )
                 associated_data = raw_header + length_nonce + encrypted_length
         except (
             OSError,
@@ -523,9 +530,21 @@ class EncryptedContainer:
 
         self._mutate(mutation, persist=persist)
 
-    def save(self) -> None:
+    def save(
+        self,
+        *,
+        progress: ProgressCallback | None = None,
+        progress_start: int = 0,
+        progress_end: int = 100,
+    ) -> None:
         with self._lock:
             self._ensure_open()
+            report = lambda fraction, message: self._report_progress(
+                progress,
+                progress_start + round((progress_end - progress_start) * fraction),
+                message,
+            )
+            report(0.05, "Подготовка файловой системы")
             database = self._connection.serialize()
             payload_capacity = self._payload_capacity(self._metadata)
             required = DATABASE_LENGTH.size + len(database)
@@ -534,6 +553,7 @@ class EncryptedContainer:
             plaintext = DATABASE_LENGTH.pack(len(database)) + database
             self._storage_format(self._metadata)
 
+            report(0.25, "Шифрование данных контейнера")
             length_nonce = utils.random(
                 bindings.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
             )
@@ -558,22 +578,20 @@ class EncryptedContainer:
             )
             temporary_path: Path | None = None
             try:
+                report(0.65, "Запись контейнера на накопитель")
                 temporary_path, stream = self._temporary_output(self.path)
                 with stream:
-                    self._enable_sparse_file(stream)
                     stream.write(self._raw_header)
                     stream.write(length_nonce)
                     stream.write(encrypted_length)
                     stream.write(payload_nonce)
                     stream.write(ciphertext)
-                    encrypted_end = stream.tell()
-                    logical_size = self._container_file_size(payload_capacity)
-                    stream.truncate(logical_size)
-                    self._release_sparse_tail(stream, encrypted_end, logical_size)
                     stream.flush()
                     os.fsync(stream.fileno())
+                report(0.9, "Завершение создания диска")
                 os.replace(temporary_path, self.path)
                 temporary_path = None
+                report(1.0, "Готово")
             finally:
                 if temporary_path is not None:
                     temporary_path.unlink(missing_ok=True)
@@ -588,6 +606,13 @@ class EncryptedContainer:
             for index in range(len(self._container_key)):
                 self._container_key[index] = 0
             self._closed = True
+
+    @staticmethod
+    def _report_progress(
+        progress: ProgressCallback | None, value: int, message: str
+    ) -> None:
+        if progress is not None:
+            progress(max(0, min(100, int(value))), message)
 
     def __enter__(self) -> EncryptedContainer:
         return self

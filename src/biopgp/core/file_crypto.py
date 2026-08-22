@@ -6,6 +6,7 @@ import json
 import os
 import struct
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO
 
@@ -26,6 +27,8 @@ MAX_HEADER_SIZE = 64 * 1024
 ALGORITHM = "XCHACHA20-POLY1305-SECRETSTREAM"
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
 
+ProgressCallback = Callable[[int, str], None]
+
 
 class FileCryptoService:
     """Versioned, streaming `.cpgp` encryption backed by libsodium."""
@@ -37,7 +40,9 @@ class FileCryptoService:
         master_key: bytes,
         *,
         overwrite: bool = False,
+        progress: ProgressCallback | None = None,
     ) -> Path:
+        self._report_progress(progress, 2, "Проверка исходного файла")
         source, target = self._validate_paths(source_path, target_path, overwrite)
         self._validate_master_key(master_key)
 
@@ -50,19 +55,28 @@ class FileCryptoService:
         header = self._encode_header(stream_header, wrapped_file_key)
         prefix = PREFIX.pack(MAGIC, FORMAT_VERSION, len(header))
         associated_data = prefix + header
+        source_size = source.stat().st_size
 
         temporary_path: Path | None = None
         try:
+            self._report_progress(progress, 5, "Подготовка шифрования")
             temporary_path, target_stream = self._temporary_output(target)
             with source.open("rb") as source_stream, target_stream:
                 target_stream.write(associated_data)
                 self._encrypt_records(
-                    source_stream, target_stream, state, associated_data
+                    source_stream,
+                    target_stream,
+                    state,
+                    associated_data,
+                    source_size=source_size,
+                    progress=progress,
                 )
+                self._report_progress(progress, 97, "Сохранение результата")
                 target_stream.flush()
                 os.fsync(target_stream.fileno())
             os.replace(temporary_path, target)
             temporary_path = None
+            self._report_progress(progress, 100, "Шифрование завершено")
             return target
         finally:
             if temporary_path is not None:
@@ -77,12 +91,15 @@ class FileCryptoService:
         master_key: bytes,
         *,
         overwrite: bool = False,
+        progress: ProgressCallback | None = None,
     ) -> Path:
+        self._report_progress(progress, 2, "Проверка зашифрованного файла")
         source, target = self._validate_paths(source_path, target_path, overwrite)
         self._validate_master_key(master_key)
 
         temporary_path: Path | None = None
         try:
+            encrypted_size = source.stat().st_size
             with source.open("rb") as source_stream:
                 associated_data, stream_header, wrapped_key = self._read_header(
                     source_stream
@@ -105,15 +122,23 @@ class FileCryptoService:
                     ) from error
 
                 temporary_path, target_stream = self._temporary_output(target)
+                self._report_progress(progress, 5, "Проверка ключа файла")
                 with target_stream:
                     self._decrypt_records(
-                        source_stream, target_stream, state, associated_data
+                        source_stream,
+                        target_stream,
+                        state,
+                        associated_data,
+                        encrypted_size=encrypted_size,
+                        progress=progress,
                     )
+                    self._report_progress(progress, 97, "Сохранение результата")
                     target_stream.flush()
                     os.fsync(target_stream.fileno())
 
             os.replace(temporary_path, target)
             temporary_path = None
+            self._report_progress(progress, 100, "Расшифрование завершено")
             return target
         finally:
             if temporary_path is not None:
@@ -225,6 +250,9 @@ class FileCryptoService:
         target_stream: BinaryIO,
         state: bindings.crypto_secretstream_xchacha20poly1305_state,
         associated_data: bytes,
+        *,
+        source_size: int,
+        progress: ProgressCallback | None,
     ) -> None:
         chunk = source_stream.read(CHUNK_SIZE)
         if not chunk:
@@ -237,8 +265,10 @@ class FileCryptoService:
                     bindings.crypto_secretstream_xchacha20poly1305_TAG_FINAL,
                 ),
             )
+            FileCryptoService._report_progress(progress, 95, "Шифрование данных")
             return
 
+        processed = 0
         while True:
             next_chunk = source_stream.read(CHUNK_SIZE)
             is_final = not next_chunk
@@ -251,6 +281,13 @@ class FileCryptoService:
                 state, chunk, associated_data, tag
             )
             FileCryptoService._write_encrypted_record(target_stream, encrypted)
+            processed += len(chunk)
+            fraction = processed / max(1, source_size)
+            FileCryptoService._report_progress(
+                progress,
+                5 + round(90 * min(1.0, fraction)),
+                "Шифрование данных",
+            )
             if is_final:
                 return
             chunk = next_chunk
@@ -266,6 +303,9 @@ class FileCryptoService:
         target_stream: BinaryIO,
         state: bindings.crypto_secretstream_xchacha20poly1305_state,
         associated_data: bytes,
+        *,
+        encrypted_size: int,
+        progress: ProgressCallback | None,
     ) -> None:
         maximum_record_size = (
             CHUNK_SIZE + bindings.crypto_secretstream_xchacha20poly1305_ABYTES
@@ -299,6 +339,12 @@ class FileCryptoService:
             ):
                 raise InvalidEncryptedFileError("Недопустимый тег блока.")
             target_stream.write(plaintext)
+            fraction = source_stream.tell() / max(1, encrypted_size)
+            self._report_progress(
+                progress,
+                5 + round(90 * min(1.0, fraction)),
+                "Расшифрование данных",
+            )
 
             if tag == bindings.crypto_secretstream_xchacha20poly1305_TAG_FINAL:
                 if source_stream.read(1):
@@ -306,6 +352,13 @@ class FileCryptoService:
                         "После завершающего блока обнаружены лишние данные."
                     )
                 return
+
+    @staticmethod
+    def _report_progress(
+        progress: ProgressCallback | None, value: int, message: str
+    ) -> None:
+        if progress is not None:
+            progress(max(0, min(100, int(value))), message)
 
     @staticmethod
     def _read_exact(source_stream: BinaryIO, size: int) -> bytes:
