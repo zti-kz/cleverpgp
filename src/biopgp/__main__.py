@@ -19,6 +19,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"Clever PGP runtime check failed: {error!r}", encoding="utf-8"
             )
             return 1
+    if arguments[:1] == ["--virtual-disk-check"] and len(arguments) == 2:
+        marker = Path(arguments[1])
+        try:
+            from biopgp.runtime_check import run_virtual_disk
+
+            return run_virtual_disk(marker)
+        except BaseException as error:
+            marker.write_text(
+                f"Clever PGP virtual disk check failed: {error!r}",
+                encoding="utf-8",
+            )
+            return 1
     if arguments[:1] == ["--shell"]:
         from biopgp.shell import main as shell_main
 

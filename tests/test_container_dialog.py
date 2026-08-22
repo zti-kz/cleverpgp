@@ -15,21 +15,22 @@ from biopgp.ui.container_dialog import (  # noqa: E402
 from biopgp.core.container import EncryptedContainer  # noqa: E402
 
 
-def test_container_size_is_entered_without_a_slider(
+def test_container_size_is_selected_with_a_slider(
     tmp_path: Path,
 ) -> None:
     application = QApplication.instance() or QApplication([])
     dialog = ContainerCreationDialog()
     dialog.path_input.setText(str(tmp_path / "private"))
 
-    dialog.size_input.setText("64")
+    assert dialog.findChildren(QSlider) == [dialog.size_slider]
+    dialog.size_slider.setValue(
+        dialog._capacity_to_slider(64 * MEBIBYTE, dialog._maximum_capacity)
+    )
     assert dialog.data_capacity == 64 * MEBIBYTE
     assert dialog.size_value.text() == "64 МБ"
 
-    dialog.size_input.setText("2.5")
-    dialog.unit_input.setCurrentText("ГБ")
-    assert dialog.data_capacity == int(2.5 * 1024 * MEBIBYTE)
-    assert dialog.findChildren(QSlider) == []
+    assert dialog.minimum_size_label.text().startswith("Минимум:")
+    assert dialog.maximum_size_label.text().startswith("Максимум:")
 
     dialog.accept()
     assert dialog.container_path == (tmp_path / "private.cpgv").resolve()
@@ -45,10 +46,11 @@ def test_container_capacity_has_no_512_mb_product_limit(monkeypatch) -> None:
     )
     application = QApplication.instance() or QApplication([])
     dialog = ContainerCreationDialog()
-    dialog.size_input.setText("2")
-    dialog.unit_input.setCurrentText("ТБ")
+    dialog.size_slider.setValue(
+        dialog._capacity_to_slider(2 * TEBIBYTE, dialog._maximum_capacity)
+    )
 
-    assert dialog.data_capacity == 2 * 1024 * 1024 * MEBIBYTE
+    assert dialog.data_capacity == 2 * TEBIBYTE
     assert dialog.size_value.text() == "2 ТБ"
 
     dialog.close()
@@ -75,11 +77,8 @@ def test_selected_drive_limits_container_capacity(monkeypatch, tmp_path: Path) -
     assert "100 МБ" in dialog.storage_space.text()
     assert "40 МБ" in dialog.storage_space.text()
 
-    dialog.size_input.setText("41")
-    assert not dialog.storage_warning.isHidden()
-    assert not dialog.create_button.isEnabled()
-
-    dialog.size_input.setText("40")
+    dialog.size_slider.setValue(dialog.size_slider.maximum())
+    assert dialog.data_capacity == 40 * MEBIBYTE
     assert dialog.create_button.isEnabled()
     dialog.accept()
     assert dialog.result() == dialog.DialogCode.Accepted

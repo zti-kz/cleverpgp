@@ -8,12 +8,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from nacl import pwhash  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QCloseEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialog,
+    QPushButton,
+    QScrollArea,
+)
 
+from biopgp.core.container import MIN_DATA_CAPACITY  # noqa: E402
 from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
 from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
 from biopgp.core.storage import ProfileRepository  # noqa: E402
 from biopgp.ui.main_window import MainWindow  # noqa: E402
+from biopgp.ui import main_window as main_window_module  # noqa: E402
 
 
 def test_first_window_can_be_created(tmp_path: Path) -> None:
@@ -121,6 +128,98 @@ def test_progress_task_displays_percentage_and_stage(tmp_path: Path) -> None:
         time.sleep(0.01)
 
     assert saw_percentage
+    window.close()
+    application.processEvents()
+
+
+def test_container_creation_and_mount_use_one_continuous_progress_task(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class CreationDialog:
+        container_path = tmp_path / "continuous.cpgv"
+        data_capacity = MIN_DATA_CAPACITY
+        volume_label = "Continuous"
+
+        def __init__(self, parent: object = None) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class MountedDisk:
+        def __init__(self) -> None:
+            self.mounted_drive: str | None = None
+
+        def mount(
+            self,
+            source: Path,
+            key: bytes,
+            *,
+            progress: Callable[[int, str], None],
+        ) -> str:
+            progress(5, "Проверка")
+            progress(25, "Запуск")
+            self.mounted_drive = "Z:"
+            progress(100, "Готово")
+            return self.mounted_drive
+
+        def unmount(self) -> None:
+            self.mounted_drive = None
+
+    monkeypatch.setattr(
+        main_window_module, "ContainerCreationDialog", CreationDialog
+    )
+    monkeypatch.setattr(main_window_module, "mount_backend_available", lambda: True)
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices, "openUrl", lambda _url: True
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=MountedDisk(),
+    )
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+    worker_starts: list[bool] = []
+    original_start_worker = window._start_worker
+
+    def record_worker_start(
+        operation: Callable[[Callable[[int, str], None]], object],
+        on_success: Callable[[object], None],
+        *,
+        determinate: bool,
+    ) -> None:
+        worker_starts.append(determinate)
+        original_start_worker(
+            operation, on_success, determinate=determinate
+        )
+
+    window._start_worker = record_worker_start
+    window._create_container()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert (tmp_path / "continuous.cpgv").is_file()
+    assert worker_starts == [True]
+    assert window.mount_manager.mounted_drive == "Z:"
+    window.mount_manager.mounted_drive = None
     window.close()
     application.processEvents()
 

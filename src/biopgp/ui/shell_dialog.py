@@ -165,8 +165,8 @@ class ShellOperationDialog(QDialog):
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
-        self.progress.setValue(0)
-        self.progress.setFormat(tr("0% — Подготовка"))
+        self.progress.setValue(1)
+        self.progress.setFormat(tr("1% — Запуск операции"))
         self.progress.hide()
         layout.addWidget(self.progress)
 
@@ -253,8 +253,8 @@ class ShellOperationDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
         self.show()
         self.progress.show()
-        self.progress.setValue(0)
-        self.progress.setFormat(tr("0% — Подготовка"))
+        self.progress.setValue(1)
+        self.progress.setFormat(tr("1% — Запуск операции"))
         self.status.hide()
 
         self.thread = QThread(self)

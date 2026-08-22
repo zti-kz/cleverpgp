@@ -531,24 +531,50 @@ class MainWindow(QMainWindow):
 
         def create_container(
             master_key: bytes, progress: Callable[[int, str], None]
-        ) -> Path:
+        ) -> tuple[Path, str | None, str | None]:
+            def creation_progress(value: int, message: str) -> None:
+                progress(max(1, round(value * 0.6)), message)
+
             container = EncryptedContainer.create(
                 target,
                 master_key,
                 data_capacity=data_capacity,
                 label=volume_label,
-                progress=progress,
+                progress=creation_progress,
             )
             container.close(save=False)
-            return target
+            if not mount_backend_available():
+                progress(100, "Контейнер создан")
+                return target, None, None
+            try:
+                drive = self.mount_manager.mount(
+                    target,
+                    master_key,
+                    progress=lambda value, message: progress(
+                        60 + round(value * 0.4), message
+                    ),
+                )
+            except Exception as error:
+                progress(100, "Контейнер создан без подключения")
+                return target, None, str(error)
+            return target, drive, None
 
         def created(result: object) -> None:
-            created_path = Path(result)
+            created_path, drive, mount_error = result
+            created_path = Path(created_path)
+            if drive is not None:
+                self._container_mounted(drive)
+                return
             self._set_dashboard_status(
                 tr("Контейнер создан: {path}", path=created_path)
             )
-            if mount_backend_available():
-                self._mount_container(created_path)
+            if mount_error:
+                self._show_error(
+                    tr(
+                        "Контейнер создан, но не подключён: {error}",
+                        error=mount_error,
+                    )
+                )
 
         self._start_key_progress_task(create_container, created)
 
@@ -803,8 +829,8 @@ class MainWindow(QMainWindow):
             if busy:
                 if determinate:
                     progress.setRange(0, 100)
-                    progress.setValue(0)
-                    progress.setFormat(tr("0% — Подготовка"))
+                    progress.setValue(1)
+                    progress.setFormat(tr("1% — Запуск операции"))
                 else:
                     progress.setRange(0, 0)
                     progress.setFormat("")

@@ -1,5 +1,16 @@
 ﻿$ErrorActionPreference = "Stop"
 
+$OutputDirectory = ""
+for ($ArgumentIndex = 0; $ArgumentIndex -lt $args.Count; $ArgumentIndex++) {
+    if (
+        $args[$ArgumentIndex] -eq "-OutputDirectory" -and
+        $ArgumentIndex + 1 -lt $args.Count
+    ) {
+        $OutputDirectory = [string]$args[$ArgumentIndex + 1]
+        break
+    }
+}
+
 $ProjectDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PythonExecutable = Join-Path $ProjectDirectory ".venv\Scripts\python.exe"
 $BuildDirectory = Join-Path $ProjectDirectory "build"
@@ -7,7 +18,11 @@ $ApplicationDirectory = Join-Path $BuildDirectory "app"
 $PyInstallerWorkDirectory = Join-Path $BuildDirectory "pyinstaller"
 $VendorDirectory = Join-Path $BuildDirectory "vendor"
 $ToolsDirectory = Join-Path $BuildDirectory "tools"
-$ReleaseDirectory = Join-Path $ProjectDirectory "release"
+$ReleaseDirectory = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Join-Path $ProjectDirectory "release"
+} else {
+    [IO.Path]::GetFullPath($OutputDirectory)
+}
 $WinFspInstaller = Join-Path $VendorDirectory "winfsp-2.2.26194.msi"
 $WinFspUrl = "https://github.com/winfsp/winfsp/releases/download/v2.2B3/winfsp-2.2.26194.msi"
 $WinFspSha256 = "7B41020618CDCC33D699D0E15C1DF660F0762A09B57080049C565857AC00BD9D"
@@ -16,7 +31,7 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.5.5"
+$AppVersion = "0.5.6"
 $SignToolPath = $env:BIOPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:BIOPGP_SIGN_CERT_SHA1
 $TimestampUrl = $env:BIOPGP_TIMESTAMP_URL
@@ -110,7 +125,11 @@ if ($LASTEXITCODE -ne 0) { throw "Не удалось создать значо�
 
 Reset-BuildDirectory $ApplicationDirectory
 Reset-BuildDirectory $PyInstallerWorkDirectory
-Reset-BuildDirectory $ReleaseDirectory
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Reset-BuildDirectory $ReleaseDirectory
+} else {
+    New-Item -ItemType Directory -Path $ReleaseDirectory -Force | Out-Null
+}
 New-Item -ItemType Directory -Path $VendorDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $ToolsDirectory -Force | Out-Null
 
@@ -151,6 +170,31 @@ if ($RuntimeProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $RuntimeMark
     throw "Проверка собранного CleverPGP.exe не пройдена: $RuntimeDetails"
 }
 Write-Host "Собранное приложение и криптографический backend проверены."
+
+$VirtualDiskMarker = Join-Path $BuildDirectory "virtual-disk-runtime-check.json"
+Assert-ProjectChild $VirtualDiskMarker
+if (Test-Path -LiteralPath $VirtualDiskMarker) {
+    Remove-Item -LiteralPath $VirtualDiskMarker -Force
+}
+$VirtualDiskArguments = @("--virtual-disk-check", "`"$VirtualDiskMarker`"")
+$VirtualDiskProcess = Start-Process `
+    -FilePath $BundledExecutable `
+    -ArgumentList $VirtualDiskArguments `
+    -Wait `
+    -PassThru `
+    -WindowStyle Hidden
+if (
+    $VirtualDiskProcess.ExitCode -ne 0 -or
+    -not (Test-Path -LiteralPath $VirtualDiskMarker -PathType Leaf)
+) {
+    $VirtualDiskDetails = if (Test-Path -LiteralPath $VirtualDiskMarker) {
+        Get-Content -LiteralPath $VirtualDiskMarker -Raw
+    } else {
+        "Проверочный файл не создан."
+    }
+    throw "Проверка виртуального диска собранного CleverPGP.exe не пройдена: $VirtualDiskDetails"
+}
+Write-Host "Виртуальный диск собранного приложения проверен."
 
 Write-Host "Подготовка установщика виртуального диска..."
 Download-VerifiedFile $WinFspUrl $WinFspInstaller $WinFspSha256

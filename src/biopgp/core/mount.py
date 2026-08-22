@@ -282,6 +282,8 @@ class VaultMountManager:
             args=(str(Path(container_path).resolve()), bytes(master_key), mount_point, send_status),
             name="Clever PGP encrypted disk",
         )
+        if progress is not None:
+            progress(25, "Запуск виртуального диска")
         process.start()
         send_status.close()
         started_at = time.monotonic()

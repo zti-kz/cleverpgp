@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QStandardPaths, QRegularExpression
-from PySide6.QtGui import QColor, QRegularExpressionValidator
+from PySide6.QtCore import Qt, QStandardPaths
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -15,14 +13,11 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSlider,
     QVBoxLayout,
 )
 
-from biopgp.core.container import (
-    CONTAINER_SUFFIX,
-    MAX_FORMAT_FILE_SIZE,
-    EncryptedContainer,
-)
+from biopgp.core.container import CONTAINER_SUFFIX, EncryptedContainer
 from biopgp.core.errors import ValidationError
 from biopgp.localization import localize_widget_tree, tr
 from biopgp.ui.icons import line_icon
@@ -30,14 +25,20 @@ from biopgp.ui.icons import line_icon
 MEBIBYTE = 1024 * 1024
 GIBIBYTE = 1024 * MEBIBYTE
 TEBIBYTE = 1024 * GIBIBYTE
-UNIT_FACTORS = (("МБ", MEBIBYTE), ("ГБ", GIBIBYTE), ("ТБ", TEBIBYTE))
-DEFAULT_SIZE = "20"
+PEBIBYTE = 1024 * TEBIBYTE
+EXBIBYTE = 1024 * PEBIBYTE
+MINIMUM_CAPACITY = MEBIBYTE
+DEFAULT_CAPACITY = 20 * MEBIBYTE
 
 
 class ContainerCreationDialog(QDialog):
     def __init__(self, parent: object = None) -> None:
         super().__init__(parent)
         self._selected_path: Path | None = None
+        self._selected_capacity = DEFAULT_CAPACITY
+        self._maximum_capacity = DEFAULT_CAPACITY
+        self._capacity_choices = [MINIMUM_CAPACITY, DEFAULT_CAPACITY]
+        self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
         self.setMinimumWidth(640)
         self.resize(680, 720)
@@ -52,7 +53,7 @@ class ContainerCreationDialog(QDialog):
 
     @property
     def data_capacity(self) -> int:
-        return self._parsed_capacity()
+        return self._selected_capacity
 
     @property
     def volume_label(self) -> str:
@@ -137,27 +138,30 @@ class ContainerCreationDialog(QDialog):
         size_header.addWidget(self.size_value)
         size_layout.addLayout(size_header)
 
-        exact_row = QHBoxLayout()
-        exact_label = QLabel("Укажите объём")
-        exact_label.setObjectName("muted")
-        self.size_input = QLineEdit(DEFAULT_SIZE)
-        self.size_input.setValidator(
-            QRegularExpressionValidator(
-                QRegularExpression(r"[0-9]{0,20}([\.,][0-9]{0,2})?")
-            )
+        slider_instruction = QLabel(
+            "Перемещайте ползунок, чтобы выбрать ёмкость диска."
         )
-        self.size_input.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.size_input.setPlaceholderText("Например, 20")
-        self.unit_input = QComboBox()
-        for unit, factor in UNIT_FACTORS:
-            self.unit_input.addItem(unit, factor)
-        self.unit_input.setCurrentIndex(0)
-        self.unit_input.setMinimumWidth(90)
-        exact_row.addWidget(exact_label)
-        exact_row.addStretch()
-        exact_row.addWidget(self.size_input, 1)
-        exact_row.addWidget(self.unit_input)
-        size_layout.addLayout(exact_row)
+        slider_instruction.setObjectName("muted")
+        size_layout.addWidget(slider_instruction)
+
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setObjectName("capacitySlider")
+        self.size_slider.setRange(0, 1)
+        self.size_slider.setSingleStep(1)
+        self.size_slider.setPageStep(20)
+        self.size_slider.setTracking(True)
+        size_layout.addWidget(self.size_slider)
+
+        scale_row = QHBoxLayout()
+        self.minimum_size_label = QLabel()
+        self.minimum_size_label.setObjectName("scaleLabel")
+        self.maximum_size_label = QLabel()
+        self.maximum_size_label.setObjectName("scaleLabel")
+        self.maximum_size_label.setAlignment(Qt.AlignmentFlag.AlignRight)
+        scale_row.addWidget(self.minimum_size_label)
+        scale_row.addStretch()
+        scale_row.addWidget(self.maximum_size_label)
+        size_layout.addLayout(scale_row)
 
         self.size_hint = QLabel()
         self.size_hint.setObjectName("hint")
@@ -199,11 +203,10 @@ class ContainerCreationDialog(QDialog):
         buttons.addWidget(self.create_button)
         outer.addLayout(buttons)
 
-        self.size_input.textChanged.connect(self._update_size_summary)
-        self.unit_input.currentTextChanged.connect(self._update_size_summary)
+        self.size_slider.valueChanged.connect(self._slider_changed)
         self.path_input.textChanged.connect(self._update_storage_summary)
         localize_widget_tree(self)
-        self._update_size_summary()
+        self._update_storage_summary()
 
     def accept(self) -> None:
         try:
@@ -214,7 +217,7 @@ class ContainerCreationDialog(QDialog):
                 raise ValueError("Файл с таким именем уже существует. Выберите другое имя.")
             if not self.volume_label:
                 raise ValueError("Введите название диска.")
-            capacity = self._parsed_capacity()
+            capacity = self.data_capacity
             _, maximum_capacity = EncryptedContainer.storage_space(path)
             if capacity > maximum_capacity:
                 raise ValueError(
@@ -247,37 +250,23 @@ class ContainerCreationDialog(QDialog):
             path = path.with_name(path.name + CONTAINER_SUFFIX)
         return path.resolve()
 
-    def _parsed_capacity(self) -> int:
-        raw_value = self.size_input.text().strip().replace(",", ".")
-        try:
-            value = Decimal(raw_value)
-        except InvalidOperation as error:
-            raise ValueError("Введите корректный объём диска.") from error
-        if not value.is_finite() or value <= 0:
-            raise ValueError("Объём диска должен быть больше нуля.")
-        capacity = int(value * int(self.unit_input.currentData()))
-        if capacity < MEBIBYTE:
-            raise ValueError("Минимальная ёмкость зашифрованного диска — 1 МБ.")
-        if capacity > MAX_FORMAT_FILE_SIZE - 2 * MEBIBYTE:
-            raise ValueError("Такой объём не поддерживается выбранной файловой системой.")
-        return capacity
-
-    def _update_size_summary(self, *_: object) -> None:
-        try:
-            capacity = self._parsed_capacity()
-            display = self._format_capacity(capacity)
-            self.size_value.setText(display)
-            self.size_hint.setText(tr(
-                "Указана максимальная ёмкость диска. Контейнер не занимает всё "
-                "место сразу и увеличивает фактически занятую область по мере "
-                "добавления файлов."
-            ))
-        except ValueError:
-            self.size_value.setText("—")
-            self.size_hint.setText(
-                tr("Введите желаемую ёмкость и выберите единицу измерения.")
+    def _slider_changed(self, position: int) -> None:
+        self._selected_capacity = self._slider_to_capacity(
+            position
+        )
+        self._update_size_summary()
+        if self._current_path is not None:
+            self._update_create_state(
+                self._current_path, self._maximum_capacity
             )
-        self._update_storage_summary()
+
+    def _update_size_summary(self) -> None:
+        self.size_value.setText(self._format_capacity(self._selected_capacity))
+        self.size_hint.setText(tr(
+            "Указана максимальная ёмкость диска. Контейнер не занимает всё "
+            "место сразу и увеличивает фактически занятую область по мере "
+            "добавления файлов."
+        ))
 
     def _update_storage_summary(self, *_: object) -> None:
         self.storage_warning.hide()
@@ -285,12 +274,17 @@ class ContainerCreationDialog(QDialog):
             path = self._normalized_path()
             free_bytes, maximum_capacity = EncryptedContainer.storage_space(path)
         except (OSError, ValueError, ValidationError):
+            self._current_path = None
             self.storage_location.setText(tr("Накопитель не выбран"))
             self.storage_space.setText(
                 tr("Выберите существующую папку для контейнера.")
             )
             self.create_button.setEnabled(False)
             return
+
+        self._current_path = path
+        slider_maximum = max(MINIMUM_CAPACITY, maximum_capacity)
+        self._configure_slider(slider_maximum)
 
         drive_name = path.anchor.rstrip("\\/") or str(path.parent)
         self.storage_location.setText(
@@ -303,13 +297,11 @@ class ContainerCreationDialog(QDialog):
                 maximum=self._format_bytes(maximum_capacity),
             )
         )
+        self._update_create_state(path, maximum_capacity)
 
-        try:
-            requested_capacity = self._parsed_capacity()
-        except ValueError:
-            self.create_button.setEnabled(False)
-            return
-        if requested_capacity > maximum_capacity:
+    def _update_create_state(self, path: Path, maximum_capacity: int) -> None:
+        self.storage_warning.hide()
+        if self._selected_capacity > maximum_capacity:
             self.storage_warning.setText(
                 tr(
                     "Указанный размер превышает свободное место на выбранном накопителе."
@@ -326,6 +318,50 @@ class ContainerCreationDialog(QDialog):
             self.create_button.setEnabled(False)
             return
         self.create_button.setEnabled(True)
+
+    def _configure_slider(self, maximum_capacity: int) -> None:
+        previous_capacity = min(self._selected_capacity, maximum_capacity)
+        self._maximum_capacity = maximum_capacity
+        self._capacity_choices = self._build_capacity_choices(maximum_capacity)
+        position = self._capacity_to_slider(previous_capacity, maximum_capacity)
+        self.size_slider.blockSignals(True)
+        self.size_slider.setRange(0, len(self._capacity_choices) - 1)
+        self.size_slider.setValue(position)
+        self.size_slider.blockSignals(False)
+        self._selected_capacity = self._slider_to_capacity(position)
+        self.minimum_size_label.setText(
+            tr("Минимум: {size}", size=self._format_capacity(MINIMUM_CAPACITY))
+        )
+        self.maximum_size_label.setText(
+            tr("Максимум: {size}", size=self._format_capacity(maximum_capacity))
+        )
+        self._update_size_summary()
+
+    def _slider_to_capacity(self, position: int) -> int:
+        index = max(0, min(len(self._capacity_choices) - 1, position))
+        return self._capacity_choices[index]
+
+    def _capacity_to_slider(self, capacity: int, maximum_capacity: int) -> int:
+        target = max(MINIMUM_CAPACITY, min(maximum_capacity, capacity))
+        return min(
+            range(len(self._capacity_choices)),
+            key=lambda index: abs(self._capacity_choices[index] - target),
+        )
+
+    @staticmethod
+    def _build_capacity_choices(maximum_capacity: int) -> list[int]:
+        maximum = max(MINIMUM_CAPACITY, maximum_capacity)
+        choices = {MINIMUM_CAPACITY, maximum}
+        for unit in (MEBIBYTE, GIBIBYTE, TEBIBYTE, PEBIBYTE, EXBIBYTE):
+            for amount in range(1, 101):
+                capacity = amount * unit
+                if capacity <= maximum:
+                    choices.add(capacity)
+            for amount in range(110, 1001, 10):
+                capacity = amount * unit
+                if capacity <= maximum:
+                    choices.add(capacity)
+        return sorted(choices)
 
     @staticmethod
     def _format_capacity(capacity: int) -> str:
@@ -385,6 +421,7 @@ QLabel#muted { color: #94a3b8; }
 QLabel#fieldTitle { color: #e2e8f0; font-weight: 650; }
 QLabel#storageTitle { color: #bae6fd; font-weight: 650; }
 QLabel#sizeValue { color: #7dd3fc; font-size: 28px; font-weight: 750; }
+QLabel#scaleLabel { color: #64748b; font-size: 12px; }
 QLabel#hint {
     background: #10233a;
     border-radius: 8px;
@@ -412,7 +449,7 @@ QFrame#sizeCard {
     border: 1px solid #1e4f70;
     border-radius: 16px;
 }
-QLineEdit, QComboBox {
+QLineEdit {
     background: #0f172a;
     border: 1px solid #334155;
     border-radius: 9px;
@@ -421,7 +458,7 @@ QLineEdit, QComboBox {
     padding: 0 12px;
     selection-background-color: #0284c7;
 }
-QLineEdit:focus, QComboBox:focus { border-color: #38bdf8; }
+QLineEdit:focus { border-color: #38bdf8; }
 QPushButton {
     background: #1e293b;
     border: 1px solid #475569;
@@ -434,4 +471,26 @@ QPushButton {
 QPushButton:hover { background: #334155; }
 QPushButton#primary { background: #0284c7; border-color: #0ea5e9; }
 QPushButton#primary:hover { background: #0369a1; }
+QSlider#capacitySlider { min-height: 34px; }
+QSlider#capacitySlider::groove:horizontal {
+    background: #243247;
+    border-radius: 4px;
+    height: 8px;
+}
+QSlider#capacitySlider::sub-page:horizontal {
+    background: #0ea5e9;
+    border-radius: 4px;
+}
+QSlider#capacitySlider::handle:horizontal {
+    background: #e0f2fe;
+    border: 3px solid #0284c7;
+    border-radius: 11px;
+    height: 22px;
+    width: 22px;
+    margin: -8px 0;
+}
+QSlider#capacitySlider::handle:horizontal:hover {
+    background: #ffffff;
+    border-color: #38bdf8;
+}
 """

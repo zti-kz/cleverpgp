@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
+import time
 from pathlib import Path
 
 
@@ -51,6 +53,58 @@ def run(marker: Path) -> int:
             ensure_ascii=False,
             indent=2,
         ),
+        encoding="utf-8",
+    )
+    return 0
+
+
+def run_virtual_disk(marker: Path) -> int:
+    from nacl import secret, utils
+
+    from biopgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
+    from biopgp.core.mount import VaultMountManager, mount_backend_available
+
+    if not mount_backend_available():
+        marker.write_text(
+            json.dumps({"status": "skipped", "reason": "WinFsp unavailable"}),
+            encoding="utf-8",
+        )
+        return 0
+
+    with tempfile.TemporaryDirectory(prefix="cleverpgp-disk-check-") as directory:
+        container_path = Path(directory) / "packaged-check.cpgv"
+        master_key = utils.random(secret.SecretBox.KEY_SIZE)
+        container = EncryptedContainer.create(
+            container_path,
+            master_key,
+            data_capacity=MIN_DATA_CAPACITY,
+            label="Clever PGP Check",
+        )
+        container.close(save=False)
+
+        manager = VaultMountManager()
+        payload = b"Clever PGP packaged virtual disk check\n" * 128
+        drive = manager.mount(container_path, master_key)
+        try:
+            drive_root = Path(f"{drive}\\")
+            deadline = time.monotonic() + 8
+            while not drive_root.exists() and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if not drive_root.exists():
+                raise RuntimeError("Подключённый диск не появился в Windows.")
+            mounted_file = drive_root / "packaged-check.txt"
+            mounted_file.write_bytes(payload)
+            if mounted_file.read_bytes() != payload:
+                raise RuntimeError("Проверка чтения подключённого диска не пройдена.")
+        finally:
+            manager.unmount()
+
+        with EncryptedContainer.open(container_path, master_key) as reopened:
+            if reopened.read_file("/packaged-check.txt") != payload:
+                raise RuntimeError("Запись не сохранилась внутри контейнера.")
+
+    marker.write_text(
+        json.dumps({"status": "ok", "drive": drive}, ensure_ascii=False),
         encoding="utf-8",
     )
     return 0
