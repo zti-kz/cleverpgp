@@ -118,6 +118,62 @@ def run(marker: Path) -> int:
     return 0
 
 
+def run_ui_worker(marker: Path) -> int:
+    """Verify that packaged background UI tasks start and report completion."""
+    from PySide6.QtCore import QCoreApplication, QTimer
+
+    from biopgp.ui.main_window import BackgroundTaskThread
+
+    application = QCoreApplication.instance() or QCoreApplication([])
+    state: dict[str, object] = {"progress": []}
+
+    def operation(report_progress):
+        report_progress(37, "working")
+        return "completed"
+
+    thread = BackgroundTaskThread(operation)
+
+    def on_progress(value: int, message: str) -> None:
+        progress = state["progress"]
+        assert isinstance(progress, list)
+        progress.append([value, message])
+
+    def on_succeeded(result: object) -> None:
+        state["result"] = result
+        application.quit()
+
+    def on_failed(message: str) -> None:
+        state["error"] = message
+        application.quit()
+
+    def on_timeout() -> None:
+        state["error"] = "Background UI task did not finish within 10 seconds."
+        application.quit()
+
+    thread.progress.connect(on_progress)
+    thread.succeeded.connect(on_succeeded)
+    thread.failed.connect(on_failed)
+    QTimer.singleShot(10_000, on_timeout)
+    thread.start()
+    application.exec()
+    thread.wait(2_000)
+
+    if thread.isRunning():
+        raise RuntimeError("Фоновая операция интерфейса не завершилась.")
+    if state.get("error"):
+        raise RuntimeError(str(state["error"]))
+    if state.get("result") != "completed":
+        raise RuntimeError("Фоновая операция не вернула ожидаемый результат.")
+    if [37, "working"] not in state["progress"]:
+        raise RuntimeError("Прогресс фоновой операции не был доставлен интерфейсу.")
+
+    marker.write_text(
+        json.dumps({"status": "ok", **state}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return 0
+
+
 def run_virtual_disk(marker: Path) -> int:
     from nacl import secret, utils
 

@@ -22,6 +22,7 @@ from biopgp.core.models import Contact
 from biopgp.core.profile_service import ProfileService
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import localize_widget_tree, set_language, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.icons import line_icon
 from biopgp.ui.key_dialogs import RecipientSelectionDialog
 
@@ -138,13 +139,13 @@ class ShellOperationDialog(QDialog):
 
         action_name = tr("Шифрование" if operation == "encrypt" else "Расшифрование")
         self.setWindowTitle(f"{action_name} — Clever PGP")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(420)
         self.setStyleSheet(SHELL_STYLESHEET)
         self._build_ui()
         localize_widget_tree(self)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(14)
 

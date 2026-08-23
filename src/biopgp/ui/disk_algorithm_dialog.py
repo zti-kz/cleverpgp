@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 
 from biopgp.core.disk_crypto import available_disk_ciphers, get_disk_cipher
 from biopgp.localization import localize_widget_tree, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.container_dialog import (
     CONTAINER_DIALOG_STYLESHEET,
     ContainerCreationDialog,
@@ -43,7 +44,7 @@ class DiskAlgorithmChangeDialog(QDialog):
         self.free_space = int(shutil.disk_usage(source.parent).free)
 
         self.setWindowTitle("Метод шифрования диска — Clever PGP")
-        self.setMinimumWidth(680)
+        self.setMinimumWidth(420)
         self.resize(720, 590)
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
         self._build_ui()
@@ -54,7 +55,7 @@ class DiskAlgorithmChangeDialog(QDialog):
         return str(value) if value is not None else self.current_algorithm
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
+        outer = scrollable_dialog_layout(self)
         outer.setContentsMargins(32, 28, 32, 28)
         outer.setSpacing(16)
 

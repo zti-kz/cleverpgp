@@ -17,8 +17,10 @@ from biopgp.core.disk_info import MountedDiskInfo, inspect_mounted_cleverpgp_dis
 from biopgp.core.errors import BioPGPError
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import localize_widget_tree, set_language, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.container_dialog import CONTAINER_DIALOG_STYLESHEET
 from biopgp.ui.icons import line_icon
+from biopgp.ui.screen_bounds import install_screen_bounds
 
 
 class DiskInfoDialog(QDialog):
@@ -29,13 +31,13 @@ class DiskInfoDialog(QDialog):
         self.info = info
         self.setWindowTitle("Сведения о диске — Clever PGP")
         self.setWindowIcon(line_icon("vault", "#38bdf8"))
-        self.setMinimumSize(660, 640)
+        self.setMinimumSize(420, 320)
         self.resize(700, 660)
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET + _INFO_STYLESHEET)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
+        outer = scrollable_dialog_layout(self)
         outer.setContentsMargins(32, 28, 32, 28)
         outer.setSpacing(18)
 
@@ -154,7 +156,7 @@ class DiskInfoErrorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Clever PGP")
         self.setWindowIcon(line_icon("shield", "#38bdf8"))
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(360)
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(30, 26, 30, 30)
@@ -176,6 +178,7 @@ def run_disk_info_dialog(drive: str) -> int:
     application.setApplicationName(APP_NAME)
     application.setOrganizationName(ORGANIZATION_NAME)
     application.setWindowIcon(line_icon("shield", "#38bdf8"))
+    install_screen_bounds(application)
 
     try:
         repository = ProfileRepository(database_path())

@@ -39,7 +39,7 @@ class AboutDialog(QDialog):
         self.setWindowTitle("О программе Clever PGP")
         self.setModal(True)
         self.resize(960, 840)
-        self.setMinimumSize(700, 600)
+        self.setMinimumSize(420, 320)
         self.setStyleSheet(ABOUT_STYLESHEET)
         self._build_ui()
         localize_widget_tree(self)

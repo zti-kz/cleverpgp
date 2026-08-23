@@ -31,6 +31,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"Clever PGP runtime check failed: {error!r}", encoding="utf-8"
             )
             return 1
+    if arguments[:1] == ["--ui-worker-check"] and len(arguments) == 2:
+        marker = Path(arguments[1])
+        try:
+            from biopgp.runtime_check import run_ui_worker
+
+            return run_ui_worker(marker)
+        except BaseException as error:
+            marker.write_text(
+                f"Clever PGP UI worker check failed: {error!r}",
+                encoding="utf-8",
+            )
+            return 1
     if arguments[:1] == ["--virtual-disk-check"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:

@@ -21,6 +21,7 @@ from biopgp.core.block_volume import (
     PHYSICAL_SLOT_SIZE,
 )
 from biopgp.localization import localize_widget_tree, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.container_dialog import (
     CONTAINER_DIALOG_STYLESHEET,
     ContainerCreationDialog,
@@ -62,7 +63,7 @@ class ContainerResizeDialog(QDialog):
         self._selected_capacity = current_capacity
 
         self.setWindowTitle("Увеличение зашифрованного диска — Clever PGP")
-        self.setMinimumWidth(650)
+        self.setMinimumWidth(420)
         self.resize(700, 610)
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
         self._build_ui(free_bytes)
@@ -72,7 +73,7 @@ class ContainerResizeDialog(QDialog):
         return self._selected_capacity
 
     def _build_ui(self, free_bytes: int) -> None:
-        outer = QVBoxLayout(self)
+        outer = scrollable_dialog_layout(self)
         outer.setContentsMargins(32, 28, 32, 28)
         outer.setSpacing(18)
 

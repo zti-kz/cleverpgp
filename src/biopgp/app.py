@@ -17,6 +17,7 @@ from biopgp.localization import set_language
 from biopgp.ui.main_window import MainWindow
 from biopgp.ui.icons import line_icon
 from biopgp.ui.key_dialogs import PublicKeyImportDialog
+from biopgp.ui.screen_bounds import fit_window_to_screen, install_screen_bounds
 
 if TYPE_CHECKING:
     from biopgp.core.windows_storage import WindowsSystemDiskManager
@@ -47,6 +48,7 @@ def main(
     application.setApplicationName(APP_NAME)
     application.setOrganizationName(ORGANIZATION_NAME)
     application.setWindowIcon(line_icon("shield", "#38bdf8"))
+    install_screen_bounds(application)
 
     repository = ProfileRepository(database_path())
     repository.initialize()
@@ -55,10 +57,7 @@ def main(
     if public_key_path is not None:
         dialog = PublicKeyImportDialog(repository, public_key_path)
         dialog.show()
-        screen = dialog.screen()
-        if screen is not None:
-            geometry = screen.availableGeometry()
-            dialog.move(geometry.center() - dialog.rect().center())
+        fit_window_to_screen(dialog)
         return application.exec()
 
     profile_service = ProfileService(repository)
@@ -82,8 +81,5 @@ def main(
         # Direct container and Explorer operations show only the compact
         # authentication window. Mounting or resizing then returns to tray.
         window.show()
-        screen = window.screen()
-        if screen is not None:
-            geometry = screen.availableGeometry()
-            window.move(geometry.center() - window.rect().center())
+        fit_window_to_screen(window)
     return application.exec()

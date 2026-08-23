@@ -15,8 +15,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSlider,
     QVBoxLayout,
+    QWidget,
 )
 
 from biopgp.core.block_container import (
@@ -98,7 +100,7 @@ class ContainerCreationDialog(QDialog):
         self._capacity_choices = [self._minimum_capacity, self._selected_capacity]
         self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
-        self.setMinimumWidth(760)
+        self.setMinimumSize(420, 320)
         self.resize(
             820,
             920
@@ -159,9 +161,22 @@ class ContainerCreationDialog(QDialog):
         return XCHACHA20_POLY1305 if self.hidden_volume else selected
 
     def _build_ui(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(28, 20, 28, 20)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("dialogScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        body = QWidget()
+        body.setObjectName("dialogBody")
+        outer = QVBoxLayout(body)
+        outer.setContentsMargins(28, 20, 28, 10)
         outer.setSpacing(12)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
 
         brand_row = QHBoxLayout()
         brand = QLabel("Clever PGP")
@@ -421,7 +436,11 @@ class ContainerCreationDialog(QDialog):
         buttons.addStretch()
         buttons.addWidget(cancel_button)
         buttons.addWidget(self.create_button)
-        outer.addLayout(buttons)
+        button_bar = QWidget()
+        button_bar.setObjectName("dialogButtonBar")
+        button_bar.setLayout(buttons)
+        buttons.setContentsMargins(28, 10, 28, 20)
+        root.addWidget(button_bar)
 
         self.size_slider.valueChanged.connect(self._slider_changed)
         self.path_input.textChanged.connect(self._update_storage_summary)
@@ -739,6 +758,10 @@ QDialog {
     color: #e5e7eb;
     font-family: "Segoe UI";
     font-size: 14px;
+}
+QWidget#dialogBody, QWidget#dialogButtonBar, QScrollArea#dialogScroll,
+QScrollArea#dialogScroll > QWidget > QWidget {
+    background: #0b1220;
 }
 QLabel { background: transparent; }
 QLabel#brand { color: #7dd3fc; font-size: 23px; font-weight: 750; }

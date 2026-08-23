@@ -42,7 +42,7 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.12.0"
+$AppVersion = "0.12.1"
 $SignToolPath = $env:BIOPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:BIOPGP_SIGN_CERT_SHA1
 $ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_SIGN_EXPECTED_NAME)) {
@@ -382,6 +382,31 @@ if ($RuntimeProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $RuntimeMark
     throw "Проверка собранного CleverPGP.exe не пройдена: $RuntimeDetails"
 }
 Write-Host "Собранное приложение и криптографический backend проверены."
+
+$UiWorkerMarker = Join-Path $BuildDirectory "ui-worker-runtime-check.json"
+Assert-ProjectChild $UiWorkerMarker
+if (Test-Path -LiteralPath $UiWorkerMarker) {
+    Remove-Item -LiteralPath $UiWorkerMarker -Force
+}
+$UiWorkerArguments = @("--ui-worker-check", "`"$UiWorkerMarker`"")
+$UiWorkerProcess = Start-Process `
+    -FilePath $BundledExecutable `
+    -ArgumentList $UiWorkerArguments `
+    -Wait `
+    -PassThru `
+    -WindowStyle Hidden
+if (
+    $UiWorkerProcess.ExitCode -ne 0 -or
+    -not (Test-Path -LiteralPath $UiWorkerMarker -PathType Leaf)
+) {
+    $UiWorkerDetails = if (Test-Path -LiteralPath $UiWorkerMarker) {
+        Get-Content -LiteralPath $UiWorkerMarker -Raw
+    } else {
+        "Проверочный файл не создан."
+    }
+    throw "Проверка фоновых операций собранного CleverPGP.exe не пройдена: $UiWorkerDetails"
+}
+Write-Host "Фоновые операции собранного приложения проверены."
 
 $WinSpdRuntimeMarker = Join-Path $BuildDirectory "winspd-runtime-check.json"
 Assert-ProjectChild $WinSpdRuntimeMarker

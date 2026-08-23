@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from biopgp.config import APP_NAME, ORGANIZATION_NAME, database_path
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import set_language, tr
+from biopgp.ui.screen_bounds import install_screen_bounds
 from biopgp.ui.shell_dialog import ShellOperationDialog
 
 
@@ -24,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     application = QApplication(sys.argv if argv is None else ["biopgp-shell", *argv])
     application.setApplicationName(APP_NAME)
     application.setOrganizationName(ORGANIZATION_NAME)
+    install_screen_bounds(application)
 
     repository = ProfileRepository(database_path())
     repository.initialize()

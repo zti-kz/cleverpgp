@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from biopgp.core.models import UnlockMode
 from biopgp.localization import localize_widget_tree, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.icons import line_icon
 
 
@@ -43,7 +44,7 @@ class AccessSettingsDialog(QDialog):
         self.request: AccessSettingsRequest | None = None
         self.setWindowTitle("Настройки доступа — Clever PGP")
         self.setModal(True)
-        self.setMinimumWidth(680)
+        self.setMinimumWidth(420)
         self.resize(760, 760)
         self.setStyleSheet(SETTINGS_STYLESHEET)
         self._build_ui(current_mode, drive=drive)
@@ -55,7 +56,7 @@ class AccessSettingsDialog(QDialog):
         *,
         drive: str | None,
     ) -> None:
-        outer = QVBoxLayout(self)
+        outer = scrollable_dialog_layout(self)
         outer.setContentsMargins(30, 26, 30, 28)
         outer.setSpacing(14)
 

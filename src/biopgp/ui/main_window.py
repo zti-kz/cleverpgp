@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -59,6 +60,7 @@ from biopgp.localization import (
 from biopgp.biometrics.key_protection import default_key_protector
 from biopgp.biometrics.service import BiometricService
 from biopgp.ui.about_dialog import AboutDialog
+from biopgp.ui.adaptive import ResponsiveBox
 from biopgp.ui.container_dialog import ContainerCreationDialog
 from biopgp.ui.disk_algorithm_dialog import DiskAlgorithmChangeDialog
 from biopgp.ui.face_dialog import FaceEnrollmentDialog, FaceVerificationDialog
@@ -73,26 +75,24 @@ from biopgp.ui.resize_dialog import ContainerResizeDialog
 from biopgp.ui.settings_dialog import AccessSettingsDialog
 
 
-class BackgroundWorker(QObject):
+class BackgroundTaskThread(QThread):
     succeeded = Signal(object)
     failed = Signal(str)
-    finished = Signal()
     progress = Signal(int, str)
 
     def __init__(
-        self, operation: Callable[[Callable[[int, str], None]], object]
+        self,
+        operation: Callable[[Callable[[int, str], None]], object],
+        parent=None,
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
         self.operation = operation
 
-    @Slot()
     def run(self) -> None:
         try:
             self.succeeded.emit(self.operation(self._report_progress))
         except Exception as error:
             self.failed.emit(str(error))
-        finally:
-            self.finished.emit()
 
     def _report_progress(self, value: int, message: str) -> None:
         self.progress.emit(max(0, min(100, int(value))), message)
@@ -142,8 +142,7 @@ class MainWindow(QMainWindow):
         )
         self.session: UnlockedSession | None = None
         self._busy = False
-        self._task_thread: QThread | None = None
-        self._task_worker: BackgroundWorker | None = None
+        self._task_thread: BackgroundTaskThread | None = None
         self._task_result: object = None
         self._task_error: str | None = None
         self._task_success_handler: Callable[[object], None] | None = None
@@ -154,7 +153,7 @@ class MainWindow(QMainWindow):
             f" — {self.startup_container.name}" if self.startup_container else ""
         )
         self.setWindowTitle(f"Clever PGP{title_suffix}")
-        self.setMinimumSize(720, 520)
+        self.setMinimumSize(420, 320)
         self.resize(840, 600)
         self.setStyleSheet(STYLESHEET)
         self._setup_tray()
@@ -179,6 +178,10 @@ class MainWindow(QMainWindow):
 
         form = QFormLayout()
         form.setSpacing(14)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Например, Алмас")
         self.name_input.addAction(line_icon("face"), QLineEdit.ActionPosition.LeadingPosition)
@@ -438,9 +441,6 @@ class MainWindow(QMainWindow):
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content.addWidget(status)
 
-        action_columns = QHBoxLayout()
-        action_columns.setSpacing(18)
-
         file_panel = QFrame()
         file_panel.setObjectName("dashboardPanel")
         file_layout = QVBoxLayout(file_panel)
@@ -532,9 +532,12 @@ class MainWindow(QMainWindow):
                 container_layout.addWidget(install_button)
         container_layout.addStretch()
 
-        action_columns.addWidget(file_panel, 1)
-        action_columns.addWidget(container_panel, 1)
-        content.addLayout(action_columns, 1)
+        action_panels = ResponsiveBox(
+            (file_panel, container_panel),
+            breakpoint=820,
+            spacing=18,
+        )
+        content.addWidget(action_panels, 1)
 
         self.dashboard_status = QLabel()
         self.dashboard_status.setWordWrap(True)
@@ -1464,15 +1467,10 @@ class MainWindow(QMainWindow):
         self._task_determinate = determinate
         self._set_busy(True, determinate=determinate)
 
-        self._task_thread = QThread(self)
-        self._task_worker = BackgroundWorker(operation)
-        self._task_worker.moveToThread(self._task_thread)
-        self._task_thread.started.connect(self._task_worker.run)
-        self._task_worker.succeeded.connect(self._task_succeeded)
-        self._task_worker.failed.connect(self._task_failed)
-        self._task_worker.progress.connect(self._task_progress)
-        self._task_worker.finished.connect(self._task_thread.quit)
-        self._task_worker.finished.connect(self._task_worker.deleteLater)
+        self._task_thread = BackgroundTaskThread(operation, self)
+        self._task_thread.succeeded.connect(self._task_succeeded)
+        self._task_thread.failed.connect(self._task_failed)
+        self._task_thread.progress.connect(self._task_progress)
         self._task_thread.finished.connect(self._task_finished)
         self._task_thread.finished.connect(self._task_thread.deleteLater)
         self._task_thread.start()
@@ -1504,7 +1502,6 @@ class MainWindow(QMainWindow):
         handler = self._task_success_handler
         failure_handler = self._task_failure_handler
         self._task_thread = None
-        self._task_worker = None
         self._task_result = None
         self._task_error = None
         self._task_success_handler = None
@@ -1711,18 +1708,34 @@ class MainWindow(QMainWindow):
         compact: bool = False,
         page_icon: str | None = None,
     ) -> tuple[QWidget, QVBoxLayout]:
+        viewport = QScrollArea()
+        viewport.setObjectName("pageScroll")
+        viewport.setFrameShape(QFrame.Shape.NoFrame)
+        viewport.setWidgetResizable(True)
+        viewport.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         page = QWidget()
+        page.setObjectName("pageContent")
+        page.setMinimumSize(0, 0)
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(42, 34, 42, 34)
+        outer.setContentsMargins(24, 22, 24, 22)
 
-        header = QHBoxLayout()
         brand = QLabel("Clever PGP")
         brand.setObjectName("brand")
-        header.addWidget(brand)
-        header.addStretch()
+        header_controls = QWidget()
+        header_controls.setObjectName("headerControls")
+        controls = QHBoxLayout(header_controls)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
         language_selector = QComboBox()
         language_selector.setObjectName("languageSelector")
-        language_selector.setFixedWidth(132)
+        language_selector.setMinimumWidth(100)
+        language_selector.setMaximumWidth(132)
+        language_selector.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Fixed,
+        )
         language_selector.setToolTip(tr("Язык интерфейса"))
         language_selector.setAccessibleName(tr("Язык интерфейса"))
         for language in available_languages():
@@ -1732,7 +1745,7 @@ class MainWindow(QMainWindow):
         language_selector.currentIndexChanged.connect(
             lambda _index: self._change_language(language_selector.currentData())
         )
-        header.addWidget(language_selector, 0, Qt.AlignmentFlag.AlignTop)
+        controls.addWidget(language_selector, 0, Qt.AlignmentFlag.AlignTop)
         if self.session is not None and self.session.is_unlocked:
             settings_button = QPushButton()
             settings_button.setObjectName("headerIconButton")
@@ -1741,7 +1754,7 @@ class MainWindow(QMainWindow):
             settings_button.setToolTip("Настройки доступа")
             settings_button.setAccessibleName("Настройки доступа")
             settings_button.clicked.connect(self._show_access_settings)
-            header.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignTop)
+            controls.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignTop)
         about_button = QPushButton()
         about_button.setObjectName("headerIconButton")
         about_button.setIcon(line_icon("info", "#bae6fd"))
@@ -1749,8 +1762,14 @@ class MainWindow(QMainWindow):
         about_button.setToolTip("О программе")
         about_button.setAccessibleName("О программе")
         about_button.clicked.connect(self._show_about)
-        header.addWidget(about_button, 0, Qt.AlignmentFlag.AlignTop)
-        outer.addLayout(header)
+        controls.addWidget(about_button, 0, Qt.AlignmentFlag.AlignTop)
+        header = ResponsiveBox(
+            (brand, header_controls),
+            breakpoint=560,
+            spacing=8,
+            align_last_right=True,
+        )
+        outer.addWidget(header)
 
         card = QFrame()
         card.setObjectName("authCard" if compact else "card")
@@ -1759,7 +1778,7 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Maximum if compact else QSizePolicy.Policy.Expanding,
         )
         if compact:
-            card.setMinimumWidth(520)
+            card.setMinimumWidth(0)
             card.setMaximumWidth(620)
         content = QVBoxLayout(card)
         content.setContentsMargins(34, 30, 34, 30)
@@ -1794,7 +1813,8 @@ class MainWindow(QMainWindow):
             outer.addStretch(2)
         else:
             outer.addWidget(card, 1)
-        return page, content
+        viewport.setWidget(page)
+        return viewport, content
 
     @staticmethod
     def _section_heading(title: str, icon_name: str) -> QHBoxLayout:
@@ -1841,6 +1861,11 @@ QMainWindow, QWidget {
     color: #e5e7eb;
     font-family: "Segoe UI";
     font-size: 14px;
+}
+QScrollArea#pageScroll, QWidget#pageContent,
+QScrollArea#pageScroll > QWidget > QWidget {
+    background: #111827;
+    border: 0;
 }
 QLabel {
     background: transparent;

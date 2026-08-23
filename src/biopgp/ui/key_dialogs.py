@@ -28,6 +28,7 @@ from biopgp.core.identity import (
 from biopgp.core.models import Contact, PublicIdentity
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import localize_widget_tree, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.icons import line_icon
 
 
@@ -41,13 +42,13 @@ class RecipientSelectionDialog(QDialog):
         self.contacts = contacts
         self.selected_contacts: tuple[Contact, ...] = ()
         self.setWindowTitle("Получатели файла — Clever PGP")
-        self.setMinimumSize(600, 460)
+        self.setMinimumSize(420, 320)
         self.setStyleSheet(KEY_DIALOG_STYLESHEET)
         self._build_ui()
         localize_widget_tree(self)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(14)
 
@@ -129,13 +130,13 @@ class PublicKeyImportDialog(QDialog):
         except (BioPGPError, OSError) as error:
             self.preview_error = str(error)
         self.setWindowTitle("Импорт открытого ключа — Clever PGP")
-        self.setMinimumSize(620, 430)
+        self.setMinimumSize(420, 320)
         self.setStyleSheet(KEY_DIALOG_STYLESHEET)
         self._build_ui()
         localize_widget_tree(self)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(14)
 
@@ -242,14 +243,14 @@ class ContactsDialog(QDialog):
         self.identity_service = IdentityService(repository)
         self._master_key: bytearray | None = bytearray(master_key)
         self.setWindowTitle("Открытые ключи и контакты — Clever PGP")
-        self.setMinimumSize(720, 600)
+        self.setMinimumSize(420, 320)
         self.setStyleSheet(KEY_DIALOG_STYLESHEET)
         self._build_ui()
         self._reload_contacts()
         localize_widget_tree(self)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(14)
 

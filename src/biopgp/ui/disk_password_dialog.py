@@ -25,7 +25,9 @@ from biopgp.core.opaque_volume_header import (
 )
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import localize_widget_tree, set_language, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.icons import line_icon
+from biopgp.ui.screen_bounds import install_screen_bounds
 
 if TYPE_CHECKING:
     from biopgp.core.windows_storage import WindowsSystemDiskManager
@@ -87,14 +89,14 @@ class DiskPasswordChangeDialog(QDialog):
         self.thread: QThread | None = None
         self.worker: DiskPasswordWorker | None = None
         self.setWindowTitle("Смена пароля диска — Clever PGP")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(420)
         self.resize(660, 570)
         self.setStyleSheet(DISK_PASSWORD_STYLESHEET)
         self._build_ui()
         localize_widget_tree(self)
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(30, 25, 30, 26)
         layout.setSpacing(14)
 
@@ -280,6 +282,7 @@ def run_disk_password_change_dialog(drive: str) -> int:
     application.setApplicationName(APP_NAME)
     application.setOrganizationName(ORGANIZATION_NAME)
     application.setWindowIcon(line_icon("shield", "#38bdf8"))
+    install_screen_bounds(application)
     repository = ProfileRepository(database_path())
     repository.initialize()
     set_language(repository.get_setting("language"))

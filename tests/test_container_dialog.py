@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QComboBox, QSlider  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QComboBox,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+)
 
 from biopgp.ui.container_dialog import (  # noqa: E402
     DISK_BACKEND_WINDOWS,
@@ -91,6 +97,33 @@ def test_system_disk_dialog_enforces_windows_minimum_capacity() -> None:
     assert dialog.file_system == "EXFAT"
     assert "журналирование" in dialog.file_system_description.text()
 
+    dialog.close()
+    application.processEvents()
+
+
+def test_creation_dialog_keeps_action_bar_visible_when_content_scrolls() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog(
+        minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+        allow_backend_choice=True,
+        system_backend_available=True,
+        winfsp_backend_available=True,
+        hidden_volume_available=True,
+    )
+    dialog.resize(700, 520)
+    dialog.show()
+    application.processEvents()
+
+    scroll = dialog.findChild(QScrollArea, "dialogScroll")
+    create = next(
+        button
+        for button in dialog.findChildren(QPushButton)
+        if button.objectName() == "primary"
+    )
+    assert scroll is not None
+    assert scroll.verticalScrollBar().maximum() > 0
+    assert create.isVisible()
+    assert create.geometry().bottom() <= dialog.height()
     dialog.close()
     application.processEvents()
 

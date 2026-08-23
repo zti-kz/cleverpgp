@@ -25,6 +25,7 @@ from biopgp.core.opaque_volume_header import (
 )
 from biopgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY
 from biopgp.localization import localize_widget_tree, tr
+from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.container_dialog import ContainerCreationDialog
 from biopgp.ui.icons import line_icon
 
@@ -75,13 +76,13 @@ class HiddenVolumeCreationDialog(QDialog):
         )
         self.request: HiddenVolumeCreationRequest | None = None
         self.setWindowTitle("Скрытый диск — Clever PGP")
-        self.setMinimumWidth(680)
+        self.setMinimumWidth(420)
         self.resize(700, 760)
         self.setStyleSheet(HIDDEN_DIALOG_STYLESHEET)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(28, 22, 28, 22)
         layout.setSpacing(12)
 
@@ -284,13 +285,13 @@ class OpaqueVolumeUnlockDialog(QDialog):
         self.source = Path(source).expanduser().resolve()
         self.request: OpaqueVolumeUnlockRequest | None = None
         self.setWindowTitle("Разблокировка диска — Clever PGP")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(420)
         self.resize(640, 470)
         self.setStyleSheet(HIDDEN_DIALOG_STYLESHEET)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = scrollable_dialog_layout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(13)
         brand = QLabel("Clever PGP")

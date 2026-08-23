@@ -1269,7 +1269,12 @@ def test_unlocked_window_keeps_file_and_container_actions(tmp_path: Path) -> Non
     assert len(settings_buttons) == 1
     assert settings_buttons[0].text() == ""
     assert not settings_buttons[0].icon().isNull()
-    assert window.findChildren(QScrollArea) == []
+    page_scroll = window.centralWidget()
+    assert isinstance(page_scroll, QScrollArea)
+    assert (
+        page_scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
     assert all(
         not button.icon().isNull()
         for button in window.findChildren(QPushButton)

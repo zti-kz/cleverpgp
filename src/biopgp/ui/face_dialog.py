@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -36,7 +37,8 @@ class CameraDialog(QDialog):
         self._started = False
 
         self.setWindowTitle(title)
-        self.setMinimumSize(720, 620)
+        self.setMinimumSize(420, 360)
+        self.resize(760, 680)
         self.setModal(True)
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
 
@@ -53,7 +55,11 @@ class CameraDialog(QDialog):
 
         self.preview = QLabel("Подготовка локальной камеры…")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumSize(640, 400)
+        self.preview.setMinimumSize(320, 180)
+        self.preview.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.preview.setStyleSheet(
             "background: #071426; border: 1px solid #29405f; "
             "border-radius: 16px; color: #9fb2ca;"
