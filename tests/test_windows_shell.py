@@ -120,6 +120,7 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
     assert "--settings" in str(settings_command)
     assert "%1" in str(settings_command)
     assert "cmd.exe" not in str(settings_command).lower()
+    assert "--resize-drive" not in "\n".join(str(item.value) for item in values)
 
 
 def test_context_menu_registers_and_removes_only_its_own_tree(

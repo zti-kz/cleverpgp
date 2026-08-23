@@ -14,6 +14,34 @@ def test_shell_mode_is_dispatched_to_shell_entrypoint() -> None:
     shell_main.assert_called_once_with(["encrypt", "report.txt"])
 
 
+def test_windows_resize_helper_is_dispatched_without_gui() -> None:
+    with patch(
+        "biopgp.core.windows_resize.run_windows_resize_helper",
+        return_value=0,
+    ) as helper:
+        result = main(
+            [
+                "--windows-resize-helper",
+                "request.json",
+                "response.json",
+            ]
+        )
+
+    assert result == 0
+    helper.assert_called_once_with(Path("request.json"), Path("response.json"))
+
+
+def test_resize_drive_mode_forces_system_disk_window() -> None:
+    with patch("biopgp.app.main", return_value=0) as application_main:
+        result = main(["--resize-drive", "Z:\\"])
+
+    assert result == 0
+    application_main.assert_called_once_with(
+        startup_action="resize",
+        startup_drive="Z:\\",
+    )
+
+
 def test_regular_mode_opens_main_application() -> None:
     with patch("biopgp.app.main", return_value=3) as application_main:
         result = main([])
@@ -170,5 +198,14 @@ def test_default_backend_remains_winfsp() -> None:
         patch("biopgp.app.VaultMountManager") as manager_type,
     ):
         manager = default_mount_manager()
+
+    assert manager is manager_type.return_value
+
+
+def test_resize_startup_forces_winspd_backend() -> None:
+    with patch(
+        "biopgp.core.windows_storage.WindowsSystemDiskManager"
+    ) as manager_type:
+        manager = default_mount_manager(force_system_disk=True)
 
     assert manager is manager_type.return_value

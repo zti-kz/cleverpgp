@@ -20,8 +20,14 @@ if TYPE_CHECKING:
     from biopgp.core.windows_storage import WindowsSystemDiskManager
 
 
-def default_mount_manager() -> VaultMountManager | WindowsSystemDiskManager:
-    if os.environ.get("CLEVERPGP_DISK_BACKEND", "").casefold() == "winspd":
+def default_mount_manager(
+    *,
+    force_system_disk: bool = False,
+) -> VaultMountManager | WindowsSystemDiskManager:
+    if (
+        force_system_disk
+        or os.environ.get("CLEVERPGP_DISK_BACKEND", "").casefold() == "winspd"
+    ):
         from biopgp.core.windows_storage import WindowsSystemDiskManager
 
         return WindowsSystemDiskManager()
@@ -32,6 +38,7 @@ def main(
     container_path: Path | None = None,
     *,
     startup_action: str | None = None,
+    startup_drive: str | None = None,
 ) -> int:
     application = QApplication(sys.argv)
     application.setApplicationName(APP_NAME)
@@ -47,9 +54,12 @@ def main(
         repository,
         profile_service,
         FileCryptoService(),
-        mount_manager=default_mount_manager(),
+        mount_manager=default_mount_manager(
+            force_system_disk=startup_action == "resize"
+        ),
         startup_container=container_path,
         startup_action=startup_action,
+        startup_drive=startup_drive,
     )
     if container_path is None:
         # The regular application uses the whole available desktop while

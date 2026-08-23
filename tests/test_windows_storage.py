@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -13,9 +15,13 @@ from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 from biopgp.core.windows_storage import (
     WindowsDiskInfo,
     WindowsSystemDiskManager,
+    WindowsVolumeInfo,
     disk_drive_letters,
+    extend_cleverpgp_ntfs_partition,
     format_ephemeral_cleverpgp_disk,
+    inspect_windows_volume,
     select_new_cleverpgp_disk,
+    validate_cleverpgp_ntfs_volume,
     winspd_driver_available,
 )
 
@@ -53,6 +59,121 @@ def disk(
         unique_id=f"unique-{number}",
         size=size,
         partition_style=partition_style,
+    )
+
+
+def mounted_volume(
+    *,
+    file_system: str = "NTFS",
+    disk_size: int = 256 * 1024 * 1024,
+    partition_size: int = 127 * 1024 * 1024,
+) -> WindowsVolumeInfo:
+    return WindowsVolumeInfo(
+        disk_number=7,
+        partition_number=1,
+        drive="Z:",
+        friendly_name="CleverPGP",
+        serial_number="serial-7",
+        unique_id="unique-7",
+        bus_type="File Backed Virtual",
+        disk_size=disk_size,
+        partition_size=partition_size,
+        partition_offset=1024 * 1024,
+        partition_style="MBR",
+        file_system=file_system,
+        data_partition_count=1,
+        is_boot=False,
+        is_system=False,
+    )
+
+
+def test_inspects_volume_by_drive_letter() -> None:
+    raw = json.dumps(
+        {
+            "DiskNumber": 7,
+            "PartitionNumber": 1,
+            "DriveLetter": "Z",
+            "FriendlyName": "CleverPGP",
+            "SerialNumber": "serial-7",
+            "UniqueId": "unique-7",
+            "BusType": "File Backed Virtual",
+            "DiskSize": 256 * 1024 * 1024,
+            "PartitionSize": 127 * 1024 * 1024,
+            "PartitionOffset": 1024 * 1024,
+            "PartitionStyle": "MBR",
+            "FileSystem": "NTFS",
+            "DataPartitionCount": 1,
+            "IsBoot": False,
+            "IsSystem": False,
+        }
+    )
+    with patch(
+        "biopgp.core.windows_storage._run_powershell",
+        return_value=raw,
+    ) as run_powershell:
+        info = inspect_windows_volume("z:\\")
+
+    assert info == mounted_volume()
+    assert "Get-Partition -DriveLetter 'Z'" in run_powershell.call_args.args[0]
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"friendly_name": "Physical SSD"}, "не принадлежит"),
+        ({"partition_style": "GPT"}, "MBR"),
+        ({"is_boot": True}, "загрузочный"),
+        ({"is_system": True}, "Системный"),
+        ({"data_partition_count": 2}, "ровно один"),
+        ({"partition_offset": 2 * 1024 * 1024}, "отступ"),
+        ({"file_system": "exFAT"}, "только для NTFS"),
+    ],
+)
+def test_ntfs_resize_validation_rejects_wrong_target(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    original = mounted_volume()
+    values = {
+        field: getattr(original, field)
+        for field in WindowsVolumeInfo.__dataclass_fields__
+    }
+    values.update(changes)
+    with pytest.raises(MountUnavailableError, match=message):
+        validate_cleverpgp_ntfs_volume(WindowsVolumeInfo(**values))
+
+
+def test_ntfs_extension_revalidates_identity_before_resize() -> None:
+    info = mounted_volume()
+    expected_partition_size = info.partition_size
+    resized_partition = info.disk_size - info.partition_offset
+    raw = json.dumps(
+        {
+            "DiskSize": info.disk_size,
+            "PartitionSize": resized_partition,
+            "FileSystem": "NTFS",
+        }
+    )
+    with patch(
+        "biopgp.core.windows_storage._run_powershell",
+        return_value=raw,
+    ) as run_powershell:
+        result = extend_cleverpgp_ntfs_partition(
+            info,
+            expected_disk_size=info.disk_size,
+            expected_partition_size=expected_partition_size,
+        )
+
+    script = run_powershell.call_args.args[0]
+    assert result.partition_size == resized_partition
+    assert "Get-Partition -DriveLetter 'Z'" in script
+    assert "$disk.FriendlyName -ne $expectedFriendly" in script
+    assert "$disk.UniqueId -ne $expectedUnique" in script
+    assert "$disk.IsBoot" in script
+    assert "$dataPartitions.Count -ne 1" in script
+    assert script.index("Get-Disk -Number 7") < script.index("Resize-Partition")
+    assert script.index("$volume.FileSystem -ne 'NTFS'") < script.index(
+        "Resize-Partition"
     )
 
 
@@ -233,7 +354,9 @@ def test_system_manager_publishes_and_removes_external_control_state(
             *,
             drive: str,
             process_id: int,
+            container_path: Path,
         ) -> object:
+            assert container_path == Path(tmp_path / "controlled.cpgv")
             type(self).published = (endpoint, drive, process_id)
             return record
 
@@ -444,3 +567,202 @@ def test_system_manager_removes_stale_detached_host_state(
     assert manager.mounted_drive is None
     assert StaleStore.removed == [record]
     assert menu.removed
+
+
+def test_system_manager_grows_remounts_and_extends_ntfs(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "resize-system.cpgv"
+    container_path.write_bytes(b"container")
+    old_size = 128 * 1024 * 1024
+    new_size = 256 * 1024 * 1024
+    old_partition_size = old_size - 1024 * 1024
+    original = mounted_volume(
+        disk_size=old_size,
+        partition_size=old_partition_size,
+    )
+    resized = replace(original, disk_number=8, disk_size=new_size)
+    old_record = DiskControlRecord(
+        b"v" * 16,
+        "Z:",
+        23456,
+        4321,
+        b"protected",
+        tmp_path / "old-record.json",
+    )
+    new_record = replace(old_record, port=23457, path=tmp_path / "new-record.json")
+
+    class ActiveProcessManager(FakeProcessManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.running = True
+
+    class ResizeStore:
+        commands: list[tuple[object, str, float]] = []
+
+        @classmethod
+        def send(
+            cls,
+            record: object,
+            command: str,
+            *,
+            timeout: float = 3.0,
+        ) -> None:
+            cls.commands.append((record, command, timeout))
+
+    process = ActiveProcessManager()
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process,
+        recover_existing=False,
+    )
+    manager._control_store = ResizeStore()  # type: ignore[assignment]
+    manager._drive = "Z:"
+    manager._container_path = container_path
+    manager._control_record = old_record
+    manager._context_menu_labels = ("Open", "Settings", "Unmount")
+    events: list[str] = []
+    progress: list[tuple[int, str]] = []
+
+    def unmount() -> None:
+        events.append("unmount")
+        process.running = False
+        manager._drive = None
+        manager._container_path = None
+        manager._control_record = None
+
+    def resize_backend(
+        path: Path,
+        selected_key: bytes,
+        *,
+        logical_capacity: int,
+        progress: object,
+    ) -> int:
+        events.append("grow-container")
+        assert path == container_path
+        assert selected_key == key
+        assert logical_capacity == new_size
+        progress(1, 1)  # type: ignore[operator]
+        return logical_capacity
+
+    def mount(
+        path: Path,
+        selected_key: bytes,
+        *,
+        context_menu_labels: tuple[str, ...] | None,
+        progress: object,
+    ) -> str:
+        events.append("remount")
+        assert path == container_path
+        assert selected_key == key
+        assert context_menu_labels == ("Open", "Settings", "Unmount")
+        process.running = True
+        manager._drive = "Z:"
+        manager._container_path = container_path
+        manager._control_record = new_record
+        if progress is not None:
+            progress(100, "mounted")  # type: ignore[operator]
+        return "Z:"
+
+    def extend(
+        record: DiskControlRecord,
+        info: WindowsVolumeInfo,
+    ) -> object:
+        events.append("extend-ntfs")
+        assert record is new_record
+        assert info == resized
+        return type(
+            "Result",
+            (),
+            {
+                "disk_size": new_size,
+                "partition_size": new_size - 1024 * 1024,
+                "file_system": "NTFS",
+            },
+        )()
+
+    with (
+        patch(
+            "biopgp.core.windows_storage.inspect_windows_volume",
+            side_effect=[original, resized],
+        ),
+        patch(
+            "biopgp.core.windows_storage.resize_windows_block_volume",
+            side_effect=resize_backend,
+        ),
+        patch.object(manager, "unmount", side_effect=unmount),
+        patch.object(manager, "mount", side_effect=mount),
+    ):
+        drive = manager.resize_mounted_disk(
+            key,
+            logical_capacity=new_size,
+            progress=lambda value, message: progress.append((value, message)),
+            elevated_extender=extend,  # type: ignore[arg-type]
+        )
+
+    assert drive == "Z:"
+    assert events == ["unmount", "grow-container", "remount", "extend-ntfs"]
+    assert ResizeStore.commands == [(old_record, "ping", 1.0)]
+    assert progress[-1] == (100, "Системный диск увеличен")
+
+
+def test_system_manager_can_retry_only_ntfs_extension_after_uac_cancel(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "retry-system.cpgv"
+    container_path.write_bytes(b"container")
+    info = mounted_volume(
+        disk_size=256 * 1024 * 1024,
+        partition_size=127 * 1024 * 1024,
+    )
+    record = DiskControlRecord(
+        b"v" * 16,
+        "Z:",
+        23456,
+        4321,
+        b"protected",
+        tmp_path / "record.json",
+    )
+
+    class ActiveProcessManager(FakeProcessManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.running = True
+
+    class Store:
+        @staticmethod
+        def send(*_args: object, **_kwargs: object) -> None:
+            return None
+
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        ActiveProcessManager(),
+        recover_existing=False,
+    )
+    manager._control_store = Store()  # type: ignore[assignment]
+    manager._drive = "Z:"
+    manager._container_path = container_path
+    manager._control_record = record
+    result = type(
+        "Result",
+        (),
+        {
+            "disk_size": info.disk_size,
+            "partition_size": info.disk_size - info.partition_offset,
+            "file_system": "NTFS",
+        },
+    )()
+
+    with (
+        patch(
+            "biopgp.core.windows_storage.inspect_windows_volume",
+            return_value=info,
+        ),
+        patch.object(manager, "unmount") as unmount,
+    ):
+        assert manager.resize_mounted_disk(
+            b"k" * 32,
+            logical_capacity=info.disk_size,
+            elevated_extender=lambda _record, _info: result,  # type: ignore[arg-type]
+        ) == "Z:"
+
+    unmount.assert_not_called()

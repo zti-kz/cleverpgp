@@ -9,16 +9,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from biopgp.core.errors import MountUnavailableError
+from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE
 from biopgp.core.disk_control import (
     DiskControlRecord,
     DiskControlStore,
 )
 from biopgp.core.disk_host import WinSpdHostManager
+from biopgp.core.errors import MountUnavailableError
 from biopgp.core.winspd import (
+    MIN_WINDOWS_DISK_CAPACITY,
     WinSpdLibrary,
     create_windows_block_volume,
     open_windows_block_volume,
+    resize_windows_block_volume,
 )
 from biopgp.core.windows_shell import WindowsDriveContextMenu
 
@@ -31,6 +34,32 @@ class WindowsDiskInfo:
     unique_id: str
     size: int
     partition_style: str
+
+
+@dataclass(frozen=True, slots=True)
+class WindowsVolumeInfo:
+    disk_number: int
+    partition_number: int
+    drive: str
+    friendly_name: str
+    serial_number: str
+    unique_id: str
+    bus_type: str
+    disk_size: int
+    partition_size: int
+    partition_offset: int
+    partition_style: str
+    file_system: str
+    data_partition_count: int
+    is_boot: bool
+    is_system: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WindowsVolumeResizeResult:
+    disk_size: int
+    partition_size: int
+    file_system: str
 
 
 def _powershell_executable() -> str:
@@ -108,6 +137,205 @@ def list_windows_disks() -> list[WindowsDiskInfo]:
                 size=int(record["Size"]),
                 partition_style=str(record.get("PartitionStyle") or ""),
             )
+        )
+    return result
+
+
+def inspect_windows_volume(drive: str) -> WindowsVolumeInfo:
+    normalized_drive = _normalize_windows_drive(drive)
+    drive_letter = normalized_drive[0]
+    raw = _run_powershell(
+        f"""
+$ErrorActionPreference = 'Stop'
+$partition = Get-Partition -DriveLetter '{drive_letter}'
+if ($null -eq $partition) {{ throw 'Drive partition was not found.' }}
+$disk = Get-Disk -Number $partition.DiskNumber
+$volume = Get-Volume -DriveLetter '{drive_letter}'
+$dataPartitions = @(Get-Partition -DiskNumber $disk.Number | Where-Object {{ $_.Type -ne 'Reserved' }})
+[PSCustomObject]@{{
+    DiskNumber = [Int32]$disk.Number
+    PartitionNumber = [Int32]$partition.PartitionNumber
+    DriveLetter = [String]$partition.DriveLetter
+    FriendlyName = [String]$disk.FriendlyName
+    SerialNumber = [String]$disk.SerialNumber
+    UniqueId = [String]$disk.UniqueId
+    BusType = [String]$disk.BusType
+    DiskSize = [UInt64]$disk.Size
+    PartitionSize = [UInt64]$partition.Size
+    PartitionOffset = [UInt64]$partition.Offset
+    PartitionStyle = [String]$disk.PartitionStyle
+    FileSystem = [String]$volume.FileSystem
+    DataPartitionCount = [Int32]$dataPartitions.Count
+    IsBoot = [Boolean]$disk.IsBoot
+    IsSystem = [Boolean]$disk.IsSystem
+}} | ConvertTo-Json -Compress
+"""
+    )
+    try:
+        decoded = json.loads(raw)
+        if not isinstance(decoded, dict):
+            raise TypeError("Windows volume information must be an object.")
+        info = WindowsVolumeInfo(
+            disk_number=int(decoded["DiskNumber"]),
+            partition_number=int(decoded["PartitionNumber"]),
+            drive=_normalize_windows_drive(str(decoded["DriveLetter"])),
+            friendly_name=str(decoded.get("FriendlyName") or ""),
+            serial_number=str(decoded.get("SerialNumber") or ""),
+            unique_id=str(decoded.get("UniqueId") or ""),
+            bus_type=str(decoded.get("BusType") or ""),
+            disk_size=int(decoded["DiskSize"]),
+            partition_size=int(decoded["PartitionSize"]),
+            partition_offset=int(decoded["PartitionOffset"]),
+            partition_style=str(decoded.get("PartitionStyle") or ""),
+            file_system=str(decoded.get("FileSystem") or ""),
+            data_partition_count=int(decoded["DataPartitionCount"]),
+            is_boot=bool(decoded["IsBoot"]),
+            is_system=bool(decoded["IsSystem"]),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise MountUnavailableError(
+            "Windows вернула некорректные сведения о подключённом диске."
+        ) from error
+    if info.drive != normalized_drive:
+        raise MountUnavailableError("Буква подключённого диска изменилась.")
+    return info
+
+
+def validate_cleverpgp_volume(
+    info: WindowsVolumeInfo,
+    *,
+    expected_disk_size: int | None = None,
+) -> None:
+    if info.disk_number < 0 or info.partition_number <= 0:
+        raise MountUnavailableError("Windows вернула некорректный номер раздела.")
+    if expected_disk_size is not None and info.disk_size != expected_disk_size:
+        raise MountUnavailableError("Размер системного диска Clever PGP изменился.")
+    if not any(
+        marker in info.friendly_name.casefold()
+        for marker in ("cleverpgp", "winspd")
+    ):
+        raise MountUnavailableError("Выбранный диск не принадлежит Clever PGP.")
+    if info.partition_style.upper() != "MBR":
+        raise MountUnavailableError("Ожидалась таблица разделов MBR Clever PGP.")
+    if info.is_boot or info.is_system:
+        raise MountUnavailableError(
+            "Системный или загрузочный диск Windows изменять запрещено."
+        )
+    if info.data_partition_count != 1:
+        raise MountUnavailableError(
+            "На диске Clever PGP ожидался ровно один раздел данных."
+        )
+    if info.partition_offset != 1024 * 1024:
+        raise MountUnavailableError("Раздел Clever PGP имеет неожиданный отступ.")
+    if (
+        info.disk_size <= info.partition_offset
+        or info.partition_size <= 0
+        or info.partition_size > info.disk_size - info.partition_offset
+    ):
+        raise MountUnavailableError("Геометрия раздела Clever PGP некорректна.")
+
+
+def validate_cleverpgp_ntfs_volume(
+    info: WindowsVolumeInfo,
+    *,
+    expected_disk_size: int | None = None,
+) -> None:
+    validate_cleverpgp_volume(info, expected_disk_size=expected_disk_size)
+    if info.file_system.upper() != "NTFS":
+        raise MountUnavailableError(
+            "Безопасное увеличение в Windows поддерживается только для NTFS. "
+            "Диск exFAT можно использовать, но нельзя увеличивать без переформатирования."
+        )
+
+
+def extend_cleverpgp_ntfs_partition(
+    info: WindowsVolumeInfo,
+    *,
+    expected_disk_size: int,
+    expected_partition_size: int,
+) -> WindowsVolumeResizeResult:
+    """Extend only a revalidated Clever PGP NTFS partition to supported maximum."""
+
+    validate_cleverpgp_ntfs_volume(info, expected_disk_size=expected_disk_size)
+    if info.partition_size != expected_partition_size:
+        raise MountUnavailableError("Размер раздела изменился до начала расширения.")
+    if info.disk_size <= info.partition_offset + info.partition_size:
+        raise MountUnavailableError("На диске нет подтверждённого свободного пространства.")
+
+    encoded_identity = {
+        name: base64.b64encode(value.encode("utf-8")).decode("ascii")
+        for name, value in (
+            ("friendly", info.friendly_name),
+            ("serial", info.serial_number),
+            ("unique", info.unique_id),
+            ("bus", info.bus_type),
+        )
+    }
+    drive_letter = info.drive[0]
+    script = f"""
+$ErrorActionPreference = 'Stop'
+function Decode-Identity([String]$value) {{
+    return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($value))
+}}
+$expectedFriendly = Decode-Identity '{encoded_identity["friendly"]}'
+$expectedSerial = Decode-Identity '{encoded_identity["serial"]}'
+$expectedUnique = Decode-Identity '{encoded_identity["unique"]}'
+$expectedBus = Decode-Identity '{encoded_identity["bus"]}'
+$partition = Get-Partition -DriveLetter '{drive_letter}'
+if ($null -eq $partition) {{ throw 'Drive partition was not found.' }}
+if ([Int32]$partition.DiskNumber -ne [Int32]{info.disk_number}) {{ throw 'Disk number changed.' }}
+if ([Int32]$partition.PartitionNumber -ne [Int32]{info.partition_number}) {{ throw 'Partition number changed.' }}
+$disk = Get-Disk -Number {info.disk_number}
+if ([UInt64]$disk.Size -ne [UInt64]{expected_disk_size}) {{ throw 'Disk size changed.' }}
+if ([String]$disk.FriendlyName -ne $expectedFriendly) {{ throw 'Disk name changed.' }}
+if ([String]$disk.SerialNumber -ne $expectedSerial) {{ throw 'Disk serial changed.' }}
+if ([String]$disk.UniqueId -ne $expectedUnique) {{ throw 'Disk identity changed.' }}
+if ([String]$disk.BusType -ne $expectedBus) {{ throw 'Disk bus changed.' }}
+if ($disk.FriendlyName -notmatch 'CleverPGP|WinSpd') {{ throw 'Not a Clever PGP disk.' }}
+if ($disk.PartitionStyle -ne 'MBR') {{ throw 'Expected an MBR disk.' }}
+if ([Boolean]$disk.IsBoot -or [Boolean]$disk.IsSystem) {{ throw 'System disk is forbidden.' }}
+$dataPartitions = @(Get-Partition -DiskNumber {info.disk_number} | Where-Object {{ $_.Type -ne 'Reserved' }})
+if ($dataPartitions.Count -ne 1) {{ throw 'Expected exactly one data partition.' }}
+if ([UInt64]$partition.Offset -ne [UInt64]{info.partition_offset}) {{ throw 'Partition offset changed.' }}
+if ([UInt64]$partition.Size -ne [UInt64]{expected_partition_size}) {{ throw 'Partition size changed.' }}
+$volume = Get-Volume -DriveLetter '{drive_letter}'
+if ([String]$volume.FileSystem -ne 'NTFS') {{ throw 'Only NTFS can be extended safely.' }}
+$supported = Get-PartitionSupportedSize -DiskNumber {info.disk_number} -PartitionNumber {info.partition_number}
+if ([UInt64]$supported.SizeMax -le [UInt64]{expected_partition_size}) {{ throw 'No supported growth is available.' }}
+if ([UInt64]$supported.SizeMax -gt ([UInt64]{expected_disk_size} - [UInt64]{info.partition_offset})) {{ throw 'Supported size exceeds disk geometry.' }}
+Resize-Partition -DiskNumber {info.disk_number} -PartitionNumber {info.partition_number} -Size $supported.SizeMax -Confirm:$false
+$updated = Get-Partition -DiskNumber {info.disk_number} -PartitionNumber {info.partition_number}
+$updatedVolume = Get-Volume -DriveLetter '{drive_letter}'
+if ([UInt64]$updated.Size -ne [UInt64]$supported.SizeMax) {{ throw 'Partition did not reach the supported size.' }}
+if ([String]$updatedVolume.FileSystem -ne 'NTFS') {{ throw 'NTFS verification failed.' }}
+[PSCustomObject]@{{
+    DiskSize = [UInt64]$disk.Size
+    PartitionSize = [UInt64]$updated.Size
+    FileSystem = [String]$updatedVolume.FileSystem
+}} | ConvertTo-Json -Compress
+"""
+    raw = _run_powershell(script, timeout=180.0)
+    try:
+        decoded = json.loads(raw)
+        if not isinstance(decoded, dict):
+            raise TypeError("Resize result must be an object.")
+        result = WindowsVolumeResizeResult(
+            disk_size=int(decoded["DiskSize"]),
+            partition_size=int(decoded["PartitionSize"]),
+            file_system=str(decoded["FileSystem"]),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise MountUnavailableError(
+            "Windows не подтвердила результат расширения раздела."
+        ) from error
+    if (
+        result.disk_size != expected_disk_size
+        or result.partition_size <= expected_partition_size
+        or result.partition_size > expected_disk_size - info.partition_offset
+        or result.file_system.upper() != "NTFS"
+    ):
+        raise MountUnavailableError(
+            "Windows вернула противоречивый результат расширения раздела."
         )
     return result
 
@@ -299,6 +527,8 @@ class WindowsSystemDiskManager:
         self._control_record: DiskControlRecord | None = None
         self._disk: WindowsDiskInfo | None = None
         self._drive: str | None = None
+        self._container_path: Path | None = None
+        self._context_menu_labels: tuple[str, ...] | None = None
         if recover_existing:
             self._recover_existing_control_record()
 
@@ -327,6 +557,22 @@ class WindowsSystemDiskManager:
         self._disk = None
         self._drive = None
         return None
+
+    @property
+    def mounted_container(self) -> Path | None:
+        return self._container_path if self.mounted_drive is not None else None
+
+    def inspect_mounted_disk(self) -> WindowsVolumeInfo:
+        drive = self.mounted_drive
+        record = self._control_record
+        if drive is None or record is None:
+            raise MountUnavailableError(
+                "Активный системный диск Clever PGP не найден."
+            )
+        self._control_store.send(record, "ping", timeout=1.0)
+        info = inspect_windows_volume(drive)
+        validate_cleverpgp_volume(info, expected_disk_size=info.disk_size)
+        return info
 
     def create_and_mount(
         self,
@@ -398,6 +644,7 @@ class WindowsSystemDiskManager:
         try:
             control_record = self._publish_control_record(
                 drive,
+                container_path=container_path,
                 context_menu_labels=context_menu_labels,
             )
         except Exception:
@@ -406,7 +653,9 @@ class WindowsSystemDiskManager:
             raise
         self._disk = disk
         self._drive = drive
+        self._container_path = Path(container_path).expanduser().resolve()
         self._control_record = control_record
+        self._context_menu_labels = context_menu_labels
         if progress is not None:
             progress(100, "Системный диск готов")
         return drive
@@ -447,6 +696,7 @@ class WindowsSystemDiskManager:
         try:
             control_record = self._publish_control_record(
                 drive,
+                container_path=container_path,
                 context_menu_labels=context_menu_labels,
             )
         except Exception:
@@ -455,10 +705,167 @@ class WindowsSystemDiskManager:
             raise
         self._disk = disk
         self._drive = drive
+        self._container_path = Path(container_path).expanduser().resolve()
         self._control_record = control_record
+        self._context_menu_labels = context_menu_labels
         if progress is not None:
             progress(100, "Системный диск подключён")
         return drive
+
+    def resize_mounted_disk(
+        self,
+        master_key: bytes,
+        *,
+        logical_capacity: int,
+        context_menu_labels: tuple[str, ...] | None = None,
+        progress: Callable[[int, str], None] | None = None,
+        elevated_extender: Callable[
+            [DiskControlRecord, WindowsVolumeInfo], WindowsVolumeResizeResult
+        ]
+        | None = None,
+    ) -> str:
+        """Grow a mounted NTFS disk, remount it, then extend its Windows partition."""
+
+        drive = self.mounted_drive
+        record = self._control_record
+        container_path = self._container_path
+        if drive is None or record is None:
+            raise MountUnavailableError(
+                "Активный системный диск Clever PGP не найден."
+            )
+        if container_path is None or not container_path.is_file():
+            raise MountUnavailableError(
+                "Путь подключённого контейнера недоступен. Отключите и снова откройте диск."
+            )
+        if (
+            not isinstance(logical_capacity, int)
+            or logical_capacity < MIN_WINDOWS_DISK_CAPACITY
+            or logical_capacity % LOGICAL_BLOCK_SIZE
+        ):
+            raise MountUnavailableError(
+                "Новый размер диска должен быть не меньше 32 МБ и кратен 4096 байтам."
+            )
+        if progress is not None:
+            progress(2, "Проверка подключённого диска")
+        original = self.inspect_mounted_disk()
+        validate_cleverpgp_ntfs_volume(
+            original,
+            expected_disk_size=original.disk_size,
+        )
+        if logical_capacity < original.disk_size:
+            raise MountUnavailableError(
+                "Уменьшение системного диска пока не поддерживается безопасно."
+            )
+
+        labels = context_menu_labels or self._context_menu_labels
+        extender = elevated_extender
+        if extender is None:
+            from biopgp.core.windows_resize import run_elevated_ntfs_extension
+
+            extender = lambda selected_record, selected_volume: (
+                run_elevated_ntfs_extension(selected_record, selected_volume)
+            )
+
+        available_tail = (
+            original.disk_size
+            - original.partition_offset
+            - original.partition_size
+        )
+        if logical_capacity == original.disk_size:
+            if available_tail <= 0:
+                if progress is not None:
+                    progress(100, "Размер диска уже установлен")
+                return drive
+            if progress is not None:
+                progress(85, "Ожидание разрешения Windows")
+            result = extender(record, original)
+            if (
+                result.disk_size != logical_capacity
+                or result.partition_size <= original.partition_size
+                or result.file_system.upper() != "NTFS"
+            ):
+                raise MountUnavailableError(
+                    "Windows не подтвердила новый размер раздела NTFS."
+                )
+            if progress is not None:
+                progress(100, "Раздел NTFS расширен")
+            return drive
+
+        original_partition_size = original.partition_size
+        original_offset = original.partition_offset
+        original_unique_id = original.unique_id
+        original_serial = original.serial_number
+        if progress is not None:
+            progress(5, "Безопасное отключение диска")
+        self.unmount()
+
+        def growth_progress(completed: int, total: int) -> None:
+            if progress is not None:
+                fraction = completed / total if total else 1.0
+                progress(
+                    10 + round(fraction * 55),
+                    "Добавление зашифрованных блоков",
+                )
+
+        resize_windows_block_volume(
+            container_path,
+            master_key,
+            logical_capacity=logical_capacity,
+            progress=growth_progress,
+        )
+        if progress is not None:
+            progress(68, "Повторное подключение увеличенного диска")
+        remounted_drive = self.mount(
+            container_path,
+            master_key,
+            context_menu_labels=labels,
+            progress=(
+                None
+                if progress is None
+                else lambda value, message: progress(
+                    68 + round(value * 0.17),
+                    message,
+                )
+            ),
+        )
+        resized_record = self._control_record
+        if resized_record is None:
+            raise MountUnavailableError(
+                "Увеличенный диск не опубликовал защищённую запись управления."
+            )
+        resized = inspect_windows_volume(remounted_drive)
+        validate_cleverpgp_ntfs_volume(
+            resized,
+            expected_disk_size=logical_capacity,
+        )
+        if resized.partition_size != original_partition_size:
+            raise MountUnavailableError(
+                "Размер раздела изменился до подтверждённого расширения Windows."
+            )
+        if resized.partition_offset != original_offset:
+            raise MountUnavailableError("Отступ раздела изменился после подключения.")
+        if original_unique_id and resized.unique_id != original_unique_id:
+            raise MountUnavailableError(
+                "Идентификатор диска изменился после подключения."
+            )
+        if original_serial and resized.serial_number != original_serial:
+            raise MountUnavailableError(
+                "Серийный номер диска изменился после подключения."
+            )
+        if progress is not None:
+            progress(88, "Ожидание разрешения Windows")
+        result = extender(resized_record, resized)
+        if (
+            result.disk_size != logical_capacity
+            or result.partition_size <= original_partition_size
+            or result.file_system.upper() != "NTFS"
+        ):
+            raise MountUnavailableError(
+                "Windows не подтвердила новый размер раздела NTFS."
+            )
+        if progress is not None:
+            progress(100, "Системный диск увеличен")
+        return remounted_drive
 
     def unmount(self) -> None:
         disk = self._disk
@@ -482,6 +889,8 @@ class WindowsSystemDiskManager:
         self._clear_control_record()
         self._disk = None
         self._drive = None
+        self._container_path = None
+        self._context_menu_labels = None
 
     def _recover_existing_control_record(self) -> None:
         active: list[DiskControlRecord] = []
@@ -496,6 +905,12 @@ class WindowsSystemDiskManager:
         if active:
             self._control_record = active[0]
             self._drive = active[0].drive
+            resolver = getattr(self._control_store, "container_path", None)
+            if callable(resolver):
+                try:
+                    self._container_path = resolver(active[0])
+                except MountUnavailableError:
+                    self._container_path = None
             return
         if stale:
             try:
@@ -517,6 +932,7 @@ class WindowsSystemDiskManager:
         self,
         drive: str,
         *,
+        container_path: Path,
         context_menu_labels: tuple[str, ...] | None,
     ) -> DiskControlRecord | None:
         endpoint = getattr(self._process_manager, "control_endpoint", None)
@@ -527,6 +943,7 @@ class WindowsSystemDiskManager:
             endpoint,
             drive=drive,
             process_id=process_id,
+            container_path=container_path,
         )
         if context_menu_labels is None:
             open_label = "Открыть зашифрованный диск"
@@ -559,6 +976,7 @@ class WindowsSystemDiskManager:
             pass
         self._control_store.remove(self._control_record)
         self._control_record = None
+        self._container_path = None
 
 
 def wait_for_drive_removal(
@@ -580,3 +998,16 @@ def wait_for_drive_removal(
 
 def _drive_path_available(drive: str) -> bool:
     return Path(f"{drive}\\").exists()
+
+
+def _normalize_windows_drive(drive: str) -> str:
+    normalized = str(drive).strip().upper().rstrip("\\/")
+    if len(normalized) == 1:
+        normalized += ":"
+    if (
+        len(normalized) != 2
+        or normalized[1] != ":"
+        or not normalized[0].isalpha()
+    ):
+        raise ValueError("Invalid Windows drive letter.")
+    return normalized

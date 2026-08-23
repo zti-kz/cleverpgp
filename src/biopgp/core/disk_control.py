@@ -19,6 +19,7 @@ _CONTROL_MAGIC = b"CPGC\x01"
 _CONTROL_COMMANDS = {"ping": b"P", "stop": b"S"}
 _CONTROL_RESPONSES = {True: b"OK", False: b"NO"}
 _CONTROL_ENTROPY_PREFIX = b"Clever PGP disk control state v1\0"
+_CONTAINER_PATH_ENTROPY_PREFIX = b"Clever PGP mounted container path v1\0"
 
 
 class SecretProtector(Protocol):
@@ -50,6 +51,7 @@ class DiskControlRecord:
     process_id: int
     protected_token: bytes
     path: Path
+    protected_container_path: bytes | None = None
 
 
 class DiskControlServer:
@@ -167,6 +169,7 @@ class DiskControlStore:
         *,
         drive: str,
         process_id: int,
+        container_path: Path | None = None,
     ) -> DiskControlRecord:
         normalized_drive = _normalize_drive(drive)
         if process_id <= 0:
@@ -175,6 +178,16 @@ class DiskControlStore:
             endpoint.token,
             _control_entropy(endpoint.volume_id),
         )
+        protected_container_path: bytes | None = None
+        if container_path is not None:
+            resolved_container = Path(container_path).expanduser().resolve()
+            encoded_container = str(resolved_container).encode("utf-8")
+            if not encoded_container or len(encoded_container) > 32 * 1024:
+                raise ValueError("Mounted container path has an invalid length.")
+            protected_container_path = self._secret_protector().protect(
+                encoded_container,
+                _container_path_entropy(endpoint.volume_id),
+            )
         payload = {
             "version": CONTROL_PROTOCOL_VERSION,
             "volume_id": endpoint.volume_id.hex(),
@@ -183,6 +196,10 @@ class DiskControlStore:
             "process_id": process_id,
             "protected_token": base64.b64encode(protected_token).decode("ascii"),
         }
+        if protected_container_path is not None:
+            payload["protected_container_path"] = base64.b64encode(
+                protected_container_path
+            ).decode("ascii")
         self.directory.mkdir(parents=True, exist_ok=True)
         destination = self._record_path(endpoint.volume_id)
         temporary = destination.with_name(
@@ -210,6 +227,7 @@ class DiskControlStore:
             process_id=process_id,
             protected_token=protected_token,
             path=destination,
+            protected_container_path=protected_container_path,
         )
 
     def find_by_drive(self, drive: str) -> DiskControlRecord | None:
@@ -235,6 +253,24 @@ class DiskControlStore:
             _control_entropy(record.volume_id),
         )
         return DiskControlEndpoint(record.volume_id, record.port, token)
+
+    def container_path(self, record: DiskControlRecord) -> Path | None:
+        protected = record.protected_container_path
+        if protected is None:
+            return None
+        try:
+            encoded = self._secret_protector().unprotect(
+                protected,
+                _container_path_entropy(record.volume_id),
+            )
+            decoded = encoded.decode("utf-8")
+            if not decoded or "\x00" in decoded:
+                raise ValueError("Mounted container path is invalid.")
+            return Path(decoded).expanduser().resolve()
+        except (BioPGPError, OSError, UnicodeError, ValueError) as error:
+            raise MountUnavailableError(
+                "Защищённый путь системного диска повреждён или недоступен."
+            ) from error
 
     def send(
         self,
@@ -275,9 +311,20 @@ class DiskControlStore:
                 str(payload["protected_token"]),
                 validate=True,
             )
+            encoded_container_path = payload.get("protected_container_path")
+            protected_container_path = (
+                None
+                if encoded_container_path is None
+                else base64.b64decode(
+                    str(encoded_container_path),
+                    validate=True,
+                )
+            )
             if len(volume_id) != 16 or not 1 <= port <= 65535 or process_id <= 0:
                 return None
             if not protected_token:
+                return None
+            if protected_container_path == b"":
                 return None
         except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return None
@@ -288,6 +335,7 @@ class DiskControlStore:
             process_id,
             protected_token,
             path,
+            protected_container_path,
         )
 
     def _state_paths(self) -> tuple[Path, ...]:
@@ -315,6 +363,12 @@ def _control_entropy(volume_id: bytes) -> bytes:
     if len(volume_id) != 16:
         raise ValueError("Disk control volume id must contain 16 bytes.")
     return _CONTROL_ENTROPY_PREFIX + volume_id
+
+
+def _container_path_entropy(volume_id: bytes) -> bytes:
+    if len(volume_id) != 16:
+        raise ValueError("Disk control volume id must contain 16 bytes.")
+    return _CONTAINER_PATH_ENTROPY_PREFIX + volume_id
 
 
 def _normalize_drive(drive: str) -> str:

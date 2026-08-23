@@ -73,7 +73,13 @@ def test_control_store_protects_token_and_finds_drive(tmp_path: Path) -> None:
     endpoint = DiskControlEndpoint(b"v" * 16, 23456, token)
     store = DiskControlStore(tmp_path, FakeProtector())
 
-    published = store.publish(endpoint, drive="z:\\", process_id=1234)
+    container_path = tmp_path / "private.cpgv"
+    published = store.publish(
+        endpoint,
+        drive="z:\\",
+        process_id=1234,
+        container_path=container_path,
+    )
     payload = json.loads(published.path.read_text(encoding="utf-8"))
     found = store.find_by_drive("Z:")
 
@@ -81,7 +87,9 @@ def test_control_store_protects_token_and_finds_drive(tmp_path: Path) -> None:
     assert store.records() == (found,)
     assert found.drive == "Z:"
     assert base64.b64decode(payload["protected_token"]) != token
+    assert str(container_path) not in published.path.read_text(encoding="utf-8")
     assert store.endpoint(found) == endpoint
+    assert store.container_path(found) == container_path.resolve()
 
     store.remove(found)
     assert not published.path.exists()

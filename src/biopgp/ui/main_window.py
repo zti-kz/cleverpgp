@@ -53,6 +53,7 @@ from biopgp.ui.about_dialog import AboutDialog
 from biopgp.ui.container_dialog import ContainerCreationDialog
 from biopgp.ui.face_dialog import FaceEnrollmentDialog, FaceVerificationDialog
 from biopgp.ui.icons import line_icon
+from biopgp.ui.resize_dialog import ContainerResizeDialog
 from biopgp.ui.settings_dialog import AccessSettingsDialog
 
 
@@ -90,6 +91,7 @@ class MainWindow(QMainWindow):
         mount_manager: VaultMountManager | WindowsSystemDiskManager | None = None,
         startup_container: Path | None = None,
         startup_action: str | None = None,
+        startup_drive: str | None = None,
     ) -> None:
         super().__init__()
         self.repository = repository
@@ -102,6 +104,7 @@ class MainWindow(QMainWindow):
         self._direct_container_launch = startup_container is not None
         self._direct_mount_pending = False
         self._startup_action = startup_action
+        self._startup_drive = startup_drive
         self.startup_container = (
             startup_container.expanduser().resolve()
             if startup_container is not None
@@ -374,6 +377,9 @@ class MainWindow(QMainWindow):
             if self._startup_action == "settings":
                 self._startup_action = None
                 QTimer.singleShot(0, self._show_access_settings)
+            elif self._startup_action == "resize":
+                self._startup_action = None
+                QTimer.singleShot(0, self._show_resize_dialog)
 
     def _show_dashboard(self) -> None:
         profile = self.repository.get_profile()
@@ -556,6 +562,77 @@ class MainWindow(QMainWindow):
                 self._set_dashboard_status(tr("Мастер-пароль успешно изменён."))
 
             self._start_progress_task(change_password, password_changed)
+
+    def _show_resize_dialog(self) -> None:
+        if not self._uses_windows_system_disk:
+            self._show_error(
+                "Изменение размера доступно только для системного диска Windows."
+            )
+            return
+        drive = self.mount_manager.mounted_drive
+        expected_drive = (
+            str(self._startup_drive).strip().upper().rstrip("\\/")
+            if self._startup_drive
+            else None
+        )
+        if expected_drive and len(expected_drive) == 1:
+            expected_drive += ":"
+        if drive is None or (expected_drive is not None and drive != expected_drive):
+            self._show_error("Выбранный системный диск Clever PGP не подключён.")
+            return
+        container_path = self.mount_manager.mounted_container
+        if container_path is None:
+            self._show_error(
+                "Путь контейнера недоступен. Отключите и снова откройте диск."
+            )
+            return
+        try:
+            info = self.mount_manager.inspect_mounted_disk()
+            pending = (
+                info.disk_size - info.partition_offset - info.partition_size > 0
+            )
+            dialog = ContainerResizeDialog(
+                container_path,
+                current_capacity=info.disk_size,
+                file_system=info.file_system,
+                partition_growth_pending=pending,
+                parent=self,
+            )
+        except (BioPGPError, OSError, TypeError, ValueError) as error:
+            self._show_error(str(error))
+            return
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_capacity = dialog.logical_capacity
+
+        def resize_disk(
+            master_key: bytes,
+            progress: Callable[[int, str], None],
+        ) -> str:
+            return self.mount_manager.resize_mounted_disk(
+                master_key,
+                logical_capacity=selected_capacity,
+                context_menu_labels=(
+                    tr("Открыть зашифрованный диск"),
+                    tr("Настройки доступа"),
+                    tr("Отключить зашифрованный диск"),
+                ),
+                progress=progress,
+            )
+
+        def resized(result: object) -> None:
+            resized_drive = str(result)
+            self._sync_tray_state()
+            self._set_dashboard_status(
+                tr(
+                    "Диск {drive} увеличен и снова подключён.",
+                    drive=resized_drive,
+                )
+            )
+            if self._startup_drive is not None:
+                self._hide_to_tray()
+
+        self._start_key_progress_task(resize_disk, resized)
 
     def _encrypt_file(self) -> None:
         source_name, _ = QFileDialog.getOpenFileName(self, tr("Выберите файл"))

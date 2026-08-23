@@ -12,6 +12,10 @@ def main(argv: list[str] | None = None) -> int:
         from biopgp.core.disk_host import run_disk_host
 
         return run_disk_host(Path(arguments[1]))
+    if arguments[:1] == ["--windows-resize-helper"] and len(arguments) == 3:
+        from biopgp.core.windows_resize import run_windows_resize_helper
+
+        return run_windows_resize_helper(Path(arguments[1]), Path(arguments[2]))
     if arguments[:1] == ["--runtime-check"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:
@@ -64,6 +68,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if arguments[:1] == ["--settings"] and len(arguments) in (1, 2):
         return application_main(startup_action="settings")
+    if arguments[:1] == ["--resize-drive"] and len(arguments) == 2:
+        return application_main(
+            startup_action="resize",
+            startup_drive=arguments[1],
+        )
     if arguments[:1] == ["--container"] and len(arguments) == 2:
         return application_main(Path(arguments[1]).expanduser().resolve())
     if (

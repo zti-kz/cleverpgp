@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,6 +16,7 @@ from biopgp.ui.container_dialog import (  # noqa: E402
 )
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
 from biopgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY  # noqa: E402
+from biopgp.ui.resize_dialog import ContainerResizeDialog  # noqa: E402
 
 
 def test_container_size_is_selected_with_a_slider(
@@ -115,6 +118,85 @@ def test_selected_drive_limits_container_capacity(monkeypatch, tmp_path: Path) -
     assert dialog.create_button.isEnabled()
     dialog.accept()
     assert dialog.result() == dialog.DialogCode.Accepted
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_resize_dialog_uses_one_slider_and_selected_drive_space(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    container_path = tmp_path / "mounted.cpgv"
+    container_path.write_bytes(b"container")
+    with patch(
+        "biopgp.ui.resize_dialog.shutil.disk_usage",
+        return_value=SimpleNamespace(free=256 * MEBIBYTE),
+    ):
+        dialog = ContainerResizeDialog(
+            container_path,
+            current_capacity=64 * MEBIBYTE,
+            file_system="NTFS",
+        )
+
+    assert dialog.findChildren(QSlider) == [dialog.size_slider]
+    assert not dialog.resize_button.isEnabled()
+    target = min(
+        dialog._capacity_choices,
+        key=lambda capacity: abs(capacity - 128 * MEBIBYTE),
+    )
+    dialog.size_slider.setValue(dialog._capacity_choices.index(target))
+    assert dialog.logical_capacity == target
+    assert dialog.resize_button.isEnabled()
+    assert "процентах" in dialog.notice.text()
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_resize_dialog_explains_why_exfat_growth_is_disabled(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    container_path = tmp_path / "exfat.cpgv"
+    container_path.write_bytes(b"container")
+    with patch(
+        "biopgp.ui.resize_dialog.shutil.disk_usage",
+        return_value=SimpleNamespace(free=256 * MEBIBYTE),
+    ):
+        dialog = ContainerResizeDialog(
+            container_path,
+            current_capacity=64 * MEBIBYTE,
+            file_system="EXFAT",
+        )
+
+    dialog.size_slider.setValue(dialog.size_slider.maximum())
+    assert not dialog.resize_button.isEnabled()
+    assert "exFAT" in dialog.notice.text()
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_resize_dialog_allows_retry_without_additional_free_space(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    container_path = tmp_path / "pending.cpgv"
+    container_path.write_bytes(b"container")
+    with patch(
+        "biopgp.ui.resize_dialog.shutil.disk_usage",
+        return_value=SimpleNamespace(free=0),
+    ):
+        dialog = ContainerResizeDialog(
+            container_path,
+            current_capacity=64 * MEBIBYTE,
+            file_system="NTFS",
+            partition_growth_pending=True,
+        )
+
+    assert dialog.resize_button.isEnabled()
+    assert "Повторить" in dialog.resize_button.text()
 
     dialog.close()
     application.processEvents()
