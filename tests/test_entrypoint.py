@@ -31,6 +31,23 @@ def test_windows_resize_helper_is_dispatched_without_gui() -> None:
     helper.assert_called_once_with(Path("request.json"), Path("response.json"))
 
 
+def test_windows_format_helper_is_dispatched_without_gui() -> None:
+    with patch(
+        "biopgp.core.windows_format.run_windows_format_helper",
+        return_value=0,
+    ) as helper:
+        result = main(
+            [
+                "--windows-format-helper",
+                "request.json",
+                "response.json",
+            ]
+        )
+
+    assert result == 0
+    helper.assert_called_once_with(Path("request.json"), Path("response.json"))
+
+
 def test_resize_drive_mode_forces_system_disk_window() -> None:
     with patch("biopgp.app.main", return_value=0) as application_main:
         result = main(["--resize-drive", "Z:\\"])

@@ -89,6 +89,23 @@ def test_backend_detection_messages_are_localized() -> None:
     )
 
 
+def test_system_disk_formatting_messages_are_localized() -> None:
+    set_language("en")
+    assert (
+        tr("Форматирование системного диска завершено")
+        == "System disk formatting completed"
+    )
+    assert (
+        tr("Windows не запустила форматирование диска (код 5).")
+        == "Windows did not start disk formatting (error 5)."
+    )
+    set_language("kk")
+    assert (
+        tr("Форматирование не получило разрешение администратора Windows.")
+        == "Дискіні пішімдеу Windows әкімшісінің рұқсатын алмады."
+    )
+
+
 def test_header_language_selector_applies_and_saves_language(tmp_path) -> None:
     application = QApplication.instance() or QApplication([])
     repository = ProfileRepository(tmp_path / "profile.sqlite3")

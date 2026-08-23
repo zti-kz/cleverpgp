@@ -34,6 +34,9 @@ class WindowsDiskInfo:
     unique_id: str
     size: int
     partition_style: str
+    bus_type: str = ""
+    is_boot: bool = False
+    is_system: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +121,7 @@ def _run_powershell(script: str, *, timeout: float = 30.0) -> str:
 def list_windows_disks() -> list[WindowsDiskInfo]:
     raw = _run_powershell(
         "Get-Disk | Select-Object Number,FriendlyName,SerialNumber,UniqueId,Size,"
-        "PartitionStyle | ConvertTo-Json -Compress"
+        "PartitionStyle,BusType,IsBoot,IsSystem | ConvertTo-Json -Compress"
     )
     if not raw:
         return []
@@ -136,9 +139,18 @@ def list_windows_disks() -> list[WindowsDiskInfo]:
                 unique_id=str(record.get("UniqueId") or ""),
                 size=int(record["Size"]),
                 partition_style=str(record.get("PartitionStyle") or ""),
+                bus_type=str(record.get("BusType") or ""),
+                is_boot=_strict_json_bool(record.get("IsBoot", False)),
+                is_system=_strict_json_bool(record.get("IsSystem", False)),
             )
         )
     return result
+
+
+def _strict_json_bool(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise MountUnavailableError("Windows вернула некорректный признак диска.")
+    return value
 
 
 def inspect_windows_volume(drive: str) -> WindowsVolumeInfo:
@@ -352,6 +364,8 @@ def select_new_cleverpgp_disk(
         disk
         for disk in new_disks
         if disk.size == expected_size
+        and not disk.is_boot
+        and not disk.is_system
         and any(
             marker in disk.friendly_name.casefold()
             for marker in ("cleverpgp", "winspd")
@@ -409,6 +423,12 @@ def format_new_cleverpgp_disk(
         raise ValueError("Test file system must be NTFS or exFAT.")
     if disk.size != expected_size or disk.number < 0:
         raise MountUnavailableError("Параметры временного диска изменились.")
+    if disk.partition_style.upper() != "MBR":
+        raise MountUnavailableError("Ожидалась таблица разделов MBR Clever PGP.")
+    if disk.is_boot or disk.is_system:
+        raise MountUnavailableError(
+            "Системный или загрузочный диск Windows форматировать запрещено."
+        )
     if not any(
         marker in disk.friendly_name.casefold()
         for marker in ("cleverpgp", "winspd")
@@ -420,14 +440,35 @@ def format_new_cleverpgp_disk(
     ):
         raise ValueError("Disk label contains unsupported characters.")
     encoded_label = base64.b64encode(normalized_label.encode("utf-8")).decode("ascii")
+    encoded_identity = {
+        name: base64.b64encode(value.encode("utf-8")).decode("ascii")
+        for name, value in (
+            ("friendly", disk.friendly_name),
+            ("serial", disk.serial_number),
+            ("unique", disk.unique_id),
+            ("bus", disk.bus_type),
+        )
+    }
 
     script = f"""
 $ErrorActionPreference = 'Stop'
 $label = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_label}'))
+function Decode-Identity([String]$value) {{
+    return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($value))
+}}
+$expectedFriendly = Decode-Identity '{encoded_identity["friendly"]}'
+$expectedSerial = Decode-Identity '{encoded_identity["serial"]}'
+$expectedUnique = Decode-Identity '{encoded_identity["unique"]}'
+$expectedBus = Decode-Identity '{encoded_identity["bus"]}'
 $disk = Get-Disk -Number {disk.number}
 if ([UInt64]$disk.Size -ne [UInt64]{expected_size}) {{ throw 'Disk size changed.' }}
+if ([String]$disk.FriendlyName -ne $expectedFriendly) {{ throw 'Disk name changed.' }}
+if ([String]$disk.SerialNumber -ne $expectedSerial) {{ throw 'Disk serial changed.' }}
+if ([String]$disk.UniqueId -ne $expectedUnique) {{ throw 'Disk identity changed.' }}
+if ([String]$disk.BusType -ne $expectedBus) {{ throw 'Disk bus changed.' }}
 if ($disk.FriendlyName -notmatch 'CleverPGP|WinSpd') {{ throw 'Disk identity changed.' }}
 if ($disk.PartitionStyle -ne 'MBR') {{ throw 'Expected an MBR test disk.' }}
+if ([Boolean]$disk.IsBoot -or [Boolean]$disk.IsSystem) {{ throw 'System disk is forbidden.' }}
 $partitions = @(Get-Partition -DiskNumber {disk.number} | Where-Object {{ $_.Type -ne 'Reserved' }})
 if ($partitions.Count -ne 1) {{ throw 'Expected exactly one data partition.' }}
 $partition = $partitions[0]
@@ -630,16 +671,32 @@ class WindowsSystemDiskManager:
                 before,
                 expected_size=logical_capacity,
             )
+            endpoint = getattr(self._process_manager, "control_endpoint", None)
+            if endpoint is None:
+                raise MountUnavailableError(
+                    "Фоновый процесс не предоставил защищённый канал форматирования."
+                )
             if progress is not None:
-                progress(85, "Форматирование системного диска")
-            drive = format_new_cleverpgp_disk(
+                progress(82, "Ожидание разрешения Windows")
+            from biopgp.core.windows_format import run_elevated_windows_format
+
+            drive = run_elevated_windows_format(
+                endpoint,
                 disk,
-                expected_size=logical_capacity,
                 file_system=file_system,
                 label=label,
             )
+            if progress is not None:
+                progress(95, "Форматирование системного диска завершено")
         except Exception:
-            self._process_manager.stop()
+            try:
+                self._process_manager.stop()
+            finally:
+                # Until Windows confirms the first format, this newly created
+                # image has no usable file system and cannot be reopened as a
+                # disk. Roll the failed creation back instead of leaving a
+                # large orphaned container that looks successful.
+                Path(container_path).expanduser().resolve().unlink(missing_ok=True)
             raise
         try:
             control_record = self._publish_control_record(

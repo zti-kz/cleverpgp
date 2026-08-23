@@ -169,6 +169,7 @@ def test_ntfs_extension_revalidates_identity_before_resize() -> None:
     assert "Get-Partition -DriveLetter 'Z'" in script
     assert "$disk.FriendlyName -ne $expectedFriendly" in script
     assert "$disk.UniqueId -ne $expectedUnique" in script
+    assert "$disk.BusType -ne $expectedBus" in script
     assert "$disk.IsBoot" in script
     assert "$dataPartitions.Count -ne 1" in script
     assert script.index("Get-Disk -Number 7") < script.index("Resize-Partition")
@@ -240,10 +241,140 @@ def test_format_command_revalidates_target_before_destructive_operation() -> Non
     assert "Get-Disk -Number 7" in script
     assert f"$disk.Size -ne [UInt64]{expected_size}" in script
     assert "$disk.FriendlyName -notmatch 'CleverPGP|WinSpd'" in script
+    assert "$disk.FriendlyName -ne $expectedFriendly" in script
+    assert "$disk.SerialNumber -ne $expectedSerial" in script
+    assert "$disk.UniqueId -ne $expectedUnique" in script
     assert "$disk.PartitionStyle -ne 'MBR'" in script
+    assert "$disk.IsBoot -or [Boolean]$disk.IsSystem" in script
     assert "$partition.Offset -ne [UInt64]1048576" in script
     assert script.index("Get-Disk -Number 7") < script.index("Format-Volume")
     assert script.index("$partition.Offset") < script.index("Format-Volume")
+
+
+def test_refuses_new_disk_marked_as_boot_or_system() -> None:
+    expected_size = 128 * 1024 * 1024
+    candidate = replace(
+        disk(7, "CleverPGP", expected_size),
+        is_system=True,
+    )
+
+    with pytest.raises(MountUnavailableError):
+        select_new_cleverpgp_disk([], [candidate], expected_size=expected_size)
+
+
+def test_system_manager_formats_new_disk_only_through_uac_helper(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "new-system.cpgv"
+    expected_size = 64 * 1024 * 1024
+    selected_disk = disk(7, "CleverPGP", expected_size)
+    endpoint = DiskControlEndpoint(b"v" * 16, 23456, b"t" * 32)
+    process_manager = FakeProcessManager()
+    process_manager.control_endpoint = endpoint
+    process_manager.process_id = 4321
+
+    class CreatedVolume:
+        @staticmethod
+        def close() -> None:
+            return None
+
+    def create_volume(path: Path, *_args: object, **_kwargs: object) -> CreatedVolume:
+        path.write_bytes(b"new encrypted disk")
+        return CreatedVolume()
+
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process_manager,
+        recover_existing=False,
+    )
+    with (
+        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch(
+            "biopgp.core.windows_storage.create_windows_block_volume",
+            side_effect=create_volume,
+        ),
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=selected_disk,
+        ),
+        patch(
+            "biopgp.core.windows_format.run_elevated_windows_format",
+            return_value="Z:",
+        ) as elevated_format,
+        patch.object(manager, "_publish_control_record", return_value=None),
+    ):
+        drive = manager.create_and_mount(
+            container_path,
+            key,
+            logical_capacity=expected_size,
+            label="Private",
+            file_system="NTFS",
+        )
+
+    assert drive == "Z:"
+    assert container_path.is_file()
+    elevated_format.assert_called_once_with(
+        endpoint,
+        selected_disk,
+        file_system="NTFS",
+        label="Private",
+    )
+
+
+def test_system_manager_removes_unformatted_image_after_uac_failure(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "cancelled-system.cpgv"
+    expected_size = 64 * 1024 * 1024
+    selected_disk = disk(7, "CleverPGP", expected_size)
+    process_manager = FakeProcessManager()
+    process_manager.control_endpoint = DiskControlEndpoint(
+        b"v" * 16,
+        23456,
+        b"t" * 32,
+    )
+
+    class CreatedVolume:
+        @staticmethod
+        def close() -> None:
+            return None
+
+    def create_volume(path: Path, *_args: object, **_kwargs: object) -> CreatedVolume:
+        path.write_bytes(b"unformatted encrypted disk")
+        return CreatedVolume()
+
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process_manager,
+        recover_existing=False,
+    )
+    with (
+        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch(
+            "biopgp.core.windows_storage.create_windows_block_volume",
+            side_effect=create_volume,
+        ),
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=selected_disk,
+        ),
+        patch(
+            "biopgp.core.windows_format.run_elevated_windows_format",
+            side_effect=MountUnavailableError("UAC cancelled"),
+        ),
+    ):
+        with pytest.raises(MountUnavailableError, match="UAC cancelled"):
+            manager.create_and_mount(
+                container_path,
+                key,
+                logical_capacity=expected_size,
+                label="Private",
+            )
+
+    assert process_manager.stopped
+    assert not container_path.exists()
 
 
 def test_unicode_volume_label_is_encoded_not_interpolated() -> None:

@@ -16,6 +16,10 @@ def main(argv: list[str] | None = None) -> int:
         from biopgp.core.windows_resize import run_windows_resize_helper
 
         return run_windows_resize_helper(Path(arguments[1]), Path(arguments[2]))
+    if arguments[:1] == ["--windows-format-helper"] and len(arguments) == 3:
+        from biopgp.core.windows_format import run_windows_format_helper
+
+        return run_windows_format_helper(Path(arguments[1]), Path(arguments[2]))
     if arguments[:1] == ["--runtime-check"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:
