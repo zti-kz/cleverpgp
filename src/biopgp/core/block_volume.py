@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import os
 import shutil
@@ -40,6 +41,7 @@ TAG_SIZE = DISK_TAG_SIZE
 PHYSICAL_SLOT_SIZE = NONCE_SIZE + LOGICAL_BLOCK_SIZE + TAG_SIZE
 MIN_LOGICAL_CAPACITY = 1024 * 1024
 INITIALIZATION_BATCH_BLOCKS = 256
+ALGORITHM_CONVERSION_BATCH_BLOCKS = 256
 ALGORITHM = DEFAULT_DISK_ALGORITHM
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
 GENERIC_STORAGE_FORMAT = "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
@@ -246,6 +248,195 @@ class EncryptedBlockVolume:
             active_header_slot=active_slot,
             pending_resize=pending_resize,
         )
+
+    @classmethod
+    def convert_algorithm_atomic(
+        cls,
+        path: Path,
+        master_key: bytes,
+        algorithm: str,
+        *,
+        required_storage_format: str,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> Path:
+        """Re-encrypt a closed block image without risking the original file.
+
+        The source is authenticated block by block and a complete replacement
+        image is written beside it with a fresh volume key and volume id.  The
+        original path is replaced only after the new header and exact physical
+        size have been reopened and verified.  This method intentionally
+        requires an exact storage format because callers must know that its
+        blocks use the empty authenticated context.
+        """
+
+        target = Path(path).expanduser().resolve()
+        cls._validate_master_key(master_key)
+        if (
+            not isinstance(required_storage_format, str)
+            or not required_storage_format
+        ):
+            raise ValidationError("Некорректное назначение блочного хранилища.")
+        target_cipher = require_disk_cipher(algorithm)
+        temporary_path: Path | None = None
+        replacement_key = bytearray(utils.random(secret.SecretBox.KEY_SIZE))
+        try:
+            with cls.open(target, master_key) as source:
+                if source.storage_format != required_storage_format:
+                    raise ValidationError(
+                        "Изменение метода недоступно для этого типа зашифрованного диска."
+                    )
+                if source._pending_resize:
+                    raise ValidationError(
+                        "Сначала завершите или повторите увеличение зашифрованного диска."
+                    )
+                if source.algorithm == target_cipher.identifier:
+                    if progress is not None:
+                        progress(1, 1)
+                    return target
+
+                source_state = target.stat()
+                block_count = source.block_count
+                required_size = cls.physical_size(block_count)
+                if int(shutil.disk_usage(target.parent).free) < required_size:
+                    raise ValidationError(
+                        "Для безопасной смены метода недостаточно свободного места "
+                        "на накопителе контейнера."
+                    )
+
+                replacement_volume_id = uuid.uuid4().bytes
+                replacement_key_bytes = bytes(replacement_key)
+                wrapped_key = bytes(
+                    secret.SecretBox(master_key).encrypt(replacement_key_bytes)
+                )
+                metadata: dict[str, object] = {
+                    "algorithm": target_cipher.identifier,
+                    "block_count": block_count,
+                    "created_at": str(source._metadata["created_at"]),
+                    "converted_at": datetime.now(UTC).isoformat(),
+                    "header_generation": source._header_generation + 1,
+                    "key_wrap": KEY_WRAP,
+                    "label": source.label,
+                    "logical_block_size": LOGICAL_BLOCK_SIZE,
+                    "storage_format": required_storage_format,
+                    "resize_state": HEADER_STATE_COMMITTED,
+                    "volume_id": base64.b64encode(replacement_volume_id).decode(
+                        "ascii"
+                    ),
+                    "wrapped_volume_key": base64.b64encode(wrapped_key).decode(
+                        "ascii"
+                    ),
+                }
+                metadata = cls._authenticated_metadata(
+                    metadata,
+                    replacement_key_bytes,
+                )
+
+                temporary = tempfile.NamedTemporaryFile(
+                    mode="w+b",
+                    prefix=f".{target.name}.algorithm-",
+                    suffix=".tmp",
+                    dir=target.parent,
+                    delete=False,
+                )
+                temporary_path = Path(temporary.name)
+                with temporary as output:
+                    output.write(cls._encode_initial_header(metadata))
+                    completed = 0
+                    total_work = block_count * 2
+                    source_digest = hashlib.blake2b(
+                        digest_size=32,
+                        person=b"CPGP-CONVERT-V1",
+                    )
+                    if progress is not None:
+                        progress(0, total_work)
+                    while completed < block_count:
+                        batch_count = min(
+                            ALGORITHM_CONVERSION_BATCH_BLOCKS,
+                            block_count - completed,
+                        )
+                        plaintext = source.read_blocks(completed, batch_count)
+                        source_digest.update(plaintext)
+                        nonce_fields = random_nonce_fields(batch_count)
+                        encrypted = bytearray()
+                        for offset in range(batch_count):
+                            plaintext_start = offset * LOGICAL_BLOCK_SIZE
+                            nonce_start = offset * NONCE_SIZE
+                            nonce = nonce_fields[
+                                nonce_start : nonce_start + NONCE_SIZE
+                            ]
+                            block_index = completed + offset
+                            encrypted.extend(nonce)
+                            encrypted.extend(
+                                target_cipher.encrypt(
+                                    plaintext[
+                                        plaintext_start : plaintext_start
+                                        + LOGICAL_BLOCK_SIZE
+                                    ],
+                                    cls._block_aad(
+                                        replacement_volume_id,
+                                        block_index,
+                                    ),
+                                    nonce,
+                                    replacement_key_bytes,
+                                )
+                            )
+                        output.write(encrypted)
+                        completed += batch_count
+                        if progress is not None:
+                            progress(completed, total_work)
+                    output.flush()
+                    os.fsync(output.fileno())
+
+            current_state = target.stat()
+            if (
+                current_state.st_size != source_state.st_size
+                or current_state.st_mtime_ns != source_state.st_mtime_ns
+            ):
+                raise ValidationError(
+                    "Зашифрованный диск изменился во время преобразования. "
+                    "Исходный контейнер сохранён."
+                )
+            assert temporary_path is not None
+            with cls.open(temporary_path, master_key) as verified:
+                if (
+                    verified.algorithm != target_cipher.identifier
+                    or verified.block_count != block_count
+                    or verified.storage_format != required_storage_format
+                ):
+                    raise BlockVolumeError(
+                        "Не удалось проверить преобразованный зашифрованный диск."
+                    )
+                verified_digest = hashlib.blake2b(
+                    digest_size=32,
+                    person=b"CPGP-CONVERT-V1",
+                )
+                verified_blocks = 0
+                while verified_blocks < block_count:
+                    batch_count = min(
+                        ALGORITHM_CONVERSION_BATCH_BLOCKS,
+                        block_count - verified_blocks,
+                    )
+                    verified_digest.update(
+                        verified.read_blocks(verified_blocks, batch_count)
+                    )
+                    verified_blocks += batch_count
+                    if progress is not None:
+                        progress(block_count + verified_blocks, total_work)
+                if not bindings.sodium_memcmp(
+                    source_digest.digest(),
+                    verified_digest.digest(),
+                ):
+                    raise BlockVolumeError(
+                        "Содержимое преобразованного диска не совпадает с исходным."
+                    )
+            os.replace(temporary_path, target)
+            temporary_path = None
+            return target
+        finally:
+            for index in range(len(replacement_key)):
+                replacement_key[index] = 0
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     @property
     def block_count(self) -> int:

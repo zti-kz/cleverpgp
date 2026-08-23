@@ -29,6 +29,7 @@ from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
     HiddenVolumeCreationRequest,
     OpaqueVolumeUnlockRequest,
 )
+from biopgp.core.disk_crypto import AES256_GCM, XCHACHA20_POLY1305  # noqa: E402
 
 
 def test_first_window_can_be_created(tmp_path: Path) -> None:
@@ -295,6 +296,88 @@ def test_explorer_settings_reject_wrong_drive_without_disconnect(
     window.closeEvent(event)
     assert event.isAccepted()
     assert mounted.unmount_calls == 0
+    window.close()
+    application.processEvents()
+
+
+def test_algorithm_change_dialog_runs_from_mounted_disk_context(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    container = tmp_path / "disk.cpgv"
+    container.write_bytes(b"encrypted disk")
+    calls: list[tuple[bytes, str, tuple[str, ...]]] = []
+
+    class AlgorithmDialog:
+        new_algorithm = AES256_GCM
+
+        def __init__(self, path: Path, current: str, _parent: object) -> None:
+            assert path == container
+            assert current == XCHACHA20_POLY1305
+
+        @staticmethod
+        def exec() -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class MountedDisk:
+        uses_windows_system_disk = True
+        mounted_drive = "Z:"
+        mounted_container = container
+        mounted_algorithm = XCHACHA20_POLY1305
+
+        @staticmethod
+        def change_mounted_disk_algorithm(
+            key: bytes,
+            *,
+            algorithm: str,
+            context_menu_labels: tuple[str, ...],
+            progress: Callable[[int, str], None],
+        ) -> str:
+            calls.append((key, algorithm, context_menu_labels))
+            progress(100, "done")
+            return "Z:"
+
+        @staticmethod
+        def unmount() -> None:
+            return None
+
+    monkeypatch.setattr(
+        main_window_module,
+        "DiskAlgorithmChangeDialog",
+        AlgorithmDialog,
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=MountedDisk(),  # type: ignore[arg-type]
+    )
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+
+    window._show_algorithm_dialog()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert not window._busy
+    assert len(calls) == 1
+    assert calls[0][1] == AES256_GCM
+    assert "Изменить метод шифрования" in calls[0][2]
+    assert "Метод шифрования диска Z: изменён" in window.dashboard_status.text()
     window.close()
     application.processEvents()
 
@@ -639,6 +722,8 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "",
+        "Изменить метод шифрования",
         "Увеличить диск",
         "Отключить зашифрованный диск",
     )
@@ -656,6 +741,8 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "",
+        "Изменить метод шифрования",
         "Увеличить диск",
         "Отключить зашифрованный диск",
     )
@@ -748,6 +835,8 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "",
+        "Изменить метод шифрования",
         "Увеличить диск",
         "Отключить зашифрованный диск",
     )

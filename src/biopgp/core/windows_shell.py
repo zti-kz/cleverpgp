@@ -46,6 +46,7 @@ def drive_context_menu_values(
     resize_label: str | None,
     unmount_label: str,
     password_label: str | None = None,
+    algorithm_label: str | None = None,
 ) -> tuple[RegistryValue, ...]:
     normalized_drive = _normalize_drive(drive)
     prefix = tuple(str(value) for value in command_prefix)
@@ -64,6 +65,9 @@ def drive_context_menu_values(
     password_command = subprocess.list2cmdline(
         [*prefix, "--change-disk-password", "%1"]
     )
+    algorithm_command = subprocess.list2cmdline(
+        [*prefix, "--change-disk-algorithm", "%1"]
+    )
     resize_command = subprocess.list2cmdline(
         [*prefix, "--resize-drive", "%1"]
     )
@@ -74,6 +78,7 @@ def drive_context_menu_values(
     info_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Info"
     settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
     password_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Password"
+    algorithm_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Algorithm"
     resize_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize"
     unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
     values = [
@@ -100,6 +105,18 @@ def drive_context_menu_values(
                     password_key + r"\command",
                     "",
                     password_command,
+                ),
+            ]
+        )
+    if algorithm_label:
+        values.extend(
+            [
+                RegistryValue(algorithm_key, "MUIVerb", algorithm_label),
+                RegistryValue(algorithm_key, "Icon", icon),
+                RegistryValue(
+                    algorithm_key + r"\command",
+                    "",
+                    algorithm_command,
                 ),
             ]
         )
@@ -148,6 +165,7 @@ class WindowsDriveContextMenu:
         resize_label: str | None,
         unmount_label: str,
         password_label: str | None = None,
+        algorithm_label: str | None = None,
     ) -> None:
         if sys.platform != "win32" and self._registry is None:
             raise MountUnavailableError(
@@ -165,6 +183,7 @@ class WindowsDriveContextMenu:
             resize_label=resize_label,
             unmount_label=unmount_label,
             password_label=password_label,
+            algorithm_label=algorithm_label,
         )
         view = getattr(registry, "KEY_WOW64_64KEY", 0)
         for item in values:

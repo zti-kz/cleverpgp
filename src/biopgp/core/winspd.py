@@ -498,6 +498,25 @@ def resize_windows_block_volume(
         volume.close()
 
 
+def convert_windows_block_volume_algorithm(
+    path: Path,
+    master_key: bytes,
+    *,
+    algorithm: str,
+    progress: Callable[[int, int], None] | None = None,
+) -> Path:
+    """Atomically re-encrypt a closed Windows image with another method."""
+
+    target = resolve_file_hosted_container_path(path)
+    return EncryptedBlockVolume.convert_algorithm_atomic(
+        target,
+        master_key,
+        algorithm,
+        required_storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+        progress=progress,
+    )
+
+
 class WinSpdBlockDevice:
     """Expose any authenticated Clever PGP block view through WinSpd.
 

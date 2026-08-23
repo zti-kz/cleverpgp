@@ -67,13 +67,13 @@ def main(
         profile_service,
         FileCryptoService(repository),
         mount_manager=default_mount_manager(
-            force_system_disk=startup_action == "resize"
+            force_system_disk=startup_action in {"resize", "algorithm"}
         ),
         startup_container=container_path,
         startup_action=startup_action,
         startup_drive=startup_drive,
     )
-    compact_operation = startup_action in {"resize", "settings"}
+    compact_operation = startup_action in {"resize", "settings", "algorithm"}
     if container_path is None and not compact_operation:
         # The regular application uses the whole available desktop while
         # keeping the taskbar and standard window controls accessible.

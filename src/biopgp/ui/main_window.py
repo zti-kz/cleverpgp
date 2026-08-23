@@ -60,6 +60,7 @@ from biopgp.biometrics.key_protection import default_key_protector
 from biopgp.biometrics.service import BiometricService
 from biopgp.ui.about_dialog import AboutDialog
 from biopgp.ui.container_dialog import ContainerCreationDialog
+from biopgp.ui.disk_algorithm_dialog import DiskAlgorithmChangeDialog
 from biopgp.ui.face_dialog import FaceEnrollmentDialog, FaceVerificationDialog
 from biopgp.ui.hidden_volume_dialog import (
     HiddenVolumeCreationDialog,
@@ -414,6 +415,9 @@ class MainWindow(QMainWindow):
         if self._startup_action == "resize":
             self._startup_action = None
             QTimer.singleShot(0, self._show_resize_dialog)
+        elif self._startup_action == "algorithm":
+            self._startup_action = None
+            QTimer.singleShot(0, self._show_algorithm_dialog)
 
     def _show_dashboard(self) -> None:
         profile = self.repository.get_profile()
@@ -746,13 +750,7 @@ class MainWindow(QMainWindow):
             return self.mount_manager.resize_mounted_disk(
                 master_key,
                 logical_capacity=selected_capacity,
-                context_menu_labels=(
-                    tr("Открыть зашифрованный диск"),
-                    tr("Сведения о диске"),
-                    tr("Настройки доступа"),
-                    tr("Увеличить диск"),
-                    tr("Отключить зашифрованный диск"),
-                ),
+                context_menu_labels=self._ordinary_disk_context_labels(),
                 progress=progress,
             )
 
@@ -769,6 +767,73 @@ class MainWindow(QMainWindow):
                 self._hide_to_tray()
 
         self._start_key_progress_task(resize_disk, resized)
+
+    def _show_algorithm_dialog(self) -> None:
+        if not self._uses_windows_system_disk:
+            self._show_error(
+                "Изменение метода доступно только для виртуального диска Windows."
+            )
+            return
+        drive = self.mount_manager.mounted_drive
+        expected_drive = (
+            str(self._startup_drive).strip().upper().rstrip("\\/")
+            if self._startup_drive
+            else None
+        )
+        if expected_drive and len(expected_drive) == 1:
+            expected_drive += ":"
+        if drive is None or (expected_drive is not None and drive != expected_drive):
+            self._show_error("Выбранный виртуальный диск Clever PGP не подключён.")
+            return
+        container_path = self.mount_manager.mounted_container
+        current_algorithm = getattr(
+            self.mount_manager,
+            "mounted_algorithm",
+            None,
+        )
+        if container_path is None or current_algorithm is None:
+            self._show_error(
+                "Сведения о методе шифрования недоступны. "
+                "Отключите и снова откройте диск."
+            )
+            return
+        try:
+            dialog = DiskAlgorithmChangeDialog(
+                container_path,
+                str(current_algorithm),
+                self,
+            )
+        except (BioPGPError, OSError, TypeError, ValueError) as error:
+            self._show_error(str(error))
+            return
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected_algorithm = dialog.new_algorithm
+
+        def change_algorithm(
+            master_key: bytes,
+            progress: Callable[[int, str], None],
+        ) -> str:
+            return self.mount_manager.change_mounted_disk_algorithm(
+                master_key,
+                algorithm=selected_algorithm,
+                context_menu_labels=self._ordinary_disk_context_labels(),
+                progress=progress,
+            )
+
+        def changed(result: object) -> None:
+            remounted_drive = str(result)
+            self._sync_tray_state()
+            self._set_dashboard_status(
+                tr(
+                    "Метод шифрования диска {drive} изменён, диск снова подключён.",
+                    drive=remounted_drive,
+                )
+            )
+            if self._startup_drive is not None:
+                self._hide_to_tray()
+
+        self._start_key_progress_task(change_algorithm, changed)
 
     def _encrypt_file(self) -> None:
         source_name, _ = QFileDialog.getOpenFileName(self, tr("Выберите файл"))
@@ -985,13 +1050,7 @@ class MainWindow(QMainWindow):
                         label=volume_label,
                         file_system=file_system,
                         algorithm=disk_algorithm,
-                        context_menu_labels=(
-                            tr("Открыть зашифрованный диск"),
-                            tr("Сведения о диске"),
-                            tr("Настройки доступа"),
-                            tr("Увеличить диск"),
-                            tr("Отключить зашифрованный диск"),
-                        ),
+                        context_menu_labels=self._ordinary_disk_context_labels(),
                         progress=progress,
                     )
                 except Exception as error:
@@ -1072,6 +1131,18 @@ class MainWindow(QMainWindow):
             )
         )
 
+    @staticmethod
+    def _ordinary_disk_context_labels() -> tuple[str, ...]:
+        return (
+            tr("Открыть зашифрованный диск"),
+            tr("Сведения о диске"),
+            tr("Настройки доступа"),
+            "",
+            tr("Изменить метод шифрования"),
+            tr("Увеличить диск"),
+            tr("Отключить зашифрованный диск"),
+        )
+
     def _disk_backend_available(self) -> bool:
         if self._uses_windows_system_disk:
             return winspd_driver_available()
@@ -1148,13 +1219,7 @@ class MainWindow(QMainWindow):
                     return self.mount_manager.mount(
                         source,
                         master_key,
-                        context_menu_labels=(
-                            tr("Открыть зашифрованный диск"),
-                            tr("Сведения о диске"),
-                            tr("Настройки доступа"),
-                            tr("Увеличить диск"),
-                            tr("Отключить зашифрованный диск"),
-                        ),
+                        context_menu_labels=self._ordinary_disk_context_labels(),
                         progress=progress,
                     )
                 return self.mount_manager.mount(

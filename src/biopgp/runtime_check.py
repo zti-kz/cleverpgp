@@ -189,11 +189,13 @@ def run_virtual_disk(marker: Path) -> int:
 def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
     from nacl import secret, utils
 
+    from biopgp.core.disk_crypto import available_disk_ciphers
     from biopgp.core.disk_control import DiskControlStore, send_disk_control_command
     from biopgp.core.disk_host import WinSpdHostManager
     from biopgp.core.errors import MountUnavailableError
     from biopgp.core.winspd import (
         WinSpdLibrary,
+        convert_windows_block_volume_algorithm,
         create_windows_block_volume,
         open_windows_block_volume,
         resize_windows_block_volume,
@@ -221,9 +223,43 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             master_key,
             logical_capacity=resized_capacity,
         )
+        conversion_payload = hashlib.sha256(
+            b"Clever PGP packaged algorithm conversion check"
+        ).digest() * 128
         with open_windows_block_volume(container_path, master_key) as resized:
             if resized.logical_capacity != resized_capacity:
                 raise RuntimeError("Увеличение блочного контейнера не сохранилось.")
+            resized.write_blocks(1, conversion_payload)
+            source_algorithm = resized.algorithm
+        alternative_ciphers = tuple(
+            cipher
+            for cipher in available_disk_ciphers()
+            if cipher.identifier != source_algorithm
+        )
+        conversion_algorithm = source_algorithm
+        conversion_seconds = 0.0
+        conversion_status = "alternative-unavailable"
+        if alternative_ciphers:
+            conversion_algorithm = alternative_ciphers[0].identifier
+            conversion_started = perf_counter()
+            convert_windows_block_volume_algorithm(
+                container_path,
+                master_key,
+                algorithm=conversion_algorithm,
+            )
+            conversion_seconds = perf_counter() - conversion_started
+            conversion_status = "verified"
+        with open_windows_block_volume(container_path, master_key) as converted:
+            if converted.logical_capacity != resized_capacity:
+                raise RuntimeError(
+                    "Размер диска изменился при смене метода шифрования."
+                )
+            if converted.algorithm != conversion_algorithm:
+                raise RuntimeError("Новый метод шифрования не сохранился.")
+            if converted.read_blocks(1, 1) != conversion_payload:
+                raise RuntimeError(
+                    "Данные не сохранились после смены метода шифрования."
+                )
         manager = WinSpdHostManager()
         manager.start(
             container_path,
@@ -308,6 +344,10 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 "external_control": "authenticated-loopback",
                 "restart_recovery": "verified",
                 "resized_capacity_mib": resized_capacity // (1024 * 1024),
+                "algorithm_conversion": conversion_status,
+                "algorithm_before": source_algorithm,
+                "algorithm_after": conversion_algorithm,
+                "algorithm_conversion_seconds": conversion_seconds,
             },
             ensure_ascii=False,
             indent=2,

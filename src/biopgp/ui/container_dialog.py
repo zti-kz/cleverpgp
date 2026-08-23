@@ -46,6 +46,26 @@ VOLUME_KIND_NORMAL = "normal"
 VOLUME_KIND_HIDDEN = "hidden"
 
 
+def disk_algorithm_caption(identifier: str) -> str:
+    if identifier == XCHACHA20_POLY1305:
+        return tr("XChaCha20-Poly1305 — переносимый (рекомендуется)")
+    return tr("AES-256-GCM — аппаратно ускоряемый")
+
+
+def disk_algorithm_description(identifier: str) -> str:
+    if identifier == XCHACHA20_POLY1305:
+        return tr(
+            "Потоковое преобразование с расширенным 192-битным одноразовым "
+            "параметром и кодом аутентификации. Эффективно работает программно "
+            "и одинаково доступно в Windows и Ubuntu."
+        )
+    return tr(
+        "Симметричное блочное преобразование с 256-битным ключом в режиме "
+        "аутентифицированного шифрования. Использует аппаратное ускорение "
+        "процессора; диск требует такой поддержки и на другом компьютере."
+    )
+
+
 class ContainerCreationDialog(QDialog):
     def __init__(
         self,
@@ -235,11 +255,10 @@ class ContainerCreationDialog(QDialog):
         self.algorithm_input = QComboBox()
         self.algorithm_input.setObjectName("diskAlgorithmInput")
         for cipher in available_disk_ciphers():
-            if cipher.identifier == XCHACHA20_POLY1305:
-                caption = "XChaCha20-Poly1305 — переносимый (рекомендуется)"
-            else:
-                caption = "AES-256-GCM — аппаратно ускоряемый"
-            self.algorithm_input.addItem(caption, cipher.identifier)
+            self.algorithm_input.addItem(
+                disk_algorithm_caption(cipher.identifier),
+                cipher.identifier,
+            )
         self.algorithm_description = QLabel()
         self.algorithm_description.setObjectName("muted")
         self.algorithm_description.setWordWrap(True)
@@ -486,19 +505,9 @@ class ContainerCreationDialog(QDialog):
                 "с 192-битным одноразовым параметром. Это сохраняет единую "
                 "проверенную структуру скрытого диска."
             )
-        elif self.disk_algorithm == XCHACHA20_POLY1305:
-            description = (
-                "Потоковое преобразование с расширенным 192-битным одноразовым "
-                "параметром и кодом аутентификации. Эффективно работает программно "
-                "и одинаково доступно в Windows и Ubuntu."
-            )
         else:
-            description = (
-                "Симметричное блочное преобразование с 256-битным ключом в режиме "
-                "аутентифицированного шифрования. Использует аппаратное ускорение "
-                "процессора; диск требует такой поддержки и на другом компьютере."
-            )
-        self.algorithm_description.setText(tr(description))
+            description = disk_algorithm_description(self.disk_algorithm)
+        self.algorithm_description.setText(description)
 
     def _update_file_system_description(self, *_: object) -> None:
         if self.file_system == "EXFAT":

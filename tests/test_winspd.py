@@ -24,11 +24,13 @@ from biopgp.core.winspd import (
     WinSpdBlockDevice,
     WinSpdError,
     WINDOWS_BLOCK_STORAGE_FORMAT,
+    convert_windows_block_volume_algorithm,
     create_hidden_windows_block_volume,
     initialize_windows_partition,
     open_windows_block_volume,
     resize_windows_block_volume,
 )
+from biopgp.core.disk_crypto import AES256_GCM, disk_cipher_available
 
 
 class UnusedLibrary:
@@ -250,6 +252,35 @@ def test_windows_backend_can_grow_closed_container(tmp_path: Path) -> None:
     with open_windows_block_volume(path, key) as reopened:
         assert reopened.logical_capacity == 40 * 1024 * 1024
         assert reopened.read_blocks(0, 1) == marker
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_windows_backend_can_atomically_change_algorithm(tmp_path: Path) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    path = tmp_path / "convert-windows.cpgv"
+    marker = b"partition-and-files".ljust(LOGICAL_BLOCK_SIZE, b"!")
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=32 * 1024 * 1024,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    )
+    volume.write_blocks(9, marker)
+    volume.close()
+
+    result = convert_windows_block_volume_algorithm(
+        path,
+        key,
+        algorithm=AES256_GCM,
+    )
+
+    assert result == path.resolve()
+    with open_windows_block_volume(path, key) as reopened:
+        assert reopened.algorithm == AES256_GCM
+        assert reopened.read_blocks(9, 1) == marker
 
 
 def test_hidden_windows_image_prepares_both_partition_views(

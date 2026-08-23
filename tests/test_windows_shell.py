@@ -103,6 +103,7 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
         settings_label="Access settings",
         resize_label="Increase disk",
         unmount_label="Unmount encrypted disk",
+        algorithm_label="Change encryption method",
     )
     lookup = {(item.subkey, item.name): item.value for item in values}
 
@@ -134,6 +135,12 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
     assert "--resize-drive" in str(resize_command)
     assert "%1" in str(resize_command)
     assert "cmd.exe" not in str(resize_command).lower()
+    algorithm_command = lookup[
+        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Algorithm\command", "")
+    ]
+    assert "--change-disk-algorithm" in str(algorithm_command)
+    assert "%1" in str(algorithm_command)
+    assert "cmd.exe" not in str(algorithm_command).lower()
 
 
 def test_context_menu_registers_and_removes_only_its_own_tree(
@@ -159,6 +166,7 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
         settings_label="Настройки доступа",
         resize_label="Увеличить диск",
         unmount_label="Отключить зашифрованный диск",
+        algorithm_label="Изменить метод шифрования",
     )
 
     assert SYSTEM_DRIVE_MENU_KEY in registry.keys
@@ -193,6 +201,7 @@ def test_hidden_disk_menu_omits_unsupported_resize_action(tmp_path: Path) -> Non
     )
 
     assert not any("\\Resize" in value.subkey for value in values)
+    assert not any("\\Algorithm" in value.subkey for value in values)
     password_command = next(
         value.value
         for value in values

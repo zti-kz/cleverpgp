@@ -59,6 +59,17 @@ def test_resize_drive_mode_forces_system_disk_window() -> None:
     )
 
 
+def test_algorithm_change_mode_forces_system_disk_window() -> None:
+    with patch("biopgp.app.main", return_value=0) as application_main:
+        result = main(["--change-disk-algorithm", "Z:\\"])
+
+    assert result == 0
+    application_main.assert_called_once_with(
+        startup_action="algorithm",
+        startup_drive="Z:\\",
+    )
+
+
 def test_regular_mode_opens_main_application() -> None:
     with patch("biopgp.app.main", return_value=3) as application_main:
         result = main([])
@@ -280,6 +291,29 @@ def test_explorer_resize_launch_uses_compact_window() -> None:
 
     assert result == 0
     assert window_type.call_args.kwargs["startup_action"] == "resize"
+    assert window_type.call_args.kwargs["startup_drive"] == "Z:"
+    window_type.return_value.show.assert_called_once_with()
+    window_type.return_value.showMaximized.assert_not_called()
+
+
+def test_explorer_algorithm_change_uses_compact_window() -> None:
+    with (
+        patch("biopgp.app.QApplication") as application_type,
+        patch("biopgp.app.ProfileRepository"),
+        patch("biopgp.app.ProfileService"),
+        patch("biopgp.app.FileCryptoService"),
+        patch("biopgp.app.MainWindow") as window_type,
+        patch("biopgp.app.line_icon"),
+    ):
+        application_type.return_value.exec.return_value = 0
+
+        result = application_main(
+            startup_action="algorithm",
+            startup_drive="Z:",
+        )
+
+    assert result == 0
+    assert window_type.call_args.kwargs["startup_action"] == "algorithm"
     assert window_type.call_args.kwargs["startup_drive"] == "Z:"
     window_type.return_value.show.assert_called_once_with()
     window_type.return_value.showMaximized.assert_not_called()

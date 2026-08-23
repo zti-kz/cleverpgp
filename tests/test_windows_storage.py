@@ -11,7 +11,11 @@ from nacl import pwhash, secret, utils
 
 from biopgp.core.block_volume import EncryptedBlockVolume
 from biopgp.core.disk_control import DiskControlEndpoint, DiskControlRecord
-from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
+from biopgp.core.disk_crypto import (
+    AES256_GCM,
+    DEFAULT_DISK_ALGORITHM,
+    disk_cipher_available,
+)
 from biopgp.core.errors import MountUnavailableError, ValidationError
 from biopgp.core.hidden_volume import HiddenVolumeDescriptor
 from biopgp.core.opaque_volume_header import (
@@ -924,7 +928,16 @@ def test_system_manager_publishes_and_removes_external_control_state(
             FakeStore.removed = selected
 
     class FakeContextMenu:
-        registered: tuple[str, str, str, str, str | None, str, str] | None = None
+        registered: tuple[
+            str,
+            str,
+            str,
+            str,
+            str | None,
+            str | None,
+            str,
+            str,
+        ] | None = None
         removed = False
 
         def register(
@@ -937,6 +950,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
             resize_label: str,
             unmount_label: str,
             password_label: str | None = None,
+            algorithm_label: str | None = None,
         ) -> None:
             type(self).registered = (
                 drive,
@@ -944,6 +958,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
                 info_label,
                 settings_label,
                 password_label,
+                algorithm_label,
                 resize_label,
                 unmount_label,
             )
@@ -984,6 +999,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
         "Open disk",
         "Сведения о диске",
         "Access settings",
+        None,
         None,
         "Увеличить диск",
         "Unmount disk",
@@ -1395,3 +1411,208 @@ def test_system_manager_can_retry_only_ntfs_extension_after_uac_cancel(
         ) == "Z:"
 
     unmount.assert_not_called()
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_system_manager_changes_algorithm_and_restores_mounted_disk(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "algorithm-system.cpgv"
+    capacity = 32 * 1024 * 1024
+    marker = b"preserved filesystem data".ljust(4096, b"!")
+    with EncryptedBlockVolume.create(
+        container_path,
+        key,
+        logical_capacity=capacity,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    ) as volume:
+        volume.write_blocks(12, marker)
+        volume.flush()
+    original_info = mounted_volume(
+        disk_size=capacity,
+        partition_size=capacity - 1024 * 1024,
+    )
+    converted_info = replace(original_info, disk_number=8)
+    old_record = DiskControlRecord(
+        b"v" * 16,
+        "Z:",
+        23456,
+        4321,
+        b"protected",
+        tmp_path / "old-record.json",
+    )
+    new_record = replace(
+        old_record,
+        volume_id=b"n" * 16,
+        port=23457,
+        path=tmp_path / "new-record.json",
+    )
+    state = {"algorithm": DEFAULT_DISK_ALGORITHM}
+
+    class ActiveProcessManager(FakeProcessManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.running = True
+
+    class Store:
+        @staticmethod
+        def send(*_args: object, **_kwargs: object) -> None:
+            return None
+
+        @staticmethod
+        def algorithm(_record: object) -> str:
+            return state["algorithm"]
+
+    process = ActiveProcessManager()
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process,
+        recover_existing=False,
+    )
+    manager._control_store = Store()  # type: ignore[assignment]
+    manager._drive = "Z:"
+    manager._container_path = container_path
+    manager._control_record = old_record
+    manager._context_menu_labels = ("Open", "Settings", "Unmount")
+    events: list[str] = []
+    progress: list[tuple[int, str]] = []
+
+    def unmount() -> None:
+        events.append("unmount")
+        process.running = False
+        manager._drive = None
+        manager._container_path = None
+        manager._control_record = None
+
+    def mount(
+        path: Path,
+        selected_key: bytes,
+        *,
+        context_menu_labels: tuple[str, ...] | None,
+        progress: object = None,
+    ) -> str:
+        events.append("remount")
+        assert path == container_path
+        assert selected_key == key
+        assert context_menu_labels == ("Open", "Settings", "Unmount")
+        with EncryptedBlockVolume.open(path, selected_key) as converted:
+            state["algorithm"] = converted.algorithm
+        process.running = True
+        manager._drive = "Z:"
+        manager._container_path = container_path
+        manager._control_record = new_record
+        if progress is not None:
+            progress(100, "mounted")  # type: ignore[operator]
+        return "Z:"
+
+    with (
+        patch(
+            "biopgp.core.windows_storage.inspect_windows_volume",
+            side_effect=[original_info, converted_info],
+        ),
+        patch.object(manager, "unmount", side_effect=unmount),
+        patch.object(manager, "mount", side_effect=mount),
+    ):
+        result = manager.change_mounted_disk_algorithm(
+            key,
+            algorithm=AES256_GCM,
+            progress=lambda value, message: progress.append((value, message)),
+        )
+
+    assert result == "Z:"
+    assert events == ["unmount", "remount"]
+    assert progress[-1] == (100, "Метод шифрования диска изменён")
+    with EncryptedBlockVolume.open(container_path, key) as converted:
+        assert converted.algorithm == AES256_GCM
+        assert converted.read_blocks(12, 1) == marker
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_system_manager_remounts_original_after_conversion_failure(
+    tmp_path: Path,
+) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    container_path = tmp_path / "failed-algorithm-system.cpgv"
+    capacity = 32 * 1024 * 1024
+    with EncryptedBlockVolume.create(
+        container_path,
+        key,
+        logical_capacity=capacity,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    ):
+        pass
+    info = mounted_volume(
+        disk_size=capacity,
+        partition_size=capacity - 1024 * 1024,
+    )
+    record = DiskControlRecord(
+        b"v" * 16,
+        "Z:",
+        23456,
+        4321,
+        b"protected",
+        tmp_path / "record.json",
+    )
+
+    class ActiveProcessManager(FakeProcessManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.running = True
+
+    class Store:
+        @staticmethod
+        def send(*_args: object, **_kwargs: object) -> None:
+            return None
+
+    process = ActiveProcessManager()
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process,
+        recover_existing=False,
+    )
+    manager._control_store = Store()  # type: ignore[assignment]
+    manager._drive = "Z:"
+    manager._container_path = container_path
+    manager._control_record = record
+    events: list[str] = []
+
+    def unmount() -> None:
+        events.append("unmount")
+        process.running = False
+        manager._drive = None
+        manager._container_path = None
+        manager._control_record = None
+
+    def remount(*_args: object, **_kwargs: object) -> str:
+        events.append("remount-original")
+        process.running = True
+        manager._drive = "Z:"
+        manager._container_path = container_path
+        manager._control_record = record
+        return "Z:"
+
+    with (
+        patch(
+            "biopgp.core.windows_storage.inspect_windows_volume",
+            return_value=info,
+        ),
+        patch(
+            "biopgp.core.windows_storage.convert_windows_block_volume_algorithm",
+            side_effect=OSError("conversion failed"),
+        ),
+        patch.object(manager, "unmount", side_effect=unmount),
+        patch.object(manager, "mount", side_effect=remount),
+    ):
+        with pytest.raises(OSError, match="conversion failed"):
+            manager.change_mounted_disk_algorithm(
+                key,
+                algorithm=AES256_GCM,
+            )
+
+    assert events == ["unmount", "remount-original"]
+    assert manager.mounted_drive == "Z:"

@@ -71,6 +71,14 @@ class AutomaticMountManager:
         return self._mounted_container
 
     @property
+    def mounted_algorithm(self) -> str | None:
+        manager = self._selected_active_manager()
+        if manager is None or manager is not self._system_manager:
+            return None
+        value = getattr(manager, "mounted_algorithm", None)
+        return str(value) if value is not None else None
+
+    @property
     def uses_windows_system_disk(self) -> bool:
         manager = self._selected_active_manager()
         return manager is not None and manager is self._system_manager
@@ -231,6 +239,19 @@ class AutomaticMountManager:
     def resize_mounted_disk(self, *args: object, **kwargs: object) -> str:
         manager = self._require_system_manager()
         return str(manager.resize_mounted_disk(*args, **kwargs))
+
+    def change_mounted_disk_algorithm(
+        self,
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        manager = self._require_system_manager()
+        changer = getattr(manager, "change_mounted_disk_algorithm", None)
+        if not callable(changer):
+            raise MountUnavailableError(
+                "Изменение метода шифрования этого диска недоступно."
+            )
+        return str(changer(*args, **kwargs))
 
     def change_opaque_password(self, *args: object, **kwargs: object) -> Path:
         manager = self._require_system_manager()

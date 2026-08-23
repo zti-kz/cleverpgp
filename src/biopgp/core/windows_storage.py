@@ -15,7 +15,7 @@ from biopgp.core.disk_control import (
     DiskControlRecord,
     DiskControlStore,
 )
-from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
+from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM, require_disk_cipher
 from biopgp.core.disk_host import WinSpdHostManager
 from biopgp.core.errors import MountUnavailableError
 from biopgp.core.opaque_volume_header import (
@@ -30,6 +30,7 @@ from biopgp.core.winspd import (
     WinSpdLibrary,
     create_hidden_windows_block_volume,
     create_windows_block_volume,
+    convert_windows_block_volume_algorithm,
     open_windows_block_volume,
     resize_windows_block_volume,
 )
@@ -640,6 +641,13 @@ class WindowsSystemDiskManager:
     def mounted_container(self) -> Path | None:
         return self._container_path if self.mounted_drive is not None else None
 
+    @property
+    def mounted_algorithm(self) -> str | None:
+        if self.mounted_drive is None or self._control_record is None:
+            return None
+        reader = getattr(self._control_store, "algorithm", None)
+        return reader(self._control_record) if callable(reader) else None
+
     def inspect_mounted_disk(self) -> WindowsVolumeInfo:
         drive = self.mounted_drive
         record = self._control_record
@@ -746,6 +754,7 @@ class WindowsSystemDiskManager:
                 container_path=container_path,
                 algorithm=algorithm,
                 context_menu_labels=context_menu_labels,
+                supports_algorithm_change=True,
             )
         except Exception:
             self._process_manager.stop()
@@ -975,6 +984,7 @@ class WindowsSystemDiskManager:
                 container_path=container_path,
                 algorithm=algorithm,
                 context_menu_labels=context_menu_labels,
+                supports_algorithm_change=True,
             )
         except Exception:
             self._process_manager.stop()
@@ -1352,6 +1362,130 @@ class WindowsSystemDiskManager:
             progress(100, "Виртуальный диск увеличен")
         return remounted_drive
 
+    def change_mounted_disk_algorithm(
+        self,
+        master_key: bytes,
+        *,
+        algorithm: str,
+        context_menu_labels: tuple[str, ...] | None = None,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> str:
+        """Re-encrypt an active ordinary disk and restore its mounted state."""
+
+        drive = self.mounted_drive
+        source = self._container_path
+        if drive is None or self._control_record is None:
+            raise MountUnavailableError(
+                "Активный виртуальный диск Clever PGP не найден."
+            )
+        if source is None or not source.is_file():
+            raise MountUnavailableError(
+                "Путь подключённого контейнера недоступен. "
+                "Отключите и снова откройте диск."
+            )
+        selected_cipher = require_disk_cipher(algorithm)
+        labels = context_menu_labels or self._context_menu_labels
+        if progress is not None:
+            progress(2, "Проверка подключённого диска")
+        original = self.inspect_mounted_disk()
+        validate_cleverpgp_volume(
+            original,
+            expected_disk_size=original.disk_size,
+        )
+        volume = open_windows_block_volume(source, master_key)
+        try:
+            current_algorithm = volume.algorithm
+            if volume.logical_capacity != original.disk_size:
+                raise MountUnavailableError(
+                    "Размер контейнера не совпадает с подключённым диском."
+                )
+        finally:
+            volume.close()
+        if current_algorithm == selected_cipher.identifier:
+            if progress is not None:
+                progress(100, "Выбранный метод уже используется")
+            return drive
+
+        if progress is not None:
+            progress(5, "Безопасное отключение диска")
+        self.unmount()
+
+        def conversion_progress(completed: int, total: int) -> None:
+            if progress is not None:
+                fraction = completed / total if total else 1.0
+                progress(
+                    8 + round(fraction * 72),
+                    "Преобразование зашифрованных блоков",
+                )
+
+        try:
+            convert_windows_block_volume_algorithm(
+                source,
+                master_key,
+                algorithm=selected_cipher.identifier,
+                progress=conversion_progress,
+            )
+            if progress is not None:
+                progress(82, "Проверка и повторное подключение диска")
+            remounted = self.mount(
+                source,
+                master_key,
+                context_menu_labels=labels,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda value, message: progress(
+                        82 + round(value * 0.16),
+                        message,
+                    )
+                ),
+            )
+        except Exception:
+            if self.mounted_drive is None:
+                try:
+                    self.mount(
+                        source,
+                        master_key,
+                        context_menu_labels=labels,
+                    )
+                except Exception as remount_error:
+                    raise MountUnavailableError(
+                        "Преобразование остановлено, и диск не удалось снова "
+                        "подключить. Контейнер сохранён; откройте его повторно."
+                    ) from remount_error
+            raise
+
+        converted = self.inspect_mounted_disk()
+        validate_cleverpgp_volume(
+            converted,
+            expected_disk_size=original.disk_size,
+        )
+        if (
+            converted.partition_size != original.partition_size
+            or converted.partition_offset != original.partition_offset
+        ):
+            raise MountUnavailableError(
+                "Разметка диска изменилась после преобразования."
+            )
+        if original.unique_id and converted.unique_id != original.unique_id:
+            raise MountUnavailableError(
+                "Идентификатор диска изменился после преобразования."
+            )
+        if (
+            original.serial_number
+            and converted.serial_number != original.serial_number
+        ):
+            raise MountUnavailableError(
+                "Серийный номер диска изменился после преобразования."
+            )
+        if self.mounted_algorithm != selected_cipher.identifier:
+            raise MountUnavailableError(
+                "Не удалось подтвердить новый метод шифрования диска."
+            )
+        if progress is not None:
+            progress(100, "Метод шифрования диска изменён")
+        return remounted
+
     def unmount(self) -> None:
         disk = self._disk
         drive = self._drive
@@ -1420,6 +1554,7 @@ class WindowsSystemDiskManager:
         container_path: Path,
         algorithm: str,
         context_menu_labels: tuple[str, ...] | None,
+        supports_algorithm_change: bool = False,
     ) -> DiskControlRecord | None:
         endpoint = getattr(self._process_manager, "control_endpoint", None)
         process_id = getattr(self._process_manager, "process_id", None)
@@ -1438,6 +1573,11 @@ class WindowsSystemDiskManager:
             settings_label = "Настройки доступа"
             resize_label = "Увеличить диск"
             password_label = None
+            algorithm_label = (
+                "Изменить метод шифрования"
+                if supports_algorithm_change
+                else None
+            )
             unmount_label = "Отключить зашифрованный диск"
         elif len(context_menu_labels) == 2:
             open_label, unmount_label = context_menu_labels
@@ -1445,22 +1585,26 @@ class WindowsSystemDiskManager:
             settings_label = "Настройки доступа"
             resize_label = "Увеличить диск"
             password_label = None
+            algorithm_label = None
         elif len(context_menu_labels) == 3:
             open_label, settings_label, unmount_label = context_menu_labels
             info_label = "Сведения о диске"
             resize_label = "Увеличить диск"
             password_label = None
+            algorithm_label = None
         elif len(context_menu_labels) == 4:
             open_label, info_label, settings_label, unmount_label = (
                 context_menu_labels
             )
             resize_label = "Увеличить диск"
             password_label = None
+            algorithm_label = None
         elif len(context_menu_labels) == 5:
             open_label, info_label, settings_label, resize_label, unmount_label = (
                 context_menu_labels
             )
             password_label = None
+            algorithm_label = None
         elif len(context_menu_labels) == 6:
             (
                 open_label,
@@ -1470,10 +1614,23 @@ class WindowsSystemDiskManager:
                 resize_label,
                 unmount_label,
             ) = context_menu_labels
+            algorithm_label = None
+        elif len(context_menu_labels) == 7:
+            (
+                open_label,
+                info_label,
+                settings_label,
+                password_label,
+                algorithm_label,
+                resize_label,
+                unmount_label,
+            ) = context_menu_labels
         else:
             raise ValueError(
-                "Virtual disk context menu requires two to six labels."
+                "Virtual disk context menu requires two to seven labels."
             )
+        if not supports_algorithm_change:
+            algorithm_label = None
         try:
             self._context_menu.register(
                 drive,
@@ -1483,6 +1640,7 @@ class WindowsSystemDiskManager:
                 resize_label=resize_label or None,
                 unmount_label=unmount_label,
                 password_label=password_label or None,
+                algorithm_label=algorithm_label or None,
             )
         except OSError:
             pass

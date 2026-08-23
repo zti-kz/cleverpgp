@@ -90,6 +90,11 @@ def main(argv: list[str] | None = None) -> int:
             startup_action="resize",
             startup_drive=arguments[1],
         )
+    if arguments[:1] == ["--change-disk-algorithm"] and len(arguments) == 2:
+        return application_main(
+            startup_action="algorithm",
+            startup_drive=arguments[1],
+        )
     if arguments[:1] == ["--container"] and len(arguments) == 2:
         return application_main(Path(arguments[1]).expanduser().resolve())
     if arguments[:1] == ["--import-key"] and len(arguments) == 2:

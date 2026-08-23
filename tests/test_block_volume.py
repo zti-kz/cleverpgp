@@ -18,7 +18,11 @@ from biopgp.core.block_volume import (
     EncryptedBlockVolume,
     InvalidBlockVolumeError,
 )
-from biopgp.core.disk_crypto import AES256_GCM, disk_cipher_available
+from biopgp.core.disk_crypto import (
+    AES256_GCM,
+    XCHACHA20_POLY1305,
+    disk_cipher_available,
+)
 from biopgp.core.errors import ValidationError
 from biopgp.core.mapped_stream import MappedFileStream
 
@@ -487,3 +491,208 @@ def test_completed_resize_cannot_be_rolled_back_by_truncating_file(
 
     with pytest.raises(InvalidBlockVolumeError, match="подтверждённому заголовку"):
         EncryptedBlockVolume.open(path, key)
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_algorithm_conversion_is_atomic_and_preserves_plaintext(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "algorithm-conversion.cpgv"
+    storage_format = "TEST-WINDOWS-BLOCKS"
+    first = b"first-block".ljust(LOGICAL_BLOCK_SIZE, b"!")
+    last = b"last-block".ljust(LOGICAL_BLOCK_SIZE, b"?")
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=2 * 1024 * 1024,
+        label="Algorithm conversion",
+        storage_format=storage_format,
+        algorithm=XCHACHA20_POLY1305,
+    ) as source:
+        original_volume_id = source.volume_id
+        source.write_blocks(0, first)
+        source.write_blocks(source.block_count - 1, last)
+        source.flush()
+    before = path.read_bytes()
+    progress: list[tuple[int, int]] = []
+
+    result = EncryptedBlockVolume.convert_algorithm_atomic(
+        path,
+        key,
+        AES256_GCM,
+        required_storage_format=storage_format,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert result == path.resolve()
+    assert path.read_bytes() != before
+    assert not tuple(tmp_path.glob(".algorithm-conversion.cpgv.algorithm-*.tmp"))
+    assert progress[0][0] == 0
+    assert progress[-1][0] == progress[-1][1]
+    with EncryptedBlockVolume.open(path, key) as converted:
+        assert converted.algorithm == AES256_GCM
+        assert converted.storage_format == storage_format
+        assert converted.label == "Algorithm conversion"
+        assert converted.volume_id != original_volume_id
+        assert converted.read_blocks(0, 1) == first
+        assert converted.read_blocks(converted.block_count - 1, 1) == last
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_interrupted_algorithm_conversion_keeps_original_image(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "interrupted-algorithm.cpgv"
+    storage_format = "TEST-WINDOWS-BLOCKS"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=2 * 1024 * 1024,
+        storage_format=storage_format,
+    ) as source:
+        source.write_blocks(17, b"preserved".ljust(LOGICAL_BLOCK_SIZE, b"."))
+        source.flush()
+    before = path.read_bytes()
+
+    def interrupt(completed: int, _total: int) -> None:
+        if completed:
+            raise OSError("simulated conversion interruption")
+
+    with pytest.raises(OSError, match="simulated conversion interruption"):
+        EncryptedBlockVolume.convert_algorithm_atomic(
+            path,
+            key,
+            AES256_GCM,
+            required_storage_format=storage_format,
+            progress=interrupt,
+        )
+
+    assert path.read_bytes() == before
+    assert not tuple(tmp_path.glob(".interrupted-algorithm.cpgv.algorithm-*.tmp"))
+    with EncryptedBlockVolume.open(path, key) as reopened:
+        assert reopened.algorithm == XCHACHA20_POLY1305
+        assert reopened.read_blocks(17, 1).startswith(b"preserved")
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_algorithm_conversion_verifies_every_written_block_before_replace(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "verify-algorithm.cpgv"
+    storage_format = "TEST-WINDOWS-BLOCKS"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+        storage_format=storage_format,
+    ):
+        pass
+    before = path.read_bytes()
+    original_open = EncryptedBlockVolume.open
+
+    def corrupt_replacement(
+        candidate: Path,
+        selected_key: bytes,
+    ) -> EncryptedBlockVolume:
+        selected = Path(candidate)
+        if ".algorithm-" in selected.name:
+            with selected.open("r+b") as stream:
+                stream.seek(HEADER_PREFIX.size + HEADER_AREA_SIZE + NONCE_SIZE)
+                value = stream.read(1)
+                stream.seek(-1, 1)
+                stream.write(bytes([value[0] ^ 1]))
+        return original_open(selected, selected_key)
+
+    with patch.object(
+        EncryptedBlockVolume,
+        "open",
+        side_effect=corrupt_replacement,
+    ):
+        with pytest.raises(BlockIntegrityError):
+            EncryptedBlockVolume.convert_algorithm_atomic(
+                path,
+                key,
+                AES256_GCM,
+                required_storage_format=storage_format,
+            )
+
+    assert path.read_bytes() == before
+    assert not tuple(tmp_path.glob(".verify-algorithm.cpgv.algorithm-*.tmp"))
+
+
+def test_algorithm_conversion_refuses_wrong_format_and_insufficient_space(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "algorithm-validation.cpgv"
+    storage_format = "TEST-WINDOWS-BLOCKS"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+        storage_format=storage_format,
+    ):
+        pass
+    before = path.read_bytes()
+
+    with pytest.raises(ValidationError, match="типа"):
+        EncryptedBlockVolume.convert_algorithm_atomic(
+            path,
+            key,
+            AES256_GCM,
+            required_storage_format="ANOTHER-FORMAT",
+        )
+    with patch(
+        "biopgp.core.block_volume.shutil.disk_usage",
+        return_value=SimpleNamespace(free=0),
+    ):
+        with pytest.raises(ValidationError, match="свободного места"):
+            EncryptedBlockVolume.convert_algorithm_atomic(
+                path,
+                key,
+                AES256_GCM,
+                required_storage_format=storage_format,
+            )
+
+    assert path.read_bytes() == before
+    assert not tuple(tmp_path.glob(".*.algorithm-*.tmp"))
+
+
+def test_algorithm_conversion_noop_does_not_rewrite_container(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "same-algorithm.cpgv"
+    storage_format = "TEST-WINDOWS-BLOCKS"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+        storage_format=storage_format,
+    ):
+        pass
+    before = path.read_bytes()
+    progress: list[tuple[int, int]] = []
+
+    EncryptedBlockVolume.convert_algorithm_atomic(
+        path,
+        key,
+        XCHACHA20_POLY1305,
+        required_storage_format=storage_format,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert path.read_bytes() == before
+    assert progress == [(1, 1)]

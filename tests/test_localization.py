@@ -23,6 +23,9 @@ from biopgp.core.storage import ProfileRepository  # noqa: E402
 from biopgp.localization import available_languages, set_language, tr  # noqa: E402
 from biopgp.ui.about_dialog import AboutDialog  # noqa: E402
 from biopgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
+from biopgp.ui.disk_algorithm_dialog import (  # noqa: E402
+    DiskAlgorithmChangeDialog,
+)
 from biopgp.ui.disk_password_dialog import (  # noqa: E402
     DiskPasswordChangeDialog,
 )
@@ -38,6 +41,7 @@ from biopgp.ui.key_dialogs import (  # noqa: E402
 )
 from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
 from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
+from biopgp.core.disk_crypto import XCHACHA20_POLY1305  # noqa: E402
 
 
 def _dialog_text() -> str:
@@ -266,6 +270,13 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
         public_key_path,
         window,
     )
+    algorithm_container = tmp_path / "algorithm.cpgv"
+    algorithm_container.write_bytes(b"ciphertext")
+    algorithm_dialog = DiskAlgorithmChangeDialog(
+        algorithm_container,
+        XCHACHA20_POLY1305,
+        window,
+    )
 
     russian_letters = re.compile(r"[А-Яа-яЁё]")
     untranslated = [
@@ -282,12 +293,14 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
             contacts,
             recipients,
             public_key_import,
+            algorithm_dialog,
         )
         for value in _visible_strings(dialog)
         if russian_letters.search(value)
     ]
     assert untranslated == []
 
+    algorithm_dialog.close()
     public_key_import.close()
     recipients.close()
     contacts.close()
