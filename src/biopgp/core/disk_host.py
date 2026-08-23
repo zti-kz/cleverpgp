@@ -23,6 +23,7 @@ from biopgp.core.disk_control import (
 from biopgp.core.errors import MountUnavailableError, ValidationError
 from biopgp.core.hidden_volume import HiddenVolumeDescriptor
 from biopgp.core.opaque_block_volume import OpaqueBlockVolume
+from biopgp.core.volume_path import resolve_file_hosted_container_path
 from biopgp.core.opaque_volume_header import (
     PROTECTED_TRANSFER_SIZE,
     OpaqueVolumeHeader,
@@ -254,7 +255,7 @@ class DiskHostExchange:
         if request.response_path.is_file():
             return self._consume_response(request)
         raise MountUnavailableError(
-            "Самостоятельный процесс системного диска не ответил вовремя."
+            "Самостоятельный процесс виртуального диска не ответил вовремя."
         )
 
     def cleanup(self, request: DiskHostRequest) -> None:
@@ -278,7 +279,7 @@ class DiskHostExchange:
                 raise ValueError("Disk host response identity is invalid.")
             if payload.get("status") == "error":
                 raise MountUnavailableError(
-                    str(payload.get("error") or "Не удалось запустить системный диск.")
+                    str(payload.get("error") or "Не удалось запустить виртуальный диск.")
                 )
             if payload.get("status") != "ready":
                 raise ValueError("Disk host response status is invalid.")
@@ -333,7 +334,7 @@ class DiskHostExchange:
         if self._protector is None:
             if sys.platform != "win32":
                 raise MountUnavailableError(
-                    "Самостоятельный системный диск доступен только в Windows."
+                    "Самостоятельный виртуальный диск доступен только в Windows."
                 )
             from biopgp.biometrics.key_protection import WindowsDpapiProtector
 
@@ -398,7 +399,7 @@ class WinSpdHostManager:
     ) -> str | None:
         if self.running:
             raise MountUnavailableError(
-                "Сначала отключите уже открытый системный диск Clever PGP."
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
         if progress is not None:
             progress(10, "Защита одноразового запроса диска")
@@ -453,7 +454,7 @@ class WinSpdHostManager:
         self._process_id = process_id
         self._device_name = device_name
         if progress is not None:
-            progress(100, "Самостоятельный системный диск подключён")
+            progress(100, "Самостоятельный виртуальный диск подключён")
         return device_name
 
     def stop(self, *, timeout: float = 12.0) -> None:
@@ -474,7 +475,7 @@ class WinSpdHostManager:
                 return
             time.sleep(0.05)
         raise MountUnavailableError(
-            "Системный диск не подтвердил безопасное отключение. "
+            "Виртуальный диск не подтвердил безопасное отключение. "
             "Повторите попытку после завершения операций с файлами."
         )
 
@@ -482,7 +483,7 @@ class WinSpdHostManager:
         endpoint = self._control_endpoint
         if endpoint is None:
             raise MountUnavailableError(
-                "Системный диск не предоставил канал проверки состояния."
+                "Виртуальный диск не предоставил канал проверки состояния."
             )
         send_disk_control_command(endpoint, "ping", timeout=timeout)
 
@@ -510,8 +511,11 @@ def run_disk_host(request_path: Path) -> int:
             )
         else:
             protected_descriptor = _validated_protection_descriptor(request)
+            container_path = resolve_file_hosted_container_path(
+                request.container_path
+            )
             volume = OpaqueBlockVolume.open_with_header(
-                request.container_path,
+                container_path,
                 request.opaque_header,
                 protected_hidden_descriptor=protected_descriptor,
             )
@@ -519,7 +523,7 @@ def run_disk_host(request_path: Path) -> int:
                 volume.close()
                 volume = None
                 raise WinSpdError(
-                    "Это не системный зашифрованный диск Clever PGP."
+                    "Это не виртуальный зашифрованный диск Clever PGP."
                 )
         server = DiskControlServer()
         device = WinSpdBlockDevice(

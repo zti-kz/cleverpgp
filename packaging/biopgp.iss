@@ -65,6 +65,7 @@ Source: "{#ProjectDirectory}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: i
 Source: "{#ProjectDirectory}\LICENSE"; DestDir: "{app}\Source"; Flags: ignoreversion
 Source: "{#ProjectDirectory}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}\Source"; Flags: ignoreversion
 Source: "{#ProjectDirectory}\README.md"; DestDir: "{app}\Source"; Flags: ignoreversion
+Source: "{#ProjectDirectory}\SECURITY.md"; DestDir: "{app}\Source"; Flags: ignoreversion
 Source: "{#ProjectDirectory}\pyproject.toml"; DestDir: "{app}\Source"; Flags: ignoreversion
 Source: "{#ProjectDirectory}\.gitignore"; DestDir: "{app}\Source"; Flags: ignoreversion
 Source: "{#ProjectDirectory}\*.ps1"; DestDir: "{app}\Source"; Flags: ignoreversion
@@ -130,7 +131,7 @@ Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount\c
 
 [Run]
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winfsp-biopgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinFspInstalled
-Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winspd-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент системного диска..."; Flags: waituntilterminated; Check: not IsWinSpdInstalled
+Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winspd-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinSpdInstalled
 Filename: "{app}\{#AppExecutable}"; Description: "Запустить Clever PGP"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]

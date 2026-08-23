@@ -1187,7 +1187,7 @@ def test_system_manager_grows_remounts_and_extends_ntfs(
     assert drive == "Z:"
     assert events == ["unmount", "grow-container", "remount", "extend-ntfs"]
     assert ResizeStore.commands == [(old_record, "ping", 1.0)]
-    assert progress[-1] == (100, "Системный диск увеличен")
+    assert progress[-1] == (100, "Виртуальный диск увеличен")
 
 
 def test_system_manager_can_retry_only_ntfs_extension_after_uac_cancel(

@@ -21,6 +21,7 @@ from biopgp.core.opaque_volume_header import (
     OpaqueVolumeHeader,
     OpaqueVolumeHeaderStore,
 )
+from biopgp.core.volume_path import resolve_file_hosted_container_path
 from biopgp.core.winspd import (
     HiddenWindowsVolumeHeaders,
     MIN_WINDOWS_DISK_CAPACITY,
@@ -229,7 +230,7 @@ def validate_cleverpgp_volume(
     if info.disk_number < 0 or info.partition_number <= 0:
         raise MountUnavailableError("Windows вернула некорректный номер раздела.")
     if expected_disk_size is not None and info.disk_size != expected_disk_size:
-        raise MountUnavailableError("Размер системного диска Clever PGP изменился.")
+        raise MountUnavailableError("Размер виртуального диска Clever PGP изменился.")
     if not any(
         marker in info.friendly_name.casefold()
         for marker in ("cleverpgp", "winspd")
@@ -415,7 +416,7 @@ def wait_for_new_cleverpgp_disk(
             last_error = error
             time.sleep(0.2)
     raise last_error or MountUnavailableError(
-        "Временный системный диск Clever PGP не появился."
+        "Временный виртуальный диск Clever PGP не появился."
     )
 
 
@@ -539,11 +540,11 @@ def wait_for_drive_letter(number: int, *, timeout: float = 15.0) -> str:
             return letters[0]
         if len(letters) > 1:
             raise MountUnavailableError(
-                "Системный диск Clever PGP получил несколько букв."
+                "Виртуальный диск Clever PGP получил несколько букв."
             )
         time.sleep(0.2)
     raise MountUnavailableError(
-        "Windows не назначила букву системному диску. Возможно, он ещё не отформатирован."
+        "Windows не назначила букву виртуальному диску. Возможно, он ещё не отформатирован."
     )
 
 
@@ -553,7 +554,7 @@ def wait_for_disk_removal(number: int, *, timeout: float = 15.0) -> None:
         if all(disk.number != number for disk in list_windows_disks()):
             return
         time.sleep(0.2)
-    raise MountUnavailableError("Временный системный диск не отключился.")
+    raise MountUnavailableError("Временный виртуальный диск не отключился.")
 
 
 class WindowsSystemDiskManager:
@@ -643,7 +644,7 @@ class WindowsSystemDiskManager:
         record = self._control_record
         if drive is None or record is None:
             raise MountUnavailableError(
-                "Активный системный диск Clever PGP не найден."
+                "Активный виртуальный диск Clever PGP не найден."
             )
         self._control_store.send(record, "ping", timeout=1.0)
         info = inspect_windows_volume(drive)
@@ -664,7 +665,7 @@ class WindowsSystemDiskManager:
     ) -> str:
         if self.mounted_drive is not None:
             raise MountUnavailableError(
-                "Сначала отключите уже открытый системный диск Clever PGP."
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
         library = WinSpdLibrary()
 
@@ -677,7 +678,7 @@ class WindowsSystemDiskManager:
                 )
 
         if progress is not None:
-            progress(3, "Проверка параметров системного диска")
+            progress(3, "Проверка параметров виртуального диска")
         volume = create_windows_block_volume(
             container_path,
             master_key,
@@ -722,10 +723,10 @@ class WindowsSystemDiskManager:
                 label=label,
             )
             self._verify_host_health(
-                "Системный диск остановился во время форматирования."
+                "Виртуальный диск остановился во время форматирования."
             )
             if progress is not None:
-                progress(95, "Форматирование системного диска завершено")
+                progress(95, "Форматирование виртуального диска завершено")
         except Exception:
             try:
                 self._process_manager.stop()
@@ -752,7 +753,7 @@ class WindowsSystemDiskManager:
         self._control_record = control_record
         self._context_menu_labels = context_menu_labels
         if progress is not None:
-            progress(100, "Системный диск готов")
+            progress(100, "Виртуальный диск готов")
         return drive
 
     def create_hidden_and_mount(
@@ -775,7 +776,7 @@ class WindowsSystemDiskManager:
 
         if self.mounted_drive is not None:
             raise MountUnavailableError(
-                "Сначала отключите уже открытый системный диск Clever PGP."
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
         library = WinSpdLibrary()
         if progress is not None:
@@ -800,7 +801,7 @@ class WindowsSystemDiskManager:
                 )
             ),
         )
-        target = Path(container_path).expanduser().resolve()
+        target = resolve_file_hosted_container_path(container_path)
         active_disk: WindowsDiskInfo | None = None
         try:
             outer_before = list_windows_disks()
@@ -916,7 +917,7 @@ class WindowsSystemDiskManager:
         self._control_record = control_record
         self._context_menu_labels = context_menu_labels
         if progress is not None:
-            progress(100, "Скрытый системный диск готов")
+            progress(100, "Скрытый виртуальный диск готов")
         return drive
 
     def _verify_host_health(self, message: str) -> None:
@@ -939,7 +940,7 @@ class WindowsSystemDiskManager:
     ) -> str:
         if self.mounted_drive is not None:
             raise MountUnavailableError(
-                "Сначала отключите уже открытый системный диск Clever PGP."
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
         volume = open_windows_block_volume(container_path, master_key)
         try:
@@ -978,7 +979,7 @@ class WindowsSystemDiskManager:
         self._control_record = control_record
         self._context_menu_labels = context_menu_labels
         if progress is not None:
-            progress(100, "Системный диск подключён")
+            progress(100, "Виртуальный диск подключён")
         return drive
 
     def mount_opaque(
@@ -993,7 +994,7 @@ class WindowsSystemDiskManager:
     ) -> str:
         """Authenticate v4 locally, then start the host without the password."""
 
-        source = Path(container_path).expanduser().resolve()
+        source = resolve_file_hosted_container_path(container_path)
         if not source.is_file():
             raise MountUnavailableError("Файл зашифрованного диска не найден.")
         store = header_store or OpaqueVolumeHeaderStore()
@@ -1044,15 +1045,15 @@ class WindowsSystemDiskManager:
     ) -> str:
         if self.mounted_drive is not None:
             raise MountUnavailableError(
-                "Сначала отключите уже открытый системный диск Clever PGP."
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
-        source = Path(container_path).expanduser().resolve()
+        source = resolve_file_hosted_container_path(container_path)
         if not source.is_file():
             raise MountUnavailableError("Файл зашифрованного диска не найден.")
         self._validate_opaque_mount_headers(selected_header, protection_header)
         if selected_header.storage_format != WINDOWS_BLOCK_STORAGE_FORMAT:
             raise MountUnavailableError(
-                "Это не системный зашифрованный диск Clever PGP."
+                "Это не виртуальный зашифрованный диск Clever PGP."
             )
         if selected_header.role == "hidden":
             descriptor = selected_header.hidden_descriptor
@@ -1098,7 +1099,7 @@ class WindowsSystemDiskManager:
         self._control_record = control_record
         self._context_menu_labels = context_menu_labels
         if progress is not None:
-            progress(100, "Системный диск подключён")
+            progress(100, "Виртуальный диск подключён")
         return drive
 
     @staticmethod
@@ -1139,7 +1140,7 @@ class WindowsSystemDiskManager:
         container_path = self._container_path
         if drive is None or record is None:
             raise MountUnavailableError(
-                "Активный системный диск Clever PGP не найден."
+                "Активный виртуальный диск Clever PGP не найден."
             )
         if container_path is None or not container_path.is_file():
             raise MountUnavailableError(
@@ -1162,7 +1163,7 @@ class WindowsSystemDiskManager:
         )
         if logical_capacity < original.disk_size:
             raise MountUnavailableError(
-                "Уменьшение системного диска пока не поддерживается безопасно."
+                "Уменьшение виртуального диска пока не поддерживается безопасно."
             )
 
         labels = context_menu_labels or self._context_menu_labels
@@ -1272,7 +1273,7 @@ class WindowsSystemDiskManager:
                 "Windows не подтвердила новый размер раздела NTFS."
             )
         if progress is not None:
-            progress(100, "Системный диск увеличен")
+            progress(100, "Виртуальный диск увеличен")
         return remounted_drive
 
     def unmount(self) -> None:
@@ -1379,7 +1380,7 @@ class WindowsSystemDiskManager:
             )
         else:
             raise ValueError(
-                "System disk context menu requires two to five labels."
+                "Virtual disk context menu requires two to five labels."
             )
         try:
             self._context_menu.register(
@@ -1419,7 +1420,7 @@ def wait_for_drive_removal(
             return
         time.sleep(0.05)
     raise MountUnavailableError(
-        f"Системный диск {drive} не подтвердил безопасное отключение."
+        f"Виртуальный диск {drive} не подтвердил безопасное отключение."
     )
 
 

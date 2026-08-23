@@ -81,7 +81,7 @@ def test_system_disk_information_requires_live_authenticated_record(
         )
 
     assert info.drive == "Z:"
-    assert info.backend == "Системный диск Windows"
+    assert info.backend == "Виртуальный диск Windows"
     assert info.file_system == "NTFS"
     assert info.capacity == usage.total
     assert info.free_space == usage.free

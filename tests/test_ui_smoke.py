@@ -518,7 +518,7 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
             progress(3, "Проверка типа зашифрованного диска")
             self.uses_windows_system_disk = True
             self.mounted_drive = "R:"
-            progress(100, "Системный диск готов")
+            progress(100, "Виртуальный диск готов")
             return self.mounted_drive
 
         def unmount(self) -> None:
@@ -628,7 +628,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
             }
             self.uses_windows_system_disk = True
             self.mounted_drive = "Q:"
-            progress(100, "Системный диск готов")
+            progress(100, "Виртуальный диск готов")
             return self.mounted_drive
 
         def unmount(self) -> None:

@@ -205,7 +205,7 @@ class WindowsResizeExchange:
             json.JSONDecodeError,
         ) as error:
             raise MountUnavailableError(
-                "Запрос расширения системного диска повреждён."
+                "Запрос расширения виртуального диска повреждён."
             ) from error
         finally:
             try:
@@ -338,7 +338,7 @@ class WindowsResizeExchange:
         if self._protector is None:
             if sys.platform != "win32":
                 raise MountUnavailableError(
-                    "Расширение системного диска доступно только в Windows."
+                    "Расширение виртуального диска доступно только в Windows."
                 )
             from biopgp.biometrics.key_protection import WindowsDpapiProtector
 
@@ -449,7 +449,7 @@ def run_windows_resize_helper(
 def _launch_elevated(command: list[str], *, timeout: float) -> int:
     if sys.platform != "win32":
         raise MountUnavailableError(
-            "Расширение системного диска доступно только в Windows."
+            "Расширение виртуального диска доступно только в Windows."
         )
     if not command:
         raise ValueError("Elevated command must not be empty.")

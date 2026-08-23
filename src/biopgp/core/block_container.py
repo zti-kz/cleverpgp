@@ -191,7 +191,7 @@ class BlockVaultContainer:
         try:
             if volume.storage_format not in (None, BLOCK_VAULT_STORAGE_FORMAT):
                 raise InvalidContainerError(
-                    "Этот диск содержит системную файловую систему Windows."
+                    "Этот диск содержит обычную файловую систему Windows."
                 )
             candidates: list[
                 tuple[int, dict[int, _NodeState], int, int]

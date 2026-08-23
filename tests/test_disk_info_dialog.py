@@ -14,7 +14,7 @@ from biopgp.ui.disk_info_dialog import DiskInfoDialog  # noqa: E402
 def mounted_info() -> MountedDiskInfo:
     return MountedDiskInfo(
         drive="Z:",
-        backend="Системный диск Windows",
+        backend="Виртуальный диск Windows",
         file_system="NTFS",
         capacity=100 * 1024 * 1024,
         free_space=25 * 1024 * 1024,

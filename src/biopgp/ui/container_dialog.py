@@ -147,7 +147,7 @@ class ContainerCreationDialog(QDialog):
             self.backend_input.setObjectName("diskBackendInput")
             if self._system_backend_available:
                 self.backend_input.addItem(
-                    "Системный диск Windows — быстрый (рекомендуется)",
+                    "Виртуальный диск Windows — быстрый (рекомендуется)",
                     DISK_BACKEND_WINDOWS,
                 )
             if self._winfsp_backend_available:

@@ -481,7 +481,7 @@ class MainWindow(QMainWindow):
         if not disk_backend_available:
             if self._uses_windows_system_disk:
                 unavailable = QLabel(
-                    "Тестовый системный режим недоступен: компонент WinSpd "
+                    "Быстрый виртуальный диск недоступен: компонент WinSpd "
                     "не установлен."
                 )
                 unavailable.setObjectName("muted")
@@ -572,7 +572,7 @@ class MainWindow(QMainWindow):
     def _show_resize_dialog(self) -> None:
         if not self._uses_windows_system_disk:
             self._show_error(
-                "Изменение размера доступно только для системного диска Windows."
+                "Изменение размера доступно только для виртуального диска Windows."
             )
             return
         drive = self.mount_manager.mounted_drive
@@ -584,7 +584,7 @@ class MainWindow(QMainWindow):
         if expected_drive and len(expected_drive) == 1:
             expected_drive += ":"
         if drive is None or (expected_drive is not None and drive != expected_drive):
-            self._show_error("Выбранный системный диск Clever PGP не подключён.")
+            self._show_error("Выбранный виртуальный диск Clever PGP не подключён.")
             return
         container_path = self.mount_manager.mounted_container
         if container_path is None:

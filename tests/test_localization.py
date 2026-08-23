@@ -89,11 +89,11 @@ def test_backend_detection_messages_are_localized() -> None:
     )
 
 
-def test_system_disk_formatting_messages_are_localized() -> None:
+def test_virtual_disk_formatting_messages_are_localized() -> None:
     set_language("en")
     assert (
-        tr("Форматирование системного диска завершено")
-        == "System disk formatting completed"
+        tr("Форматирование виртуального диска завершено")
+        == "Virtual disk formatting completed"
     )
     assert (
         tr("Windows не запустила форматирование диска (код 5).")
@@ -106,7 +106,7 @@ def test_system_disk_formatting_messages_are_localized() -> None:
     )
 
 
-def test_system_disk_extension_messages_are_localized() -> None:
+def test_virtual_disk_extension_messages_are_localized() -> None:
     set_language("en")
     assert (
         tr("Расширение не получило разрешение администратора Windows.")
@@ -126,8 +126,8 @@ def test_system_disk_extension_messages_are_localized() -> None:
 def test_new_disk_backend_choice_is_localized() -> None:
     set_language("en")
     assert (
-        tr("Системный диск Windows — быстрый (рекомендуется)")
-        == "Windows system disk — fast (recommended)"
+        tr("Виртуальный диск Windows — быстрый (рекомендуется)")
+        == "Windows virtual disk — fast (recommended)"
     )
     set_language("kk")
     assert (

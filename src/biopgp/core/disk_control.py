@@ -150,7 +150,7 @@ def send_disk_control_command(
             response = _receive_exact(connection, 2)
     except (OSError, TimeoutError) as error:
         raise MountUnavailableError(
-            "Фоновый процесс системного диска Clever PGP не отвечает."
+            "Фоновый процесс виртуального диска Clever PGP не отвечает."
         ) from error
     if response != _CONTROL_RESPONSES[True]:
         raise MountUnavailableError(
@@ -279,7 +279,7 @@ class DiskControlStore:
             return Path(decoded).expanduser().resolve()
         except (BioPGPError, OSError, UnicodeError, ValueError) as error:
             raise MountUnavailableError(
-                "Защищённый путь системного диска повреждён или недоступен."
+                "Защищённый путь виртуального диска повреждён или недоступен."
             ) from error
 
     def send(
@@ -293,7 +293,7 @@ class DiskControlStore:
             endpoint = self.endpoint(record)
         except (BioPGPError, OSError, ValueError) as error:
             raise MountUnavailableError(
-                "Защищённая запись системного диска повреждена или недоступна."
+                "Защищённая запись виртуального диска повреждена или недоступна."
             ) from error
         send_disk_control_command(endpoint, command, timeout=timeout)
 

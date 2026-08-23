@@ -59,7 +59,7 @@ def inspect_mounted_cleverpgp_disk(
         usage = _disk_usage(root)
         return MountedDiskInfo(
             drive=normalized,
-            backend="Системный диск Windows",
+            backend="Виртуальный диск Windows",
             file_system=volume.file_system,
             capacity=int(usage.total),
             free_space=min(int(usage.free), int(usage.total)),

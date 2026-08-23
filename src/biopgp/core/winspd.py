@@ -26,6 +26,7 @@ from biopgp.core.opaque_volume_header import (
     OpaqueVolumeHeader,
     OpaqueVolumeHeaderStore,
 )
+from biopgp.core.volume_path import resolve_file_hosted_container_path
 
 ERROR_SUCCESS = 0
 SCSISTAT_GOOD = 0
@@ -201,7 +202,7 @@ class WinSpdLibrary:
             self._dll = ctypes.CDLL(str(selected) if selected else _default_dll_name())
         except OSError as error:
             raise WinSpdError(
-                "Компонент системного диска WinSpd не установлен."
+                "Компонент виртуального диска WinSpd не установлен."
             ) from error
         self.path = selected
         self._configure_api()
@@ -246,13 +247,13 @@ class WinSpdLibrary:
             ctypes.byref(storage_unit),
         )
         if error != ERROR_SUCCESS:
-            raise WinSpdError(f"WinSpd не создал системный диск (код {error}).")
+            raise WinSpdError(f"WinSpd не создал виртуальный диск (код {error}).")
         return storage_unit
 
     def start(self, storage_unit: ctypes.c_void_p) -> None:
         error = self._dll.SpdStorageUnitStartDispatcher(storage_unit, 0)
         if error != ERROR_SUCCESS:
-            raise WinSpdError(f"WinSpd не запустил системный диск (код {error}).")
+            raise WinSpdError(f"WinSpd не запустил виртуальный диск (код {error}).")
 
     def shutdown(self, storage_unit: ctypes.c_void_p) -> None:
         self._dll.SpdStorageUnitShutdown(storage_unit)
@@ -287,7 +288,7 @@ def initialize_windows_partition(
     """Initialize a new encrypted block array with one Windows data partition."""
 
     if volume.logical_capacity < MIN_WINDOWS_DISK_CAPACITY:
-        raise ValidationError("Системный зашифрованный диск должен быть не меньше 32 МБ.")
+        raise ValidationError("Виртуальный зашифрованный диск должен быть не меньше 32 МБ.")
     first_block = volume.read_blocks(0, 1)
     if first_block != bytes(LOGICAL_BLOCK_SIZE):
         raise ValidationError("Таблица разделов диска уже создана.")
@@ -317,9 +318,10 @@ def create_windows_block_volume(
     progress: Callable[[int, int], None] | None = None,
 ) -> EncryptedBlockVolume:
     if logical_capacity < MIN_WINDOWS_DISK_CAPACITY:
-        raise ValidationError("Системный зашифрованный диск должен быть не меньше 32 МБ.")
+        raise ValidationError("Виртуальный зашифрованный диск должен быть не меньше 32 МБ.")
+    target = resolve_file_hosted_container_path(path)
     volume = EncryptedBlockVolume.create(
-        path,
+        target,
         master_key,
         logical_capacity=logical_capacity,
         label=label,
@@ -332,7 +334,7 @@ def create_windows_block_volume(
         return volume
     except Exception:
         volume.close()
-        Path(path).expanduser().resolve().unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
         raise
 
 
@@ -354,14 +356,14 @@ def create_hidden_windows_block_volume(
 
     if outer_capacity < MIN_WINDOWS_DISK_CAPACITY:
         raise ValidationError(
-            "Внешний системный диск должен быть не меньше 32 МБ."
+            "Внешний виртуальный диск должен быть не меньше 32 МБ."
         )
     if hidden_capacity < MIN_WINDOWS_DISK_CAPACITY:
         raise ValidationError(
-            "Скрытый системный диск должен быть не меньше 32 МБ."
+            "Скрытый виртуальный диск должен быть не меньше 32 МБ."
         )
     store = header_store or OpaqueVolumeHeaderStore()
-    target = Path(path).expanduser().resolve()
+    target = resolve_file_hosted_container_path(path)
     outer = None
     created = False
     try:
@@ -459,10 +461,11 @@ def open_windows_block_volume(
     path: Path,
     master_key: bytes,
 ) -> EncryptedBlockVolume:
-    volume = EncryptedBlockVolume.open(path, master_key)
+    target = resolve_file_hosted_container_path(path)
+    volume = EncryptedBlockVolume.open(target, master_key)
     if volume.storage_format != WINDOWS_BLOCK_STORAGE_FORMAT:
         volume.close()
-        raise WinSpdError("Это не системный зашифрованный диск Clever PGP.")
+        raise WinSpdError("Это не виртуальный зашифрованный диск Clever PGP.")
     return volume
 
 
@@ -477,7 +480,7 @@ def resize_windows_block_volume(
 
     if logical_capacity < MIN_WINDOWS_DISK_CAPACITY:
         raise ValidationError(
-            "Системный зашифрованный диск должен быть не меньше 32 МБ."
+            "Виртуальный зашифрованный диск должен быть не меньше 32 МБ."
         )
     volume = open_windows_block_volume(path, master_key)
     try:
@@ -759,11 +762,11 @@ class WinSpdProcessManager:
     ) -> str | None:
         if self.running:
             raise MountUnavailableError(
-                "Сначала отключите уже открытый системный диск Clever PGP."
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
         source = Path(container_path).expanduser().resolve()
         if progress is not None:
-            progress(10, "Проверка системного зашифрованного диска")
+            progress(10, "Проверка виртуального зашифрованного диска")
         parent_control, child_control = multiprocessing.Pipe(duplex=True)
         process = multiprocessing.Process(
             target=_winspd_provider_process,
@@ -779,7 +782,7 @@ class WinSpdProcessManager:
         process.start()
         child_control.close()
         if progress is not None:
-            progress(35, "Запуск системного диска")
+            progress(35, "Запуск виртуального диска")
         started_at = time.monotonic()
         response: tuple[str, Any] | None = None
         while time.monotonic() - started_at < timeout:
@@ -792,7 +795,7 @@ class WinSpdProcessManager:
                 elapsed = time.monotonic() - started_at
                 progress(
                     min(90, 35 + round(elapsed / timeout * 55)),
-                    "Подключение системного диска",
+                    "Подключение виртуального диска",
                 )
         endpoint: DiskControlEndpoint | None = None
         if response is not None and response[0] == "ready":
@@ -823,7 +826,7 @@ class WinSpdProcessManager:
         self._control_endpoint = endpoint
         self._process_id = process.pid
         if progress is not None:
-            progress(100, "Системный диск подключён")
+            progress(100, "Виртуальный диск подключён")
         return device_name
 
     def stop(self, *, timeout: float = 12.0) -> None:

@@ -9,6 +9,7 @@ from biopgp.core.block_container import BLOCK_VAULT_STORAGE_FORMAT
 from biopgp.core.block_volume import BlockVolumeError, EncryptedBlockVolume
 from biopgp.core.errors import InvalidContainerError, MountUnavailableError
 from biopgp.core.mount import VaultMountManager
+from biopgp.core.volume_path import resolve_file_hosted_container_path
 from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 
 BACKEND_WINDOWS = "windows"
@@ -18,8 +19,9 @@ BACKEND_WINFSP = "winfsp"
 def detect_container_backend(path: Path, master_key: bytes) -> str:
     """Authenticate only the block header and return its required backend."""
 
+    source = resolve_file_hosted_container_path(path)
     try:
-        with EncryptedBlockVolume.open(path, master_key) as volume:
+        with EncryptedBlockVolume.open(source, master_key) as volume:
             storage_format = volume.storage_format
     except BlockVolumeError as error:
         raise InvalidContainerError(str(error)) from error
@@ -95,7 +97,7 @@ class AutomaticMountManager:
             raise MountUnavailableError(
                 "Сначала отключите уже открытый диск Clever PGP."
             )
-        source = Path(container_path).expanduser().resolve()
+        source = resolve_file_hosted_container_path(container_path)
         if progress is not None:
             progress(3, "Проверка типа зашифрованного диска")
         backend = detect_container_backend(source, master_key)
@@ -103,7 +105,7 @@ class AutomaticMountManager:
             manager = self._system_manager
             if manager is None:
                 raise MountUnavailableError(
-                    "Системный диск Clever PGP можно подключить только в Windows."
+                    "Виртуальный диск Clever PGP можно подключить только в Windows."
                 )
             mounted = manager.mount(
                 source,
@@ -135,16 +137,16 @@ class AutomaticMountManager:
             raise MountUnavailableError(
                 "Сначала отключите уже открытый диск Clever PGP."
             )
+        source = resolve_file_hosted_container_path(container_path)
         manager = self._system_manager
         if manager is None:
             raise MountUnavailableError(
-                "Системный диск Clever PGP можно создать только в Windows."
+                "Виртуальный диск Clever PGP можно создать только в Windows."
             )
-        source = Path(container_path).expanduser().resolve()
         creator = getattr(manager, "create_and_mount", None)
         if not callable(creator):
             raise MountUnavailableError(
-                "Компонент создания системного диска недоступен."
+                "Компонент создания виртуального диска недоступен."
             )
         mounted = creator(source, master_key, **options)
         self._active_manager = manager
@@ -172,7 +174,7 @@ class AutomaticMountManager:
         manager = self._selected_active_manager()
         if manager is None or manager is not self._system_manager:
             raise MountUnavailableError(
-                "Операция доступна только для системного диска Windows."
+                "Операция доступна только для виртуального диска Windows."
             )
         return manager
 

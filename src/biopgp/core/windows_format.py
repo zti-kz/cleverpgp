@@ -208,7 +208,7 @@ class WindowsFormatExchange:
             json.JSONDecodeError,
         ) as error:
             raise MountUnavailableError(
-                "Запрос форматирования системного диска повреждён."
+                "Запрос форматирования виртуального диска повреждён."
             ) from error
         finally:
             try:
@@ -336,7 +336,7 @@ class WindowsFormatExchange:
         if self._protector is None:
             if sys.platform != "win32":
                 raise MountUnavailableError(
-                    "Форматирование системного диска доступно только в Windows."
+                    "Форматирование виртуального диска доступно только в Windows."
                 )
             from biopgp.biometrics.key_protection import WindowsDpapiProtector
 
@@ -440,7 +440,7 @@ def run_windows_format_helper(
 def _launch_elevated(command: list[str], timeout: float) -> int:
     if sys.platform != "win32":
         raise MountUnavailableError(
-            "Форматирование системного диска доступно только в Windows."
+            "Форматирование виртуального диска доступно только в Windows."
         )
     if not command:
         raise ValueError("Elevated command must not be empty.")

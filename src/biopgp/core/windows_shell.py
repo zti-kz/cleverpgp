@@ -123,7 +123,7 @@ class WindowsDriveContextMenu:
     ) -> None:
         if sys.platform != "win32" and self._registry is None:
             raise MountUnavailableError(
-                "Контекстное меню системного диска доступно только в Windows."
+                "Контекстное меню виртуального диска доступно только в Windows."
             )
         registry = self._registry_module()
         self._delete_existing(registry)

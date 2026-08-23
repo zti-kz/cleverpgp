@@ -66,12 +66,12 @@ def run(marker: Path) -> int:
     if shell_lookup.get((SYSTEM_DRIVE_MENU_KEY, "AppliesTo")) != (
         'System.ItemPathDisplay:="Z:\\' + '"'
     ):
-        raise RuntimeError("Проверка контекстного меню системного диска не пройдена.")
+        raise RuntimeError("Проверка контекстного меню виртуального диска не пройдена.")
     resize_command = shell_lookup.get(
         (SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize\command", "")
     )
     if "--resize-drive" not in str(resize_command):
-        raise RuntimeError("Команда увеличения системного диска не упакована.")
+        raise RuntimeError("Команда увеличения виртуального диска не упакована.")
     marker.write_text(
         json.dumps(
             {
@@ -227,7 +227,7 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                     or f"stgtest завершился с кодом {result.returncode}."
                 )
             if not manager.running:
-                raise RuntimeError("Фоновый процесс системного диска остановился.")
+                raise RuntimeError("Фоновый процесс виртуального диска остановился.")
             endpoint = manager.control_endpoint
             if endpoint is None:
                 raise RuntimeError("Локальный канал управления диском не создан.")
