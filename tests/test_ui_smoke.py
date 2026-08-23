@@ -821,6 +821,7 @@ def test_hidden_disk_creation_uses_dual_password_windows_workflow(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "Изменить пароль диска",
         "",
         "Отключить зашифрованный диск",
     )
@@ -916,7 +917,10 @@ def test_opaque_disk_falls_back_to_compact_password_dialog(
     assert manager.opaque_call is not None
     assert manager.opaque_call["password"].startswith("outer")
     assert manager.opaque_call["hidden_protection_password"].startswith("hidden")
-    assert manager.opaque_call["context_menu_labels"][3] == ""
+    assert manager.opaque_call["context_menu_labels"][3] == (
+        "Изменить пароль диска"
+    )
+    assert manager.opaque_call["context_menu_labels"][4] == ""
     assert manager.mounted_drive == "O:"
     manager.mounted_drive = None
     window.close()

@@ -7,13 +7,17 @@ from unittest.mock import patch
 from pathlib import Path
 
 import pytest
-from nacl import secret, utils
+from nacl import pwhash, secret, utils
 
 from biopgp.core.block_volume import EncryptedBlockVolume
 from biopgp.core.disk_control import DiskControlEndpoint, DiskControlRecord
-from biopgp.core.errors import MountUnavailableError
+from biopgp.core.errors import MountUnavailableError, ValidationError
 from biopgp.core.hidden_volume import HiddenVolumeDescriptor
-from biopgp.core.opaque_volume_header import OpaqueVolumeHeader
+from biopgp.core.opaque_volume_header import (
+    HeaderKdfParameters,
+    OpaqueVolumeHeader,
+    OpaqueVolumeHeaderStore,
+)
 from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 from biopgp.core.windows_storage import (
     WindowsDiskInfo,
@@ -739,6 +743,141 @@ def test_system_manager_mounts_v4_hidden_header_without_forwarding_password(
     )
 
 
+def test_system_manager_disconnects_before_changing_active_v4_password(
+    tmp_path: Path,
+) -> None:
+    old_password = "outer correct horse battery staple"
+    new_password = "new outer correct horse battery staple"
+    container_path = tmp_path / "password-change.cpgv"
+    header = OpaqueVolumeHeader(
+        role="outer",
+        generation=1,
+        cover_volume_id=b"v" * 16,
+        cover_key=b"c" * 32,
+        cover_block_count=8192,
+        label="Outer",
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+        created_at="2026-08-23T05:00:00+00:00",
+    )
+    store = OpaqueVolumeHeaderStore(
+        HeaderKdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        )
+    )
+    with container_path.open("w+b") as stream:
+        store.initialize(stream, old_password, header)
+
+    class ControlStore:
+        removed: object | None = None
+
+        @classmethod
+        def remove(cls, record: object) -> None:
+            cls.removed = record
+
+    class ContextMenu:
+        removed = False
+
+        @classmethod
+        def remove(cls) -> None:
+            cls.removed = True
+
+    process = FakeProcessManager()
+    process.running = True
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process,
+        control_store=ControlStore(),  # type: ignore[arg-type]
+        context_menu=ContextMenu(),  # type: ignore[arg-type]
+        recover_existing=False,
+    )
+    active_disk = disk(8, "CleverPGP", 32 * 1024 * 1024)
+    record = DiskControlRecord(
+        header.cover_volume_id,
+        "Z:",
+        23456,
+        4321,
+        b"protected",
+        tmp_path / "record.json",
+    )
+    manager._disk = active_disk
+    manager._drive = "Z:"
+    manager._container_path = container_path
+    manager._control_record = record
+    progress: list[tuple[int, str]] = []
+
+    with patch("biopgp.core.windows_storage.wait_for_disk_removal") as removed:
+        changed = manager.change_opaque_password(
+            old_password,
+            new_password,
+            header_store=store,
+            progress=lambda value, message: progress.append((value, message)),
+        )
+
+    assert changed == container_path.resolve()
+    assert process.stopped
+    removed.assert_called_once_with(active_disk.number)
+    assert manager.mounted_drive is None
+    assert ControlStore.removed is record
+    assert ContextMenu.removed
+    assert progress[-1] == (100, "Пароль диска успешно изменён")
+    with container_path.open("rb") as stream:
+        assert store.unlock(stream, new_password).generation == 2
+
+
+def test_system_manager_does_not_disconnect_for_wrong_projection_password(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "wrong-projection.cpgv"
+    header = OpaqueVolumeHeader(
+        role="outer",
+        generation=1,
+        cover_volume_id=b"v" * 16,
+        cover_key=b"c" * 32,
+        cover_block_count=8192,
+        label="Outer",
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+        created_at="2026-08-23T05:00:00+00:00",
+    )
+    store = OpaqueVolumeHeaderStore(
+        HeaderKdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        )
+    )
+    with container_path.open("w+b") as stream:
+        store.initialize(
+            stream,
+            "outer correct horse battery staple",
+            header,
+        )
+    process = FakeProcessManager()
+    process.running = True
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process,
+        recover_existing=False,
+    )
+    manager._drive = "Z:"
+    manager._container_path = container_path
+    manager._control_record = DiskControlRecord(
+        b"x" * 16,
+        "Z:",
+        23456,
+        4321,
+        b"protected",
+        tmp_path / "record.json",
+    )
+
+    with pytest.raises(ValidationError, match="подключённому диску"):
+        manager.change_opaque_password(
+            "outer correct horse battery staple",
+            "new outer correct horse battery staple",
+            header_store=store,
+        )
+
+    assert process.running
+    assert not process.stopped
+
+
 def test_system_manager_publishes_and_removes_external_control_state(
     tmp_path: Path,
 ) -> None:
@@ -782,7 +921,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
             FakeStore.removed = selected
 
     class FakeContextMenu:
-        registered: tuple[str, str, str, str, str, str] | None = None
+        registered: tuple[str, str, str, str, str | None, str, str] | None = None
         removed = False
 
         def register(
@@ -794,12 +933,14 @@ def test_system_manager_publishes_and_removes_external_control_state(
             settings_label: str,
             resize_label: str,
             unmount_label: str,
+            password_label: str | None = None,
         ) -> None:
             type(self).registered = (
                 drive,
                 open_label,
                 info_label,
                 settings_label,
+                password_label,
                 resize_label,
                 unmount_label,
             )
@@ -840,6 +981,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
         "Open disk",
         "Сведения о диске",
         "Access settings",
+        None,
         "Увеличить диск",
         "Unmount disk",
     )

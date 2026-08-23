@@ -232,6 +232,15 @@ class AutomaticMountManager:
         manager = self._require_system_manager()
         return str(manager.resize_mounted_disk(*args, **kwargs))
 
+    def change_opaque_password(self, *args: object, **kwargs: object) -> Path:
+        manager = self._require_system_manager()
+        changer = getattr(manager, "change_opaque_password", None)
+        if not callable(changer):
+            raise MountUnavailableError(
+                "Смена пароля этого зашифрованного диска недоступна."
+            )
+        return Path(changer(*args, **kwargs)).resolve()
+
     def _require_system_manager(self) -> Any:
         manager = self._selected_active_manager()
         if manager is None or manager is not self._system_manager:

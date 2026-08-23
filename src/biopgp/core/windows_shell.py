@@ -45,6 +45,7 @@ def drive_context_menu_values(
     settings_label: str,
     resize_label: str | None,
     unmount_label: str,
+    password_label: str | None = None,
 ) -> tuple[RegistryValue, ...]:
     normalized_drive = _normalize_drive(drive)
     prefix = tuple(str(value) for value in command_prefix)
@@ -60,6 +61,9 @@ def drive_context_menu_values(
     settings_command = subprocess.list2cmdline(
         [*prefix, "--settings", "%1"]
     )
+    password_command = subprocess.list2cmdline(
+        [*prefix, "--change-disk-password", "%1"]
+    )
     resize_command = subprocess.list2cmdline(
         [*prefix, "--resize-drive", "%1"]
     )
@@ -69,6 +73,7 @@ def drive_context_menu_values(
     open_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Open"
     info_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Info"
     settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
+    password_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Password"
     resize_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize"
     unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
     values = [
@@ -86,6 +91,18 @@ def drive_context_menu_values(
         RegistryValue(settings_key, "Icon", icon),
         RegistryValue(settings_key + r"\command", "", settings_command),
     ]
+    if password_label:
+        values.extend(
+            [
+                RegistryValue(password_key, "MUIVerb", password_label),
+                RegistryValue(password_key, "Icon", icon),
+                RegistryValue(
+                    password_key + r"\command",
+                    "",
+                    password_command,
+                ),
+            ]
+        )
     if resize_label:
         values.extend(
             [
@@ -96,10 +113,10 @@ def drive_context_menu_values(
         )
     values.extend(
         [
-        RegistryValue(unmount_key, "MUIVerb", unmount_label),
-        RegistryValue(unmount_key, "Icon", icon),
-        RegistryValue(unmount_key, "CommandFlags", 0x20, "dword"),
-        RegistryValue(unmount_key + r"\command", "", unmount_command),
+            RegistryValue(unmount_key, "MUIVerb", unmount_label),
+            RegistryValue(unmount_key, "Icon", icon),
+            RegistryValue(unmount_key, "CommandFlags", 0x20, "dword"),
+            RegistryValue(unmount_key + r"\command", "", unmount_command),
         ]
     )
     return tuple(values)
@@ -130,6 +147,7 @@ class WindowsDriveContextMenu:
         settings_label: str,
         resize_label: str | None,
         unmount_label: str,
+        password_label: str | None = None,
     ) -> None:
         if sys.platform != "win32" and self._registry is None:
             raise MountUnavailableError(
@@ -146,6 +164,7 @@ class WindowsDriveContextMenu:
             settings_label=settings_label,
             resize_label=resize_label,
             unmount_label=unmount_label,
+            password_label=password_label,
         )
         view = getattr(registry, "KEY_WOW64_64KEY", 0)
         for item in values:

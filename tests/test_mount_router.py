@@ -36,6 +36,7 @@ class FakeSystemManager:
         self.hidden_create_calls: list[dict[str, object]] = []
         self.mount_calls: list[dict[str, object]] = []
         self.opaque_mount_calls: list[dict[str, object]] = []
+        self.password_change_calls: list[dict[str, object]] = []
         self.unmount_calls = 0
 
     def mount(
@@ -115,6 +116,25 @@ class FakeSystemManager:
         self.unmount_calls += 1
         self.mounted_drive = None
         self.mounted_container = None
+
+    def change_opaque_password(
+        self,
+        current_password: str,
+        new_password: str,
+        **options: object,
+    ) -> Path:
+        assert self.mounted_container is not None
+        source = self.mounted_container
+        self.password_change_calls.append(
+            {
+                "current_password": current_password,
+                "new_password": new_password,
+                **options,
+            }
+        )
+        self.mounted_drive = None
+        self.mounted_container = None
+        return source
 
 
 class FakeWinFspManager:
@@ -290,6 +310,33 @@ def test_hidden_creation_and_password_mount_route_only_to_windows(
         container_path.resolve()
     )
     assert not winfsp.mount_calls
+
+
+def test_opaque_password_change_routes_only_to_active_windows_manager(
+    tmp_path: Path,
+) -> None:
+    source = (tmp_path / "hidden.cpgv").resolve()
+    system = FakeSystemManager(mounted_drive="H:", mounted_container=source)
+    manager = AutomaticMountManager(
+        system_manager=system,
+        winfsp_manager=FakeWinFspManager(),  # type: ignore[arg-type]
+    )
+    progress = object()
+
+    changed = manager.change_opaque_password(
+        "current password long enough",
+        "replacement password long enough",
+        progress=progress,
+    )
+
+    assert changed == source
+    assert system.password_change_calls == [
+        {
+            "current_password": "current password long enough",
+            "new_password": "replacement password long enough",
+            "progress": progress,
+        }
+    ]
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ import json
 import os
 import struct
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import BinaryIO, Literal
 
 from nacl import bindings, exceptions, pwhash, secret, utils
@@ -33,6 +33,7 @@ MAXIMUM_PASSWORD_BYTES = 1024
 MINIMUM_PASSWORD_LENGTH = 12
 MAXIMUM_KDF_MEMORY = pwhash.argon2id.MEMLIMIT_SENSITIVE
 MAXIMUM_KDF_OPERATIONS = pwhash.argon2id.OPSLIMIT_SENSITIVE
+MAXIMUM_HEADER_GENERATION = (1 << 64) - 1
 
 VolumeRole = Literal["outer", "hidden"]
 ProgressCallback = Callable[[int, int], None]
@@ -59,10 +60,23 @@ class OpaqueVolumeHeader:
     hidden_key: bytes | None = None
     hidden_descriptor: HiddenVolumeDescriptor | None = None
 
+    @property
+    def projection_volume_id(self) -> bytes:
+        """Return the volume id exposed by this authenticated projection."""
+
+        if self.role == "outer":
+            return self.cover_volume_id
+        assert self.hidden_descriptor is not None
+        return self.hidden_descriptor.volume_id
+
     def __post_init__(self) -> None:
         if self.role not in ("outer", "hidden"):
             raise ValidationError("Некорректная роль заголовка диска.")
-        if not isinstance(self.generation, int) or self.generation <= 0:
+        if (
+            not isinstance(self.generation, int)
+            or self.generation <= 0
+            or self.generation > MAXIMUM_HEADER_GENERATION
+        ):
             raise ValidationError("Некорректное поколение заголовка диска.")
         if (
             not isinstance(self.cover_volume_id, bytes)
@@ -232,6 +246,164 @@ class OpaqueVolumeHeaderStore:
         if progress is not None:
             progress(total, total)
         return result
+
+    def validate_password_change(
+        self,
+        stream: BinaryIO,
+        current_password: str,
+        new_password: str,
+        *,
+        expected_volume_id: bytes | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> OpaqueVolumeHeader:
+        """Authenticate a non-conflicting password change without writing."""
+
+        current = self._validate_password(current_password)
+        replacement = self._validate_password(new_password)
+        if hmac.compare_digest(current, replacement):
+            raise ValidationError(
+                "Новый пароль диска должен отличаться от текущего."
+            )
+        total = BANK_COUNT * 4
+        selected = self.unlock(
+            stream,
+            current_password,
+            progress=(
+                None
+                if progress is None
+                else lambda completed, _total: progress(completed, total)
+            ),
+        )
+        if (
+            expected_volume_id is not None
+            and not hmac.compare_digest(
+                selected.projection_volume_id,
+                expected_volume_id,
+            )
+        ):
+            raise ValidationError(
+                "Текущий пароль не относится к подключённому диску."
+            )
+        try:
+            self.unlock(
+                stream,
+                new_password,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda completed, _total: progress(
+                        BANK_COUNT * 2 + completed,
+                        total,
+                    )
+                ),
+            )
+        except AuthenticationError:
+            pass
+        else:
+            raise ValidationError(
+                "Новый пароль уже открывает этот зашифрованный диск."
+            )
+        if progress is not None:
+            progress(total, total)
+        return selected
+
+    def change_password(
+        self,
+        stream: BinaryIO,
+        current_password: str,
+        new_password: str,
+        *,
+        expected_volume_id: bytes | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> OpaqueVolumeHeader:
+        """Replace one role password while preserving both encrypted volumes.
+
+        Both replacement banks are prepared before the first write. If power is
+        lost between the two synchronized writes, at least one old or new bank
+        remains authenticatable, so the operation cannot strand the data.
+        """
+
+        validation_steps = BANK_COUNT * 4
+        encryption_steps = BANK_COUNT
+        verification_steps = BANK_COUNT * 4
+        total = validation_steps + encryption_steps + verification_steps
+
+        selected = self.validate_password_change(
+            stream,
+            current_password,
+            new_password,
+            expected_volume_id=expected_volume_id,
+            progress=(
+                None
+                if progress is None
+                else lambda completed, _total: progress(completed, total)
+            ),
+        )
+        if selected.generation >= MAXIMUM_HEADER_GENERATION:
+            raise ValidationError(
+                "Счётчик изменений заголовка диска исчерпан."
+            )
+        replacement_password = self._validate_password(new_password)
+        updated = replace(selected, generation=selected.generation + 1)
+        encoded_banks: list[bytes] = []
+        for bank_index in range(BANK_COUNT):
+            encoded_banks.append(
+                self._encrypt_bank(
+                    updated,
+                    replacement_password,
+                    selected.role,
+                    bank_index,
+                )
+            )
+            if progress is not None:
+                progress(validation_steps + bank_index + 1, total)
+
+        for bank_index, encoded in enumerate(encoded_banks):
+            stream.seek(self._bank_offset(selected.role, bank_index))
+            written = stream.write(encoded)
+            if written is not None and written != len(encoded):
+                raise OSError("Не удалось полностью записать заголовок диска.")
+            self._sync(stream)
+
+        verification_offset = validation_steps + encryption_steps
+        verified = self.unlock(
+            stream,
+            new_password,
+            progress=(
+                None
+                if progress is None
+                else lambda completed, _total: progress(
+                    verification_offset + completed,
+                    total,
+                )
+            ),
+        )
+        if verified != updated:
+            raise AuthenticationError(
+                "Не удалось подтвердить новый пароль диска."
+            )
+        try:
+            self.unlock(
+                stream,
+                current_password,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda completed, _total: progress(
+                        verification_offset + BANK_COUNT * 2 + completed,
+                        total,
+                    )
+                ),
+            )
+        except AuthenticationError:
+            pass
+        else:
+            raise AuthenticationError(
+                "Прежний пароль диска остался действующим."
+            )
+        if progress is not None:
+            progress(total, total)
+        return verified
 
     @classmethod
     def serialize_for_protected_transfer(

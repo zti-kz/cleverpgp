@@ -59,6 +59,7 @@ def run(marker: Path) -> int:
         settings_label="Settings",
         resize_label="Resize",
         unmount_label="Unmount",
+        password_label="Change password",
     )
     shell_lookup = {
         (value.subkey, value.name): value.value for value in shell_values
@@ -72,6 +73,11 @@ def run(marker: Path) -> int:
     )
     if "--resize-drive" not in str(resize_command):
         raise RuntimeError("Команда увеличения виртуального диска не упакована.")
+    password_command = shell_lookup.get(
+        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Password\command", "")
+    )
+    if "--change-disk-password" not in str(password_command):
+        raise RuntimeError("Команда смены пароля диска не упакована.")
     marker.write_text(
         json.dumps(
             {

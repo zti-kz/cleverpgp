@@ -1102,6 +1102,74 @@ class WindowsSystemDiskManager:
             progress(100, "Виртуальный диск подключён")
         return drive
 
+    def change_opaque_password(
+        self,
+        current_password: str,
+        new_password: str,
+        *,
+        progress: Callable[[int, str], None] | None = None,
+        header_store: OpaqueVolumeHeaderStore | None = None,
+    ) -> Path:
+        """Safely detach an active v4 projection and replace its password."""
+
+        drive = self.mounted_drive
+        record = self._control_record
+        source = self._container_path
+        if drive is None or record is None or source is None:
+            raise MountUnavailableError(
+                "Активный виртуальный диск Clever PGP не найден."
+            )
+        target = resolve_file_hosted_container_path(source)
+        if not target.is_file():
+            raise MountUnavailableError("Файл зашифрованного диска не найден.")
+        store = header_store or OpaqueVolumeHeaderStore()
+        if progress is not None:
+            progress(3, "Проверка текущего пароля диска")
+        with target.open("rb") as stream:
+            selected = store.validate_password_change(
+                stream,
+                current_password,
+                new_password,
+                expected_volume_id=record.volume_id,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda completed, total: progress(
+                        3 + round(completed / total * 27),
+                        "Проверка нового пароля диска",
+                    )
+                ),
+            )
+        if selected.storage_format != WINDOWS_BLOCK_STORAGE_FORMAT:
+            raise MountUnavailableError(
+                "Смена пароля доступна только для диска "
+                "со скрытой областью Clever PGP."
+            )
+
+        if progress is not None:
+            progress(35, "Безопасное отключение диска")
+        self.unmount()
+        if progress is not None:
+            progress(45, "Обновление защищённого заголовка")
+        with target.open("r+b") as stream:
+            store.change_password(
+                stream,
+                current_password,
+                new_password,
+                expected_volume_id=record.volume_id,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda completed, total: progress(
+                        45 + round(completed / total * 53),
+                        "Обновление защищённого заголовка",
+                    )
+                ),
+            )
+        if progress is not None:
+            progress(100, "Пароль диска успешно изменён")
+        return target
+
     @staticmethod
     def _validate_opaque_mount_headers(
         selected: OpaqueVolumeHeader,
@@ -1359,28 +1427,42 @@ class WindowsSystemDiskManager:
             info_label = "Сведения о диске"
             settings_label = "Настройки доступа"
             resize_label = "Увеличить диск"
+            password_label = None
             unmount_label = "Отключить зашифрованный диск"
         elif len(context_menu_labels) == 2:
             open_label, unmount_label = context_menu_labels
             info_label = "Сведения о диске"
             settings_label = "Настройки доступа"
             resize_label = "Увеличить диск"
+            password_label = None
         elif len(context_menu_labels) == 3:
             open_label, settings_label, unmount_label = context_menu_labels
             info_label = "Сведения о диске"
             resize_label = "Увеличить диск"
+            password_label = None
         elif len(context_menu_labels) == 4:
             open_label, info_label, settings_label, unmount_label = (
                 context_menu_labels
             )
             resize_label = "Увеличить диск"
+            password_label = None
         elif len(context_menu_labels) == 5:
             open_label, info_label, settings_label, resize_label, unmount_label = (
                 context_menu_labels
             )
+            password_label = None
+        elif len(context_menu_labels) == 6:
+            (
+                open_label,
+                info_label,
+                settings_label,
+                password_label,
+                resize_label,
+                unmount_label,
+            ) = context_menu_labels
         else:
             raise ValueError(
-                "Virtual disk context menu requires two to five labels."
+                "Virtual disk context menu requires two to six labels."
             )
         try:
             self._context_menu.register(
@@ -1390,6 +1472,7 @@ class WindowsSystemDiskManager:
                 settings_label=settings_label,
                 resize_label=resize_label or None,
                 unmount_label=unmount_label,
+                password_label=password_label or None,
             )
         except OSError:
             pass

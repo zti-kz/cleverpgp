@@ -104,6 +104,17 @@ def test_disk_info_mode_opens_only_compact_information_window() -> None:
     disk_info.assert_called_once_with("Z:\\")
 
 
+def test_disk_password_mode_opens_only_compact_password_window() -> None:
+    with patch(
+        "biopgp.ui.disk_password_dialog.run_disk_password_change_dialog",
+        return_value=0,
+    ) as password_dialog:
+        result = main(["--change-disk-password", "Z:\\"])
+
+    assert result == 0
+    password_dialog.assert_called_once_with("Z:\\")
+
+
 def test_settings_mode_opens_access_settings_window() -> None:
     with patch("biopgp.app.main", return_value=0) as application_main:
         result = main(["--settings", "Z:\\"])

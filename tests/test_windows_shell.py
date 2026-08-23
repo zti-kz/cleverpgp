@@ -189,9 +189,17 @@ def test_hidden_disk_menu_omits_unsupported_resize_action(tmp_path: Path) -> Non
         settings_label="Settings",
         resize_label=None,
         unmount_label="Unmount",
+        password_label="Change disk password",
     )
 
     assert not any("\\Resize" in value.subkey for value in values)
+    password_command = next(
+        value.value
+        for value in values
+        if value.subkey.endswith(r"\Password\command")
+    )
+    assert "--change-disk-password" in str(password_command)
+    assert "%1" in str(password_command)
     assert any("\\Unmount" in value.subkey for value in values)
 
 

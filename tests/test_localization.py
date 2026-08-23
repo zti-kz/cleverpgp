@@ -22,6 +22,9 @@ from biopgp.core.storage import ProfileRepository  # noqa: E402
 from biopgp.localization import available_languages, set_language, tr  # noqa: E402
 from biopgp.ui.about_dialog import AboutDialog  # noqa: E402
 from biopgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
+from biopgp.ui.disk_password_dialog import (  # noqa: E402
+    DiskPasswordChangeDialog,
+)
 from biopgp.ui.main_window import MainWindow  # noqa: E402
 from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
     HiddenVolumeCreationDialog,
@@ -228,6 +231,11 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
         tmp_path / "hidden.cpgv",
         window,
     )
+    disk_password = DiskPasswordChangeDialog(
+        "Z:",
+        object(),  # type: ignore[arg-type]
+        window,
+    )
     settings = AccessSettingsDialog(
         window.repository.get_profile().unlock_mode,
         biometric_enrolled=False,
@@ -246,6 +254,7 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
             container,
             hidden,
             opaque_unlock,
+            disk_password,
             settings,
             shell,
         )
@@ -256,6 +265,7 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
 
     shell.close()
     settings.close()
+    disk_password.close()
     opaque_unlock.close()
     hidden.close()
     container.close()
@@ -269,3 +279,4 @@ def test_hidden_disk_primary_actions_are_available_in_kazakh() -> None:
 
     assert tr("Создать скрытый диск") == "Жасырын диск жасау"
     assert tr("Разблокировать диск") == "Дискіні бұғаттан шығару"
+    assert tr("Изменить пароль диска") == "Диск құпиясөзін өзгерту"
