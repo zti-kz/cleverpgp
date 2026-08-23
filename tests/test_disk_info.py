@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from biopgp.core.disk_control import DiskControlRecord
+from biopgp.core.disk_crypto import XCHACHA20_POLY1305
 from biopgp.core.disk_info import inspect_mounted_cleverpgp_disk
 from biopgp.core.errors import MountUnavailableError
 from biopgp.core.windows_storage import WindowsVolumeInfo
@@ -28,6 +29,9 @@ class FakeControlStore:
         timeout: float = 3.0,
     ) -> None:
         self.sent.append((record, command, timeout))
+
+    def algorithm(self, record: DiskControlRecord) -> str | None:
+        return XCHACHA20_POLY1305 if record is self.record else None
 
 
 def system_record(tmp_path: Path) -> DiskControlRecord:
@@ -86,6 +90,7 @@ def test_system_disk_information_requires_live_authenticated_record(
     assert info.capacity == usage.total
     assert info.free_space == usage.free
     assert info.used_space == usage.total - usage.free
+    assert info.algorithm == XCHACHA20_POLY1305
     assert store.sent == [(record, "ping", 1.0)]
     inspect.assert_called_once_with("Z:")
 

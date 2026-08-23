@@ -42,11 +42,21 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.9.2"
+$AppVersion = "0.9.3"
 $SignToolPath = $env:BIOPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:BIOPGP_SIGN_CERT_SHA1
-$TimestampUrl = $env:BIOPGP_TIMESTAMP_URL
+$ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_SIGN_EXPECTED_NAME)) {
+    "Almas Oskenbay"
+} else {
+    $env:BIOPGP_SIGN_EXPECTED_NAME.Trim()
+}
+$TimestampUrl = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_TIMESTAMP_URL)) {
+    "http://timestamp.sectigo.com/rfc3161"
+} else {
+    $env:BIOPGP_TIMESTAMP_URL.Trim()
+}
 $SigningEnabled = -not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)
+$SigningCertificateStoreArguments = @()
 
 function Assert-ProjectChild([string]$Path) {
     $ProjectRoot = [IO.Path]::GetFullPath($ProjectDirectory).TrimEnd('\') + '\'
@@ -100,28 +110,132 @@ function Assert-TrustedNavimaticsSignature([string]$Path) {
     }
 }
 
-function Invoke-CodeSigning([string]$Path) {
+function Resolve-SignToolPath {
+    if (-not [string]::IsNullOrWhiteSpace($SignToolPath)) {
+        if (-not (Test-Path -LiteralPath $SignToolPath -PathType Leaf)) {
+            throw "BIOPGP_SIGNTOOL должен указывать на signtool.exe из Windows SDK."
+        }
+        return [IO.Path]::GetFullPath($SignToolPath)
+    }
+
+    $WindowsKitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+    $DetectedSignTool = Get-ChildItem `
+        -Path (Join-Path $WindowsKitsRoot "*\x64\signtool.exe") `
+        -File `
+        -ErrorAction SilentlyContinue |
+        Sort-Object -Property FullName -Descending |
+        Select-Object -First 1
+    if ($null -eq $DetectedSignTool) {
+        throw "signtool.exe не найден. Установите Windows SDK или задайте BIOPGP_SIGNTOOL."
+    }
+    return $DetectedSignTool.FullName
+}
+
+function Test-CodeSigningEku([Security.Cryptography.X509Certificates.X509Certificate2]$Certificate) {
+    foreach ($Extension in $Certificate.Extensions) {
+        if ($Extension.Oid.Value -ne "2.5.29.37") {
+            continue
+        }
+        $EnhancedKeyUsage = [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new(
+            $Extension,
+            $Extension.Critical
+        )
+        foreach ($Usage in $EnhancedKeyUsage.EnhancedKeyUsages) {
+            if ($Usage.Value -eq "1.3.6.1.5.5.7.3.3") {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Initialize-CodeSigning {
     if (-not $SigningEnabled) {
         return
     }
-    if (-not (Test-Path -LiteralPath $SignToolPath -PathType Leaf)) {
-        throw "BIOPGP_SIGNTOOL должен указывать на signtool.exe из Windows SDK."
+
+    $script:SignToolPath = Resolve-SignToolPath
+    $NormalizedThumbprint = $SigningCertificateThumbprint.Replace(" ", "").ToUpperInvariant()
+    if ($NormalizedThumbprint -notmatch '^[0-9A-F]{40}$') {
+        throw "BIOPGP_SIGN_CERT_SHA1 должен содержать 40-значный отпечаток сертификата."
     }
-    if ([string]::IsNullOrWhiteSpace($TimestampUrl)) {
-        throw "Для долговечной подписи укажите BIOPGP_TIMESTAMP_URL от поставщика сертификата."
+    $script:SigningCertificateThumbprint = $NormalizedThumbprint
+
+    $TimestampUri = $null
+    if (
+        -not [Uri]::TryCreate($TimestampUrl, [UriKind]::Absolute, [ref]$TimestampUri) -or
+        $TimestampUri.Scheme -notin @("http", "https")
+    ) {
+        throw "BIOPGP_TIMESTAMP_URL должен содержать полный HTTP(S)-адрес службы RFC 3161."
+    }
+
+    $Stores = @(
+        [PSCustomObject]@{
+            Path = "Cert:\CurrentUser\My"
+            SignToolArguments = @("/s", "My")
+        },
+        [PSCustomObject]@{
+            Path = "Cert:\LocalMachine\My"
+            SignToolArguments = @("/sm", "/s", "My")
+        }
+    )
+    $SelectedCertificate = $null
+    foreach ($Store in $Stores) {
+        $Certificate = Get-ChildItem -LiteralPath $Store.Path -ErrorAction SilentlyContinue |
+            Where-Object { $_.Thumbprint -eq $NormalizedThumbprint } |
+            Select-Object -First 1
+        if ($null -ne $Certificate) {
+            $SelectedCertificate = $Certificate
+            $script:SigningCertificateStoreArguments = $Store.SignToolArguments
+            break
+        }
+    }
+    if ($null -eq $SelectedCertificate) {
+        throw "Сертификат подписи с указанным отпечатком не найден в хранилище Windows."
+    }
+
+    $Now = Get-Date
+    if ($SelectedCertificate.NotBefore -gt $Now -or $SelectedCertificate.NotAfter -lt $Now) {
+        throw "Сертификат издателя ещё не действует или уже истёк."
+    }
+    if (-not $SelectedCertificate.HasPrivateKey) {
+        throw "Для сертификата издателя недоступен закрытый ключ или аппаратный токен."
+    }
+    if (-not (Test-CodeSigningEku $SelectedCertificate)) {
+        throw "Выбранный сертификат не предназначен для подписи программ."
+    }
+
+    $CertificateIdentity = $SelectedCertificate.GetNameInfo(
+        [Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+        $false
+    )
+    if (-not [string]::Equals(
+        $CertificateIdentity,
+        $ExpectedSigningIdentity,
+        [StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw (
+            "Имя издателя в сертификате '$CertificateIdentity' не совпадает с " +
+            "закреплённым именем '$ExpectedSigningIdentity'."
+        )
+    }
+
+    Write-Host "Сертификат издателя проверен: $CertificateIdentity"
+    Write-Host "Действует до: $($SelectedCertificate.NotAfter.ToString('yyyy-MM-dd'))"
+}
+
+function Invoke-CodeSigning([string]$Path) {
+    if (-not $SigningEnabled) {
+        return
     }
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Файл для подписи не найден: $Path"
     }
 
-    $NormalizedThumbprint = $SigningCertificateThumbprint.Replace(" ", "").ToUpperInvariant()
-    if ($NormalizedThumbprint -notmatch '^[0-9A-F]{40}$') {
-        throw "BIOPGP_SIGN_CERT_SHA1 должен содержать 40-значный отпечаток сертификата."
-    }
-
     Write-Host "Цифровая подпись: $Path"
     & $SignToolPath sign `
-        /sha1 $NormalizedThumbprint `
+        @SigningCertificateStoreArguments `
+        /sha1 $SigningCertificateThumbprint `
         /fd SHA256 `
         /tr $TimestampUrl `
         /td SHA256 `
@@ -130,9 +244,30 @@ function Invoke-CodeSigning([string]$Path) {
     if ($LASTEXITCODE -ne 0) {
         throw "Не удалось подписать файл: $Path"
     }
-    & $SignToolPath verify /pa /v $Path
+    & $SignToolPath verify /pa /all /v $Path
     if ($LASTEXITCODE -ne 0) {
         throw "Проверка цифровой подписи не пройдена: $Path"
+    }
+
+    $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+    $ActualSigner = if ($null -eq $Signature.SignerCertificate) {
+        ""
+    } else {
+        $Signature.SignerCertificate.GetNameInfo(
+            [Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+            $false
+        )
+    }
+    if (
+        $Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        -not [string]::Equals(
+            $ActualSigner,
+            $ExpectedSigningIdentity,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or
+        $null -eq $Signature.TimeStamperCertificate
+    ) {
+        throw "Подпись, издатель или доверенная метка времени не подтверждены: $Path"
     }
 }
 
@@ -180,6 +315,8 @@ function Expand-VerifiedWinSpdPackage {
 if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
     throw "Сначала подготовьте среду разработки Clever PGP с помощью setup.ps1."
 }
+
+Initialize-CodeSigning
 
 Write-Host "Подготовка сборки Clever PGP..."
 & $PythonExecutable -m pip install -e "${ProjectDirectory}[packaging]"
@@ -347,5 +484,9 @@ if ($SigningEnabled) {
     Invoke-CodeSigning $SetupExecutable
 }
 $SetupHash = (Get-FileHash -LiteralPath $SetupExecutable -Algorithm SHA256).Hash
+$SetupChecksum = "$SetupExecutable.sha256"
+"$SetupHash *$([IO.Path]::GetFileName($SetupExecutable))" |
+    Set-Content -LiteralPath $SetupChecksum -Encoding ascii
 Write-Host "Готово: $SetupExecutable"
+Write-Host "Контрольная сумма: $SetupChecksum"
 Write-Host "SHA-256: $SetupHash"

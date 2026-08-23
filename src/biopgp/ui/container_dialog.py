@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -23,6 +24,11 @@ from biopgp.core.block_container import (
     BlockVaultContainer as EncryptedContainer,
 )
 from biopgp.core.errors import ValidationError
+from biopgp.core.disk_crypto import (
+    DEFAULT_DISK_ALGORITHM,
+    XCHACHA20_POLY1305,
+    available_disk_ciphers,
+)
 from biopgp.core.winspd import MIN_HIDDEN_WINDOWS_COVER_CAPACITY
 from biopgp.localization import localize_widget_tree, tr
 from biopgp.ui.icons import line_icon
@@ -72,14 +78,14 @@ class ContainerCreationDialog(QDialog):
         self._capacity_choices = [self._minimum_capacity, self._selected_capacity]
         self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(760)
         self.resize(
-            680,
-            940
+            820,
+            920
             if self._hidden_volume_available
             else 880
             if self._allow_backend_choice
-            else (820 if self._system_disk else 720),
+            else (850 if self._system_disk else 760),
         )
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
         self._build_ui()
@@ -125,6 +131,13 @@ class ContainerCreationDialog(QDialog):
             and self.volume_kind_input.currentData() == VOLUME_KIND_HIDDEN
         )
 
+    @property
+    def disk_algorithm(self) -> str:
+        selected = str(
+            self.algorithm_input.currentData() or DEFAULT_DISK_ALGORITHM
+        )
+        return XCHACHA20_POLY1305 if self.hidden_volume else selected
+
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(28, 20, 28, 20)
@@ -150,6 +163,13 @@ class ContainerCreationDialog(QDialog):
         subtitle.setWordWrap(True)
         outer.addWidget(title)
         outer.addWidget(subtitle)
+
+        top_option_cards: list[QFrame] = []
+        options_grid = QGridLayout()
+        options_grid.setHorizontalSpacing(12)
+        options_grid.setVerticalSpacing(10)
+        options_grid.setColumnStretch(0, 1)
+        options_grid.setColumnStretch(1, 1)
 
         if self._allow_backend_choice:
             backend_card = QFrame()
@@ -177,7 +197,7 @@ class ContainerCreationDialog(QDialog):
             backend_layout.addWidget(backend_title)
             backend_layout.addWidget(self.backend_input)
             backend_layout.addWidget(self.backend_description)
-            outer.addWidget(backend_card)
+            top_option_cards.append(backend_card)
 
         if self._hidden_volume_available:
             self.volume_kind_card = QFrame()
@@ -203,7 +223,68 @@ class ContainerCreationDialog(QDialog):
             kind_layout.addWidget(kind_title)
             kind_layout.addWidget(self.volume_kind_input)
             kind_layout.addWidget(self.volume_kind_description)
-            outer.addWidget(self.volume_kind_card)
+            top_option_cards.append(self.volume_kind_card)
+
+        algorithm_card = QFrame()
+        algorithm_card.setObjectName("backendCard")
+        algorithm_layout = QVBoxLayout(algorithm_card)
+        algorithm_layout.setContentsMargins(16, 12, 16, 12)
+        algorithm_layout.setSpacing(6)
+        algorithm_title = QLabel("Метод шифрования диска")
+        algorithm_title.setObjectName("fieldTitle")
+        self.algorithm_input = QComboBox()
+        self.algorithm_input.setObjectName("diskAlgorithmInput")
+        for cipher in available_disk_ciphers():
+            if cipher.identifier == XCHACHA20_POLY1305:
+                caption = "XChaCha20-Poly1305 — переносимый (рекомендуется)"
+            else:
+                caption = "AES-256-GCM — аппаратно ускоряемый"
+            self.algorithm_input.addItem(caption, cipher.identifier)
+        self.algorithm_description = QLabel()
+        self.algorithm_description.setObjectName("muted")
+        self.algorithm_description.setWordWrap(True)
+        algorithm_layout.addWidget(algorithm_title)
+        algorithm_layout.addWidget(self.algorithm_input)
+        algorithm_layout.addWidget(self.algorithm_description)
+        self.format_card: QFrame | None = None
+        if self._system_disk or self._allow_backend_choice:
+            self.format_card = QFrame()
+            self.format_card.setObjectName("formatCard")
+            format_layout = QVBoxLayout(self.format_card)
+            format_layout.setContentsMargins(16, 12, 16, 12)
+            format_layout.setSpacing(6)
+            format_title = QLabel("Файловая система")
+            format_title.setObjectName("fieldTitle")
+            self.file_system_input = QComboBox()
+            self.file_system_input.setObjectName("fileSystemInput")
+            self.file_system_input.addItem(
+                "NTFS — для Windows (рекомендуется)", "NTFS"
+            )
+            self.file_system_input.addItem(
+                "exFAT — для совместимости", "EXFAT"
+            )
+            self.file_system_description = QLabel()
+            self.file_system_description.setObjectName("muted")
+            self.file_system_description.setWordWrap(True)
+            self.file_system_input.currentIndexChanged.connect(
+                self._update_file_system_description
+            )
+            format_layout.addWidget(format_title)
+            format_layout.addWidget(self.file_system_input)
+            format_layout.addWidget(self.file_system_description)
+
+        if len(top_option_cards) == 1:
+            options_grid.addWidget(top_option_cards[0], 0, 0, 1, 2)
+        else:
+            for column, card in enumerate(top_option_cards):
+                options_grid.addWidget(card, 0, column)
+        bottom_row = 1 if top_option_cards else 0
+        if self.format_card is None:
+            options_grid.addWidget(algorithm_card, bottom_row, 0, 1, 2)
+        else:
+            options_grid.addWidget(algorithm_card, bottom_row, 0)
+            options_grid.addWidget(self.format_card, bottom_row, 1)
+        outer.addLayout(options_grid)
 
         path_title = QLabel("Где сохранить контейнер")
         path_title.setObjectName("fieldTitle")
@@ -296,33 +377,6 @@ class ContainerCreationDialog(QDialog):
         size_layout.addWidget(no_limit)
         outer.addWidget(size_card)
 
-        if self._system_disk or self._allow_backend_choice:
-            self.format_card = QFrame()
-            self.format_card.setObjectName("formatCard")
-            format_layout = QVBoxLayout(self.format_card)
-            format_layout.setContentsMargins(16, 14, 16, 14)
-            format_layout.setSpacing(8)
-            format_title = QLabel("Файловая система")
-            format_title.setObjectName("fieldTitle")
-            self.file_system_input = QComboBox()
-            self.file_system_input.setObjectName("fileSystemInput")
-            self.file_system_input.addItem(
-                "NTFS — для Windows (рекомендуется)", "NTFS"
-            )
-            self.file_system_input.addItem(
-                "exFAT — для совместимости", "EXFAT"
-            )
-            self.file_system_description = QLabel()
-            self.file_system_description.setObjectName("muted")
-            self.file_system_description.setWordWrap(True)
-            self.file_system_input.currentIndexChanged.connect(
-                self._update_file_system_description
-            )
-            format_layout.addWidget(format_title)
-            format_layout.addWidget(self.file_system_input)
-            format_layout.addWidget(self.file_system_description)
-            outer.addWidget(self.format_card)
-
         label_title = QLabel("Название диска")
         label_title.setObjectName("fieldTitle")
         self.label_input = QLineEdit("Clever PGP")
@@ -352,6 +406,9 @@ class ContainerCreationDialog(QDialog):
 
         self.size_slider.valueChanged.connect(self._slider_changed)
         self.path_input.textChanged.connect(self._update_storage_summary)
+        self.algorithm_input.currentIndexChanged.connect(
+            self._update_algorithm_description
+        )
         if self._allow_backend_choice:
             self.backend_input.currentIndexChanged.connect(
                 self._update_backend_description
@@ -369,12 +426,14 @@ class ContainerCreationDialog(QDialog):
             self._update_volume_kind_availability()
         if self._hidden_volume_available:
             self._update_volume_kind()
+        self._update_algorithm_description()
         self._update_storage_summary()
 
     def _update_backend_description(self, *_: object) -> None:
         selected = self.backend_input.currentData()
         self._system_disk = selected == DISK_BACKEND_WINDOWS
-        self.format_card.setVisible(self._system_disk)
+        if self.format_card is not None:
+            self.format_card.setVisible(self._system_disk)
         if self._system_disk:
             description = (
                 "Windows использует обычную файловую систему NTFS или exFAT и "
@@ -397,6 +456,10 @@ class ContainerCreationDialog(QDialog):
 
     def _update_volume_kind(self, *_: object) -> None:
         if self.hidden_volume:
+            portable_index = self.algorithm_input.findData(XCHACHA20_POLY1305)
+            if portable_index >= 0:
+                self.algorithm_input.setCurrentIndex(portable_index)
+            self.algorithm_input.setEnabled(False)
             self._minimum_capacity = max(
                 self._base_minimum_capacity,
                 MIN_HIDDEN_WINDOWS_COVER_CAPACITY,
@@ -406,13 +469,36 @@ class ContainerCreationDialog(QDialog):
                 "откроется, определяется введённым паролем."
             )
         else:
+            self.algorithm_input.setEnabled(self.algorithm_input.count() > 1)
             self._minimum_capacity = self._base_minimum_capacity
             description = (
                 "Один пароль профиля открывает обычный зашифрованный диск."
             )
         self.volume_kind_description.setText(tr(description))
+        self._update_algorithm_description()
         if self._current_path is not None:
             self._update_storage_summary()
+
+    def _update_algorithm_description(self, *_: object) -> None:
+        if self.hidden_volume:
+            description = (
+                "Для внешней и скрытой областей используется переносимый метод "
+                "с 192-битным одноразовым параметром. Это сохраняет единую "
+                "проверенную структуру скрытого диска."
+            )
+        elif self.disk_algorithm == XCHACHA20_POLY1305:
+            description = (
+                "Потоковое преобразование с расширенным 192-битным одноразовым "
+                "параметром и кодом аутентификации. Эффективно работает программно "
+                "и одинаково доступно в Windows и Ubuntu."
+            )
+        else:
+            description = (
+                "Симметричное блочное преобразование с 256-битным ключом в режиме "
+                "аутентифицированного шифрования. Использует аппаратное ускорение "
+                "процессора; диск требует такой поддержки и на другом компьютере."
+            )
+        self.algorithm_description.setText(tr(description))
 
     def _update_file_system_description(self, *_: object) -> None:
         if self.file_system == "EXFAT":

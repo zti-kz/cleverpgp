@@ -12,11 +12,13 @@ from biopgp.core.block_volume import (
     HEADER_AREA_SIZE,
     HEADER_PREFIX,
     LOGICAL_BLOCK_SIZE,
+    NONCE_SIZE,
     PHYSICAL_SLOT_SIZE,
     BlockIntegrityError,
     EncryptedBlockVolume,
     InvalidBlockVolumeError,
 )
+from biopgp.core.disk_crypto import AES256_GCM, disk_cipher_available
 from biopgp.core.errors import ValidationError
 from biopgp.core.mapped_stream import MappedFileStream
 
@@ -51,6 +53,44 @@ def test_block_volume_supports_independent_random_access(tmp_path: Path) -> None
     with EncryptedBlockVolume.open(path, key) as reopened:
         assert reopened.read_blocks(3, 1) == b"A" * LOGICAL_BLOCK_SIZE
         assert reopened.read_blocks(4, 1) == bytes(LOGICAL_BLOCK_SIZE)
+
+
+@pytest.mark.skipif(
+    not disk_cipher_available(AES256_GCM),
+    reason="AES-256-GCM is not available on this processor",
+)
+def test_aes_disk_round_trip_and_detects_tampering(tmp_path: Path) -> None:
+    key = master_key()
+    path = tmp_path / "aes.cpgv"
+    payload = b"AES disk".ljust(LOGICAL_BLOCK_SIZE, b".")
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+        algorithm=AES256_GCM,
+    )
+    volume.write_blocks(3, payload)
+    volume.close()
+
+    reopened = EncryptedBlockVolume.open(path, key)
+    assert reopened.algorithm == AES256_GCM
+    assert reopened.read_blocks(3, 1) == payload
+    reopened.resize(2 * 1024 * 1024)
+    assert reopened.logical_capacity == 2 * 1024 * 1024
+    assert reopened.read_blocks(3, 1) == payload
+    reopened.close()
+
+    offset = HEADER_PREFIX.size + HEADER_AREA_SIZE + 3 * PHYSICAL_SLOT_SIZE
+    with path.open("r+b") as stream:
+        stream.seek(offset + NONCE_SIZE + 7)
+        original = stream.read(1)
+        stream.seek(-1, 1)
+        stream.write(bytes([original[0] ^ 1]))
+
+    damaged = EncryptedBlockVolume.open(path, key)
+    with pytest.raises(BlockIntegrityError):
+        damaged.read_blocks(3, 1)
+    damaged.close()
 
 
 def test_mapped_winspd_io_persists_concurrent_authenticated_ranges(

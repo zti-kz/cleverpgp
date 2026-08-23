@@ -15,6 +15,7 @@ from biopgp.core.disk_control import (
     DiskControlRecord,
     DiskControlStore,
 )
+from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.disk_host import WinSpdHostManager
 from biopgp.core.errors import MountUnavailableError
 from biopgp.core.opaque_volume_header import (
@@ -658,6 +659,7 @@ class WindowsSystemDiskManager:
         *,
         logical_capacity: int,
         label: str,
+        algorithm: str = DEFAULT_DISK_ALGORITHM,
         file_system: str = "NTFS",
         overwrite: bool = False,
         context_menu_labels: tuple[str, ...] | None = None,
@@ -685,6 +687,7 @@ class WindowsSystemDiskManager:
             logical_capacity=logical_capacity,
             library=library,
             label=label,
+            algorithm=algorithm,
             overwrite=overwrite,
             progress=creation_progress,
         )
@@ -741,6 +744,7 @@ class WindowsSystemDiskManager:
             control_record = self._publish_control_record(
                 drive,
                 container_path=container_path,
+                algorithm=algorithm,
                 context_menu_labels=context_menu_labels,
             )
         except Exception:
@@ -890,6 +894,7 @@ class WindowsSystemDiskManager:
             control_record = self._publish_control_record(
                 drive,
                 container_path=target,
+                algorithm=DEFAULT_DISK_ALGORITHM,
                 context_menu_labels=context_menu_labels,
             )
         except Exception:
@@ -945,6 +950,7 @@ class WindowsSystemDiskManager:
         volume = open_windows_block_volume(container_path, master_key)
         try:
             logical_capacity = volume.logical_capacity
+            algorithm = volume.algorithm
         finally:
             volume.close()
         before = list_windows_disks()
@@ -967,6 +973,7 @@ class WindowsSystemDiskManager:
             control_record = self._publish_control_record(
                 drive,
                 container_path=container_path,
+                algorithm=algorithm,
                 context_menu_labels=context_menu_labels,
             )
         except Exception:
@@ -1087,6 +1094,7 @@ class WindowsSystemDiskManager:
             control_record = self._publish_control_record(
                 drive,
                 container_path=source,
+                algorithm=DEFAULT_DISK_ALGORITHM,
                 context_menu_labels=context_menu_labels,
             )
         except Exception:
@@ -1410,6 +1418,7 @@ class WindowsSystemDiskManager:
         drive: str,
         *,
         container_path: Path,
+        algorithm: str,
         context_menu_labels: tuple[str, ...] | None,
     ) -> DiskControlRecord | None:
         endpoint = getattr(self._process_manager, "control_endpoint", None)
@@ -1421,6 +1430,7 @@ class WindowsSystemDiskManager:
             drive=drive,
             process_id=process_id,
             container_path=container_path,
+            algorithm=algorithm,
         )
         if context_menu_labels is None:
             open_label = "Открыть зашифрованный диск"

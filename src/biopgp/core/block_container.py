@@ -24,6 +24,7 @@ from biopgp.core.block_volume import (
     BlockVolumeError,
     EncryptedBlockVolume,
 )
+from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.container import (
     CONTAINER_SUFFIX,
     MAX_FORMAT_FILE_SIZE,
@@ -110,6 +111,7 @@ class BlockVaultContainer:
         *,
         data_capacity: int = 20 * 1024 * 1024,
         label: str = "Clever PGP",
+        algorithm: str = DEFAULT_DISK_ALGORITHM,
         overwrite: bool = False,
         progress: ProgressCallback | None = None,
     ) -> BlockVaultContainer:
@@ -147,6 +149,7 @@ class BlockVaultContainer:
             master_key,
             logical_capacity=logical_capacity,
             label=label,
+            algorithm=algorithm,
             overwrite=overwrite,
             storage_format=BLOCK_VAULT_STORAGE_FORMAT,
             progress=initialize_progress,

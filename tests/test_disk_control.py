@@ -13,6 +13,7 @@ from biopgp.core.disk_control import (
     DiskControlStore,
     send_disk_control_command,
 )
+from biopgp.core.disk_crypto import AES256_GCM
 from biopgp.core.errors import MountUnavailableError
 
 
@@ -103,6 +104,7 @@ def test_control_store_protects_token_and_finds_drive(tmp_path: Path) -> None:
         drive="z:\\",
         process_id=1234,
         container_path=container_path,
+        algorithm=AES256_GCM,
     )
     payload = json.loads(published.path.read_text(encoding="utf-8"))
     found = store.find_by_drive("Z:")
@@ -112,8 +114,10 @@ def test_control_store_protects_token_and_finds_drive(tmp_path: Path) -> None:
     assert found.drive == "Z:"
     assert base64.b64decode(payload["protected_token"]) != token
     assert str(container_path) not in published.path.read_text(encoding="utf-8")
+    assert AES256_GCM not in published.path.read_text(encoding="utf-8")
     assert store.endpoint(found) == endpoint
     assert store.container_path(found) == container_path.resolve()
+    assert store.algorithm(found) == AES256_GCM
 
     store.remove(found)
     assert not published.path.exists()

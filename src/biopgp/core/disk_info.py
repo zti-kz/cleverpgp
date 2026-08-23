@@ -22,6 +22,7 @@ class MountedDiskInfo:
     file_system: str
     capacity: int
     free_space: int
+    algorithm: str | None = None
 
     @property
     def used_space(self) -> int:
@@ -57,12 +58,19 @@ def inspect_mounted_cleverpgp_disk(
             expected_disk_size=volume.disk_size,
         )
         usage = _disk_usage(root)
+        algorithm_reader = getattr(store, "algorithm", None)
+        algorithm = (
+            algorithm_reader(record)
+            if callable(algorithm_reader)
+            else None
+        )
         return MountedDiskInfo(
             drive=normalized,
             backend="Виртуальный диск Windows",
             file_system=volume.file_system,
             capacity=int(usage.total),
             free_space=min(int(usage.free), int(usage.total)),
+            algorithm=algorithm,
         )
 
     control = root / CONTROL_PATH.lstrip("/")

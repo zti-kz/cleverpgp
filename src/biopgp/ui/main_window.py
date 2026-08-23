@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from biopgp.core.block_volume import BlockVolumeError
+from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.errors import BioPGPError, InvalidContainerError
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
 from biopgp.core.file_crypto import FileCryptoService
@@ -848,6 +849,11 @@ class MainWindow(QMainWindow):
         data_capacity = dialog.data_capacity
         volume_label = dialog.volume_label
         file_system = dialog.file_system
+        disk_algorithm = getattr(
+            dialog,
+            "disk_algorithm",
+            DEFAULT_DISK_ALGORITHM,
+        )
         create_as_system_disk = self._uses_windows_system_disk or (
             self._automatically_selects_disk_backend and dialog.system_disk
         )
@@ -922,6 +928,7 @@ class MainWindow(QMainWindow):
                         logical_capacity=data_capacity,
                         label=volume_label,
                         file_system=file_system,
+                        algorithm=disk_algorithm,
                         context_menu_labels=(
                             tr("Открыть зашифрованный диск"),
                             tr("Сведения о диске"),
@@ -946,6 +953,7 @@ class MainWindow(QMainWindow):
                 master_key,
                 data_capacity=data_capacity,
                 label=volume_label,
+                algorithm=disk_algorithm,
                 progress=creation_progress,
             )
             container.close(save=False)

@@ -18,6 +18,11 @@ from biopgp.ui.container_dialog import (  # noqa: E402
     ContainerCreationDialog,
 )
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
+from biopgp.core.disk_crypto import (  # noqa: E402
+    AES256_GCM,
+    XCHACHA20_POLY1305,
+    disk_cipher_available,
+)
 from biopgp.core.winspd import (  # noqa: E402
     MIN_HIDDEN_WINDOWS_COVER_CAPACITY,
     MIN_WINDOWS_DISK_CAPACITY,
@@ -79,10 +84,36 @@ def test_system_disk_dialog_enforces_windows_minimum_capacity() -> None:
     assert "32 МБ" in dialog.minimum_size_label.text()
     assert dialog.file_system == "NTFS"
     assert dialog.findChild(QComboBox, "fileSystemInput") is dialog.file_system_input
+    assert dialog.disk_algorithm == XCHACHA20_POLY1305
+    assert "192-битным" in dialog.algorithm_description.text()
 
     dialog.file_system_input.setCurrentIndex(1)
     assert dialog.file_system == "EXFAT"
     assert "журналирование" in dialog.file_system_description.text()
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_disk_algorithm_choice_and_hidden_disk_constraint() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog(
+        minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+        system_disk=True,
+        hidden_volume_available=True,
+    )
+
+    if disk_cipher_available(AES256_GCM):
+        aes_index = dialog.algorithm_input.findData(AES256_GCM)
+        assert aes_index >= 0
+        dialog.algorithm_input.setCurrentIndex(aes_index)
+        assert dialog.disk_algorithm == AES256_GCM
+        assert "256-битным" in dialog.algorithm_description.text()
+
+    hidden_index = dialog.volume_kind_input.findData(VOLUME_KIND_HIDDEN)
+    dialog.volume_kind_input.setCurrentIndex(hidden_index)
+    assert dialog.disk_algorithm == XCHACHA20_POLY1305
+    assert not dialog.algorithm_input.isEnabled()
 
     dialog.close()
     application.processEvents()

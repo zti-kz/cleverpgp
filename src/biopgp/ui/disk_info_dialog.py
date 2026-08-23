@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from biopgp.config import APP_NAME, ORGANIZATION_NAME, database_path
+from biopgp.core.disk_crypto import AES256_GCM, XCHACHA20_POLY1305
 from biopgp.core.disk_info import MountedDiskInfo, inspect_mounted_cleverpgp_disk
 from biopgp.core.errors import BioPGPError
 from biopgp.core.storage import ProfileRepository
@@ -108,13 +109,12 @@ class DiskInfoDialog(QDialog):
         protection_layout.setSpacing(7)
         protection_title = QLabel("Метод защиты")
         protection_title.setObjectName("fieldTitle")
-        protection_name = QLabel("Аутентифицированное блочное шифрование")
-        protection_name.setObjectName("protectionName")
-        protection_description = QLabel(
-            "Каждый блок преобразуется независимо и связан со своим адресом. "
-            "При чтении проверяется целостность, поэтому повреждение, подмена "
-            "или перестановка зашифрованных блоков обнаруживаются."
+        protection_caption, protection_detail = _protection_text(
+            self.info.algorithm
         )
+        protection_name = QLabel(protection_caption)
+        protection_name.setObjectName("protectionName")
+        protection_description = QLabel(protection_detail)
         protection_description.setObjectName("muted")
         protection_description.setWordWrap(True)
         protection_layout.addWidget(protection_title)
@@ -202,6 +202,31 @@ def _format_bytes(size: int) -> str:
             formatted = f"{value:.2f}".rstrip("0").rstrip(".")
             return f"{formatted} {tr(unit)}"
     return tr("{size} байт", size=size)
+
+
+def _protection_text(algorithm: str | None) -> tuple[str, str]:
+    if algorithm == AES256_GCM:
+        return (
+            "AES-256-GCM",
+            "Каждый логический адрес получает независимый подключ. Блоки "
+            "зашифровываются с 256-битным ключом и кодом аутентификации; "
+            "адрес блока и служебный контекст также контролируются. Повреждение, "
+            "подмена или перестановка шифротекста обнаруживаются при чтении.",
+        )
+    if algorithm == XCHACHA20_POLY1305:
+        return (
+            "XChaCha20-Poly1305",
+            "Каждый блок использует независимый 192-битный одноразовый параметр "
+            "и код аутентификации. Адрес блока и служебный контекст включены в "
+            "контроль целостности, поэтому повреждение, подмена или перестановка "
+            "шифротекста обнаруживаются при чтении.",
+        )
+    return (
+        "Аутентифицированное блочное шифрование",
+        "Каждый блок преобразуется независимо и связан со своим адресом. "
+        "При чтении проверяется целостность, поэтому повреждение, подмена "
+        "или перестановка зашифрованных блоков обнаруживаются.",
+    )
 
 
 _INFO_STYLESHEET = """

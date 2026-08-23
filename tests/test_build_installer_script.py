@@ -28,3 +28,23 @@ def test_windows_installer_verifies_vendor_hashes_and_signatures() -> None:
     assert script.index("Download-VerifiedFile $WinFspUrl") < script.index(
         "Assert-TrustedNavimaticsSignature $WinFspInstaller"
     )
+
+
+def test_windows_installer_rejects_wrong_publisher_certificate() -> None:
+    script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
+
+    assert '$ExpectedSigningIdentity = if (' in script
+    assert '"Almas Oskenbay"' in script
+    assert "function Test-CodeSigningEku" in script
+    assert '"1.3.6.1.5.5.7.3.3"' in script
+    assert "$SelectedCertificate.HasPrivateKey" in script
+    assert "CertificateIdentity" in script
+
+
+def test_windows_installer_verifies_timestamped_output_and_writes_checksum() -> None:
+    script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
+
+    assert "verify /pa /all /v" in script
+    assert "$Signature.TimeStamperCertificate" in script
+    assert '"$SetupExecutable.sha256"' in script
+    assert "Set-Content -LiteralPath $SetupChecksum -Encoding ascii" in script

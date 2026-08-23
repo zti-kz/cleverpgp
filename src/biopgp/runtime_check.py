@@ -29,6 +29,10 @@ def run(marker: Path) -> int:
 
     from biopgp.biometrics.model_assets import MODEL_ASSETS
     from biopgp.config import bundled_models_directory
+    from biopgp.core.disk_crypto import (
+        DISK_NONCE_FIELD_SIZE,
+        available_disk_ciphers,
+    )
     from biopgp.core.file_crypto import FileCryptoService
     from biopgp.core.winspd import WinSpdLibrary
     from biopgp.core.windows_shell import (
@@ -41,6 +45,21 @@ def run(marker: Path) -> int:
     encrypted = aead.encrypt(message)
     if aead.decrypt(encrypted) != message:
         raise RuntimeError("Проверка криптографического backend завершилась ошибкой.")
+    disk_algorithms: list[str] = []
+    disk_key = utils.random(Aead.KEY_SIZE)
+    disk_nonce = utils.random(DISK_NONCE_FIELD_SIZE)
+    for cipher in available_disk_ciphers():
+        protected = cipher.encrypt(message, b"runtime block", disk_nonce, disk_key)
+        if cipher.decrypt(
+            protected,
+            b"runtime block",
+            disk_nonce,
+            disk_key,
+        ) != message:
+            raise RuntimeError(
+                f"Проверка метода защиты {cipher.name} завершилась ошибкой."
+            )
+        disk_algorithms.append(cipher.name)
 
     models_directory = bundled_models_directory()
     for asset in MODEL_ASSETS:
@@ -86,6 +105,7 @@ def run(marker: Path) -> int:
                 "opencv": cv2.__version__,
                 "numpy": numpy.__version__,
                 "cffi_backend": str(getattr(_cffi_backend, "__version__", "loaded")),
+                "disk_algorithms": disk_algorithms,
                 "models": len(MODEL_ASSETS),
                 "winspd": "loaded",
                 "windows_shell": "drive-scoped",

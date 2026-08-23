@@ -16,6 +16,13 @@ from pathlib import Path
 from nacl import bindings, exceptions, hash, secret, utils
 from nacl.encoding import RawEncoder
 
+from biopgp.core.disk_crypto import (
+    DEFAULT_DISK_ALGORITHM,
+    DISK_NONCE_FIELD_SIZE,
+    DISK_TAG_SIZE,
+    random_nonce_fields,
+    require_disk_cipher,
+)
 from biopgp.core.errors import ContainerError, OutputExistsError, ValidationError
 from biopgp.core.mapped_stream import MappedFileStream
 
@@ -28,12 +35,12 @@ HEADER_SLOT_COUNT = 3
 HEADER_SLOT_SIZE = HEADER_AREA_SIZE // HEADER_SLOT_COUNT
 HEADER_UNUSED_SIZE = HEADER_AREA_SIZE - HEADER_SLOT_COUNT * HEADER_SLOT_SIZE
 LOGICAL_BLOCK_SIZE = 4096
-NONCE_SIZE = bindings.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
-TAG_SIZE = bindings.crypto_aead_xchacha20poly1305_ietf_ABYTES
+NONCE_SIZE = DISK_NONCE_FIELD_SIZE
+TAG_SIZE = DISK_TAG_SIZE
 PHYSICAL_SLOT_SIZE = NONCE_SIZE + LOGICAL_BLOCK_SIZE + TAG_SIZE
 MIN_LOGICAL_CAPACITY = 1024 * 1024
 INITIALIZATION_BATCH_BLOCKS = 256
-ALGORITHM = "XCHACHA20-POLY1305-BLOCK-V1"
+ALGORITHM = DEFAULT_DISK_ALGORITHM
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
 GENERIC_STORAGE_FORMAT = "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
 HEADER_STATE_COMMITTED = "committed"
@@ -79,6 +86,7 @@ class EncryptedBlockVolume:
         self._volume_id = bytes(volume_id)
         self._block_count = block_count
         self._metadata = metadata
+        self._cipher = require_disk_cipher(str(metadata["algorithm"]))
         self._active_header_slot = active_header_slot
         self._header_generation = int(metadata["header_generation"])
         self._pending_resize = pending_resize
@@ -95,6 +103,7 @@ class EncryptedBlockVolume:
         label: str = "Clever PGP",
         overwrite: bool = False,
         storage_format: str = GENERIC_STORAGE_FORMAT,
+        algorithm: str = ALGORITHM,
         progress: Callable[[int, int], None] | None = None,
     ) -> EncryptedBlockVolume:
         target = Path(path).expanduser().resolve()
@@ -109,6 +118,7 @@ class EncryptedBlockVolume:
             raise ValidationError("Папка для контейнера не существует.")
         if not storage_format or len(storage_format) > 63:
             raise ValidationError("Некорректное назначение блочного хранилища.")
+        cipher = require_disk_cipher(algorithm)
 
         required_size = cls.physical_size(block_count)
         free_bytes = int(shutil.disk_usage(target.parent).free)
@@ -121,7 +131,7 @@ class EncryptedBlockVolume:
         volume_id = uuid.uuid4().bytes
         wrapped_key = bytes(secret.SecretBox(master_key).encrypt(volume_key))
         metadata: dict[str, object] = {
-            "algorithm": ALGORITHM,
+            "algorithm": cipher.identifier,
             "block_count": block_count,
             "created_at": datetime.now(UTC).isoformat(),
             "header_generation": 1,
@@ -159,7 +169,11 @@ class EncryptedBlockVolume:
                         block_index = completed + offset
                         batch.extend(
                             cls._encrypt_block(
-                                zero_block, block_index, volume_id, volume_key
+                                zero_block,
+                                block_index,
+                                volume_id,
+                                volume_key,
+                                algorithm=cipher.identifier,
                             )
                         )
                     stream.write(batch)
@@ -254,6 +268,10 @@ class EncryptedBlockVolume:
         value = self._metadata.get("storage_format")
         return str(value) if isinstance(value, str) and value else None
 
+    @property
+    def algorithm(self) -> str:
+        return self._cipher.identifier
+
     def read_blocks(
         self,
         block_address: int,
@@ -283,7 +301,7 @@ class EncryptedBlockVolume:
             block_index = block_address + offset
             try:
                 result.extend(
-                    bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
+                    self._cipher.decrypt(
                         slot[NONCE_SIZE:],
                         self._block_aad(
                             volume_id,
@@ -321,7 +339,7 @@ class EncryptedBlockVolume:
             volume_id = self._volume_id
 
         encrypted = bytearray()
-        nonces = utils.random(block_count * NONCE_SIZE)
+        nonces = random_nonce_fields(block_count)
         for offset in range(block_count):
             start = offset * LOGICAL_BLOCK_SIZE
             block_index = block_address + offset
@@ -329,7 +347,7 @@ class EncryptedBlockVolume:
             nonce = nonces[nonce_start : nonce_start + NONCE_SIZE]
             encrypted.extend(nonce)
             encrypted.extend(
-                bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
+                self._cipher.encrypt(
                     payload[start : start + LOGICAL_BLOCK_SIZE],
                     self._block_aad(
                         volume_id,
@@ -408,14 +426,22 @@ class EncryptedBlockVolume:
                 batch = bytearray()
                 for offset in range(batch_count):
                     block_index = self._block_count + completed + offset
-                    batch.extend(
-                        self._encrypt_block(
-                            zero_block,
-                            block_index,
-                            self._volume_id,
-                            bytes(self._volume_key),
-                        )
+                    arguments = (
+                        zero_block,
+                        block_index,
+                        self._volume_id,
+                        bytes(self._volume_key),
                     )
+                    if self.algorithm == ALGORITHM:
+                        # Preserve the established extension/testing surface
+                        # for the original on-disk method.
+                        encrypted_block = self._encrypt_block(*arguments)
+                    else:
+                        encrypted_block = self._encrypt_block(
+                            *arguments,
+                            algorithm=self.algorithm,
+                        )
+                    batch.extend(encrypted_block)
                 self._stream.write(batch)
                 completed += batch_count
                 if progress is not None:
@@ -542,9 +568,11 @@ class EncryptedBlockVolume:
         volume_id: bytes,
         volume_key: bytes,
         context: bytes = b"",
+        *,
+        algorithm: str = ALGORITHM,
     ) -> bytes:
         nonce = utils.random(NONCE_SIZE)
-        ciphertext = bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
+        ciphertext = require_disk_cipher(algorithm).encrypt(
             plaintext,
             cls._block_aad(volume_id, block_index, context),
             nonce,
@@ -656,7 +684,8 @@ class EncryptedBlockVolume:
                 "Диск повреждён или создан другим профилем."
             )
         identities = {
-            (candidate[1], candidate[2]) for candidate in candidates
+            (candidate[1], candidate[2], candidate[0]["algorithm"])
+            for candidate in candidates
         }
         if len(identities) != 1:
             raise InvalidBlockVolumeError(
@@ -719,7 +748,11 @@ class EncryptedBlockVolume:
 
     @classmethod
     def _validate_metadata(cls, metadata: dict[str, object]) -> None:
-        if metadata.get("algorithm") != ALGORITHM or metadata.get("key_wrap") != KEY_WRAP:
+        try:
+            require_disk_cipher(str(metadata.get("algorithm", "")))
+        except ValidationError as error:
+            raise InvalidBlockVolumeError(str(error)) from error
+        if metadata.get("key_wrap") != KEY_WRAP:
             raise InvalidBlockVolumeError("Неподдерживаемый метод защиты диска.")
         if int(metadata.get("logical_block_size", 0)) != LOGICAL_BLOCK_SIZE:
             raise InvalidBlockVolumeError("Неподдерживаемый размер блока диска.")

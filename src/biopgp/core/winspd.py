@@ -19,6 +19,7 @@ from biopgp.core.block_volume import (
     EncryptedBlockVolume,
 )
 from biopgp.core.disk_control import DiskControlEndpoint, DiskControlServer
+from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.errors import MountUnavailableError, ValidationError
 from biopgp.core.hidden_volume import HiddenBlockVolume
 from biopgp.core.opaque_block_volume import OpaqueBlockVolume
@@ -319,6 +320,7 @@ def create_windows_block_volume(
     logical_capacity: int,
     library: WinSpdLibrary,
     label: str = "Clever PGP",
+    algorithm: str = DEFAULT_DISK_ALGORITHM,
     overwrite: bool = False,
     progress: Callable[[int, int], None] | None = None,
 ) -> EncryptedBlockVolume:
@@ -330,6 +332,7 @@ def create_windows_block_volume(
         master_key,
         logical_capacity=logical_capacity,
         label=label,
+        algorithm=algorithm,
         overwrite=overwrite,
         storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
         progress=progress,

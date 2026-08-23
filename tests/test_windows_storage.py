@@ -11,6 +11,7 @@ from nacl import pwhash, secret, utils
 
 from biopgp.core.block_volume import EncryptedBlockVolume
 from biopgp.core.disk_control import DiskControlEndpoint, DiskControlRecord
+from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.errors import MountUnavailableError, ValidationError
 from biopgp.core.hidden_volume import HiddenVolumeDescriptor
 from biopgp.core.opaque_volume_header import (
@@ -911,8 +912,10 @@ def test_system_manager_publishes_and_removes_external_control_state(
             drive: str,
             process_id: int,
             container_path: Path,
+            algorithm: str,
         ) -> object:
             assert container_path == Path(tmp_path / "controlled.cpgv")
+            assert algorithm == DEFAULT_DISK_ALGORITHM
             type(self).published = (endpoint, drive, process_id)
             return record
 
