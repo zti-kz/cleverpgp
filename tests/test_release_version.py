@@ -33,3 +33,13 @@ def test_release_tag_must_match_project_version() -> None:
         assert "не соответствует версии проекта" in str(error)
     else:
         raise AssertionError("Несогласованный тег должен быть отклонён.")
+
+
+def test_release_workflow_normalizes_and_checks_installer_versions() -> None:
+    workflow = (
+        PROJECT_ROOT / ".github" / "workflows" / "windows-release.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "ProductVersion).Trim()" in workflow
+    assert "FileVersion).Trim()" in workflow
+    assert '$expectedFileVersion = $env:RELEASE_VERSION + ".0"' in workflow

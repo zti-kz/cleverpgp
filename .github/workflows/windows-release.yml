@@ -79,8 +79,18 @@ jobs:
               throw "Installer was not created: $installer"
           }
           $versionInfo = (Get-Item -LiteralPath $installer).VersionInfo
-          if ($versionInfo.ProductVersion -ne $env:RELEASE_VERSION) {
-              throw "Installer version does not match project version."
+          $actualProductVersion = ([string]$versionInfo.ProductVersion).Trim()
+          $actualFileVersion = ([string]$versionInfo.FileVersion).Trim()
+          $expectedFileVersion = $env:RELEASE_VERSION + ".0"
+          if (
+              $actualProductVersion -ne $env:RELEASE_VERSION -or
+              $actualFileVersion -ne $expectedFileVersion
+          ) {
+              throw (
+                  "Installer metadata does not match project version: " +
+                  "ProductVersion='$actualProductVersion', " +
+                  "FileVersion='$actualFileVersion'."
+              )
           }
           $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
           "$hash *$installerName" |
