@@ -1,0 +1,145 @@
+name: Windows build and release
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test and build Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: "3.14"
+          architecture: x64
+          cache: pip
+
+      - name: Create isolated build environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[dev,packaging]"
+
+      - name: Verify release metadata
+        id: metadata
+        shell: pwsh
+        run: |
+          $arguments = @("scripts\check_release_version.py")
+          if ($env:GITHUB_REF_TYPE -eq "tag") {
+              $arguments += @("--tag", $env:GITHUB_REF_NAME)
+          }
+          $version = & .\.venv\Scripts\python.exe @arguments
+          if ($LASTEXITCODE -ne 0) {
+              throw "Release metadata check failed."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Run automated tests
+        shell: pwsh
+        run: .\.venv\Scripts\python.exe -m pytest
+
+      - name: Build and runtime-check installer
+        shell: pwsh
+        run: .\build_installer.ps1 -OutputDirectory release
+
+      - name: Verify installer metadata and create checksum
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          $installerName = "Clever-PGP-Setup-$env:RELEASE_VERSION.exe"
+          $installer = Join-Path "release" $installerName
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+              throw "Installer was not created: $installer"
+          }
+          $versionInfo = (Get-Item -LiteralPath $installer).VersionInfo
+          if ($versionInfo.ProductVersion -ne $env:RELEASE_VERSION) {
+              throw "Installer version does not match project version."
+          }
+          $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+          "$hash *$installerName" |
+              Set-Content -LiteralPath "$installer.sha256" -Encoding ascii
+
+      - name: Upload verified Windows package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: clever-pgp-windows-${{ steps.metadata.outputs.version }}
+          path: |
+            release/Clever-PGP-Setup-${{ steps.metadata.outputs.version }}.exe
+            release/Clever-PGP-Setup-${{ steps.metadata.outputs.version }}.exe.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Create signed build provenance
+        if: github.ref_type == 'tag'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763
+        with:
+          subject-checksums: release/Clever-PGP-Setup-${{ steps.metadata.outputs.version }}.exe.sha256
+
+  release:
+    name: Publish tagged GitHub release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download verified Windows package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: clever-pgp-windows-${{ needs.build.outputs.version }}
+          path: release
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_WARNING: |
+            > [!WARNING]
+            > This research build does not yet have a commercial Windows code-signing certificate. Windows SmartScreen may display a warning. Verify the attached SHA-256 file before installation and keep backups of important data.
+        run: |
+          set -euo pipefail
+          installer="release/Clever-PGP-Setup-${RELEASE_VERSION}.exe"
+          checksum="${installer}.sha256"
+          (
+            cd release
+            sha256sum --check "$(basename "${checksum}")"
+          )
+          gh release create "${GITHUB_REF_NAME}" \
+            "${installer}#Clever PGP ${RELEASE_VERSION} Windows installer" \
+            "${checksum}#SHA-256 checksum" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "Clever PGP ${RELEASE_VERSION}" \
+            --generate-notes \
+            --notes "${RELEASE_WARNING}"
