@@ -12,6 +12,8 @@ from nacl import secret, utils
 from biopgp.core.block_volume import EncryptedBlockVolume
 from biopgp.core.disk_control import DiskControlEndpoint, DiskControlRecord
 from biopgp.core.errors import MountUnavailableError
+from biopgp.core.hidden_volume import HiddenVolumeDescriptor
+from biopgp.core.opaque_volume_header import OpaqueVolumeHeader
 from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 from biopgp.core.windows_storage import (
     WindowsDiskInfo,
@@ -649,6 +651,92 @@ def test_system_manager_mounts_formatted_volume_and_waits_for_removal(
     assert process_manager.started == (container_path, key)
     assert process_manager.stopped
     removed.assert_called_once_with(7)
+
+
+def test_system_manager_mounts_v4_hidden_header_without_forwarding_password(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "hidden-v4.cpgv"
+    container_path.write_bytes(b"opaque v4 image")
+    descriptor = HiddenVolumeDescriptor(
+        volume_id=b"h" * 16,
+        region_start_block=20000,
+        region_block_count=8272,
+        hidden_block_count=8192,
+        label="Hidden",
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    )
+    hidden_header = OpaqueVolumeHeader(
+        role="hidden",
+        generation=1,
+        cover_volume_id=b"v" * 16,
+        cover_key=b"c" * 32,
+        cover_block_count=32768,
+        label="Hidden",
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+        created_at="2026-08-23T05:00:00+00:00",
+        hidden_key=b"i" * 32,
+        hidden_descriptor=descriptor,
+    )
+
+    class HeaderStore:
+        received_password: str | None = None
+
+        @classmethod
+        def unlock(
+            cls,
+            _stream: object,
+            password: str,
+            **_options: object,
+        ) -> OpaqueVolumeHeader:
+            cls.received_password = password
+            return hidden_header
+
+    class OpaqueProcessManager(FakeProcessManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.options: dict[str, object] = {}
+
+        def start(
+            self,
+            container_path: Path,
+            master_key: bytes | None,
+            **kwargs: object,
+        ) -> None:
+            self.started = (container_path, master_key)  # type: ignore[assignment]
+            self.options = kwargs
+            self.running = True
+
+    process_manager = OpaqueProcessManager()
+    system_disk = disk(8, "CleverPGP", 32 * 1024 * 1024)
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process_manager,
+        recover_existing=False,
+    )
+    with (
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=system_disk,
+        ) as wait_disk,
+        patch("biopgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
+        patch.object(manager, "_publish_control_record", return_value=object()),
+    ):
+        drive = manager.mount_opaque(
+            container_path,
+            "hidden correct horse battery staple",
+            header_store=HeaderStore(),  # type: ignore[arg-type]
+        )
+
+    assert drive == "Z:"
+    assert HeaderStore.received_password == "hidden correct horse battery staple"
+    assert process_manager.started == (container_path, None)
+    assert process_manager.options["opaque_header"] is hidden_header
+    assert process_manager.options["protection_header"] is None
+    wait_disk.assert_called_once_with(
+        [],
+        expected_size=32 * 1024 * 1024,
+    )
 
 
 def test_system_manager_publishes_and_removes_external_control_state(

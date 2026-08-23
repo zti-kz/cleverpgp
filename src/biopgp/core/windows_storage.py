@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import subprocess
 import sys
@@ -16,10 +17,14 @@ from biopgp.core.disk_control import (
 )
 from biopgp.core.disk_host import WinSpdHostManager
 from biopgp.core.errors import MountUnavailableError
-from biopgp.core.opaque_volume_header import OpaqueVolumeHeaderStore
+from biopgp.core.opaque_volume_header import (
+    OpaqueVolumeHeader,
+    OpaqueVolumeHeaderStore,
+)
 from biopgp.core.winspd import (
     HiddenWindowsVolumeHeaders,
     MIN_WINDOWS_DISK_CAPACITY,
+    WINDOWS_BLOCK_STORAGE_FORMAT,
     WinSpdLibrary,
     create_hidden_windows_block_volume,
     create_windows_block_volume,
@@ -975,6 +980,145 @@ class WindowsSystemDiskManager:
         if progress is not None:
             progress(100, "Системный диск подключён")
         return drive
+
+    def mount_opaque(
+        self,
+        container_path: Path,
+        password: str,
+        *,
+        hidden_protection_password: str | None = None,
+        context_menu_labels: tuple[str, ...] | None = None,
+        progress: Callable[[int, str], None] | None = None,
+        header_store: OpaqueVolumeHeaderStore | None = None,
+    ) -> str:
+        """Authenticate v4 locally, then start the host without the password."""
+
+        source = Path(container_path).expanduser().resolve()
+        if not source.is_file():
+            raise MountUnavailableError("Файл зашифрованного диска не найден.")
+        store = header_store or OpaqueVolumeHeaderStore()
+
+        def unlock_progress(completed: int, total: int) -> None:
+            if progress is not None:
+                progress(
+                    5 + round(completed / total * 35),
+                    "Проверка пароля диска",
+                )
+
+        if progress is not None:
+            progress(3, "Чтение защищённого заголовка")
+        with source.open("rb") as stream:
+            selected = store.unlock(
+                stream,
+                password,
+                progress=unlock_progress,
+            )
+            protection = (
+                store.unlock(stream, hidden_protection_password)
+                if hidden_protection_password is not None
+                else None
+            )
+        return self.mount_authenticated_opaque(
+            source,
+            selected,
+            protection_header=protection,
+            context_menu_labels=context_menu_labels,
+            progress=(
+                None
+                if progress is None
+                else lambda value, message: progress(
+                    42 + round(value * 0.58),
+                    message,
+                )
+            ),
+        )
+
+    def mount_authenticated_opaque(
+        self,
+        container_path: Path,
+        selected_header: OpaqueVolumeHeader,
+        *,
+        protection_header: OpaqueVolumeHeader | None = None,
+        context_menu_labels: tuple[str, ...] | None = None,
+        progress: Callable[[int, str], None] | None = None,
+    ) -> str:
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый системный диск Clever PGP."
+            )
+        source = Path(container_path).expanduser().resolve()
+        if not source.is_file():
+            raise MountUnavailableError("Файл зашифрованного диска не найден.")
+        self._validate_opaque_mount_headers(selected_header, protection_header)
+        if selected_header.storage_format != WINDOWS_BLOCK_STORAGE_FORMAT:
+            raise MountUnavailableError(
+                "Это не системный зашифрованный диск Clever PGP."
+            )
+        if selected_header.role == "hidden":
+            descriptor = selected_header.hidden_descriptor
+            if descriptor is None:
+                raise MountUnavailableError("Скрытый заголовок диска повреждён.")
+            logical_capacity = descriptor.hidden_block_count * LOGICAL_BLOCK_SIZE
+        else:
+            logical_capacity = (
+                selected_header.cover_block_count * LOGICAL_BLOCK_SIZE
+            )
+
+        before = list_windows_disks()
+        try:
+            self._process_manager.start(
+                source,
+                None,
+                device_name=None,
+                opaque_header=selected_header,
+                protection_header=protection_header,
+                progress=progress,
+            )
+            disk = wait_for_new_cleverpgp_disk(
+                before,
+                expected_size=logical_capacity,
+            )
+            drive = wait_for_drive_letter(disk.number)
+        except Exception:
+            self._process_manager.stop()
+            raise
+        try:
+            control_record = self._publish_control_record(
+                drive,
+                container_path=source,
+                context_menu_labels=context_menu_labels,
+            )
+        except Exception:
+            self._process_manager.stop()
+            wait_for_disk_removal(disk.number)
+            raise
+        self._disk = disk
+        self._drive = drive
+        self._container_path = source
+        self._control_record = control_record
+        self._context_menu_labels = context_menu_labels
+        if progress is not None:
+            progress(100, "Системный диск подключён")
+        return drive
+
+    @staticmethod
+    def _validate_opaque_mount_headers(
+        selected: OpaqueVolumeHeader,
+        protection: OpaqueVolumeHeader | None,
+    ) -> None:
+        if protection is None:
+            return
+        if (
+            selected.role != "outer"
+            or protection.role != "hidden"
+            or protection.hidden_descriptor is None
+            or selected.cover_volume_id != protection.cover_volume_id
+            or selected.cover_block_count != protection.cover_block_count
+            or not hmac.compare_digest(selected.cover_key, protection.cover_key)
+        ):
+            raise MountUnavailableError(
+                "Пароль защиты скрытого диска не относится к внешнему диску."
+            )
 
     def resize_mounted_disk(
         self,
