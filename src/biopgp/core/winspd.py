@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from biopgp.core.block_volume import (
     LOGICAL_BLOCK_SIZE,
@@ -36,6 +36,27 @@ FLAG_UNMAP_SUPPORTED = 0x00000004
 DEFAULT_MAX_TRANSFER_LENGTH = 1024 * 1024
 MIN_WINDOWS_DISK_CAPACITY = 32 * 1024 * 1024
 WINDOWS_BLOCK_STORAGE_FORMAT = "CLEVERPGP-WINDOWS-BLOCK-DISK-V1"
+
+
+class WinSpdVolume(Protocol):
+    """Block operations required by the WinSpd adapter, independent of format."""
+
+    @property
+    def block_count(self) -> int: ...
+
+    @property
+    def logical_capacity(self) -> int: ...
+
+    @property
+    def volume_id(self) -> bytes: ...
+
+    def read_blocks(self, block_address: int, block_count: int) -> bytes: ...
+
+    def write_blocks(self, block_address: int, data: bytes) -> None: ...
+
+    def flush(self) -> None: ...
+
+    def close(self) -> None: ...
 
 
 class WinSpdError(RuntimeError):
@@ -247,7 +268,7 @@ class WinSpdLibrary:
 
 
 def initialize_windows_partition(
-    volume: EncryptedBlockVolume,
+    volume: WinSpdVolume,
     library: WinSpdLibrary,
 ) -> None:
     """Initialize a new encrypted block array with one Windows data partition."""
@@ -335,7 +356,7 @@ def resize_windows_block_volume(
 
 
 class WinSpdBlockDevice:
-    """Expose EncryptedBlockVolume through WinSpd SCSI block operations.
+    """Expose any authenticated Clever PGP block view through WinSpd.
 
     Passing a named pipe is intended for the official ``stgtest`` utility and
     does not attach a disk to Windows. Passing ``None`` asks the installed
@@ -344,7 +365,7 @@ class WinSpdBlockDevice:
 
     def __init__(
         self,
-        volume: EncryptedBlockVolume,
+        volume: WinSpdVolume,
         *,
         library: WinSpdLibrary,
         pipe_name: str | None,

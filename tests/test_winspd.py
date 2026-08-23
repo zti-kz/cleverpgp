@@ -5,9 +5,14 @@ import uuid
 from pathlib import Path
 
 import pytest
-from nacl import secret, utils
+from nacl import pwhash, secret, utils
 
 from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
+from biopgp.core.opaque_block_volume import OpaqueBlockVolume
+from biopgp.core.opaque_volume_header import (
+    HeaderKdfParameters,
+    OpaqueVolumeHeaderStore,
+)
 from biopgp.core.winspd import (
     SCSISTAT_GOOD,
     Partition,
@@ -116,6 +121,54 @@ def test_callbacks_read_write_flush_and_unmap(tmp_path: Path) -> None:
         assert device._unmap(0, descriptors, 1, ctypes.pointer(status))
         assert status.ScsiStatus == SCSISTAT_GOOD
         assert volume.read_blocks(4, 1) == bytes(LOGICAL_BLOCK_SIZE)
+    finally:
+        volume.close()
+
+
+def test_winspd_callbacks_accept_v4_opaque_block_session(tmp_path: Path) -> None:
+    header_store = OpaqueVolumeHeaderStore(
+        HeaderKdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        )
+    )
+    volume = OpaqueBlockVolume.create_outer(
+        tmp_path / "winspd-v4.cpgv",
+        "outer correct horse battery staple",
+        logical_capacity=1024 * 1024,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+        header_store=header_store,
+    )
+    device = WinSpdBlockDevice(
+        volume,
+        library=UnusedLibrary(),  # type: ignore[arg-type]
+        pipe_name=r"\\.\pipe\cleverpgp-v4-test",
+    )
+    try:
+        status = StorageUnitStatus()
+        payload = b"opaque-v4".ljust(LOGICAL_BLOCK_SIZE, b"!")
+        source = ctypes.create_string_buffer(payload)
+        assert device._write(
+            0,
+            ctypes.addressof(source),
+            5,
+            1,
+            1,
+            ctypes.pointer(status),
+        )
+        assert status.ScsiStatus == SCSISTAT_GOOD
+
+        target = ctypes.create_string_buffer(LOGICAL_BLOCK_SIZE)
+        assert device._read(
+            0,
+            ctypes.addressof(target),
+            5,
+            1,
+            0,
+            ctypes.pointer(status),
+        )
+        assert status.ScsiStatus == SCSISTAT_GOOD
+        assert target.raw == payload
     finally:
         volume.close()
 
