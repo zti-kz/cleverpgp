@@ -17,10 +17,13 @@ from PySide6.QtWidgets import (
 )
 
 from biopgp.core.file_crypto import FileCryptoService
+from biopgp.core.identity import formatted_fingerprint
+from biopgp.core.models import Contact
 from biopgp.core.profile_service import ProfileService
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import localize_widget_tree, set_language, tr
 from biopgp.ui.icons import line_icon
+from biopgp.ui.key_dialogs import RecipientSelectionDialog
 
 Operation = Literal["encrypt", "decrypt"]
 
@@ -39,6 +42,7 @@ class ShellFileWorker(QObject):
         target: Path,
         password: str,
         overwrite: bool,
+        recipients: tuple[Contact, ...] = (),
     ) -> None:
         super().__init__()
         self.repository = repository
@@ -50,6 +54,7 @@ class ShellFileWorker(QObject):
         self.target = target
         self.password = password
         self.overwrite = overwrite
+        self.recipients = recipients
 
     @Slot()
     def run(self) -> None:
@@ -58,24 +63,45 @@ class ShellFileWorker(QObject):
             session = ProfileService(self.repository).unlock_with_password(self.password)
             self.password = ""
             master_key = session.master_key_copy()
-            service = FileCryptoService()
+            service = FileCryptoService(self.repository)
             try:
                 if self.operation == "encrypt":
                     result = service.encrypt_file(
                         self.source,
                         self.target,
                         master_key,
+                        recipients=self.recipients,
                         overwrite=self.overwrite,
                         progress=self._report_progress,
                     )
                 else:
-                    result = service.decrypt_file(
+                    detailed = service.decrypt_file_detailed(
                         self.source,
                         self.target,
                         master_key,
                         overwrite=self.overwrite,
                         progress=self._report_progress,
                     )
+                    if detailed.sender_is_self:
+                        verification = tr(
+                            "Подпись текущего профиля подтверждена."
+                        )
+                    elif detailed.sender_is_known:
+                        verification = tr(
+                            "Подпись контакта {name} подтверждена.",
+                            name=detailed.sender.display_name,
+                        )
+                    else:
+                        verification = tr(
+                            "Подпись математически верна, но отправитель {name} ещё не "
+                            "сохранён в контактах. Сверьте полный отпечаток по "
+                            "независимому каналу:\n{fingerprint}",
+                            name=detailed.sender.display_name,
+                            fingerprint=formatted_fingerprint(
+                                detailed.sender.fingerprint
+                            ),
+                        )
+                    result = f"{detailed.path}\n{verification}"
             finally:
                 del master_key
             self.succeeded.emit(str(result))
@@ -102,10 +128,11 @@ class ShellOperationDialog(QDialog):
         self.repository = repository
         self.operation = operation
         self.source = source.expanduser().resolve()
-        self.file_crypto = FileCryptoService()
+        self.file_crypto = FileCryptoService(repository)
         self.target = self._default_target()
         self.thread: QThread | None = None
         self.worker: ShellFileWorker | None = None
+        self.selected_contacts: tuple[Contact, ...] = ()
         self.running = False
         self.operation_succeeded: bool | None = None
 
@@ -148,6 +175,22 @@ class ShellOperationDialog(QDialog):
         target_row.addWidget(self.choose_button)
         layout.addWidget(QLabel("Результат:"))
         layout.addLayout(target_row)
+
+        self.recipient_button: QPushButton | None = None
+        self.recipient_label: QLabel | None = None
+        if self.operation == "encrypt":
+            recipient_row = QHBoxLayout()
+            self.recipient_label = QLabel()
+            self.recipient_label.setObjectName("path")
+            self.recipient_label.setWordWrap(True)
+            self.recipient_button = QPushButton("Выбрать получателей…")
+            self.recipient_button.setIcon(line_icon("contact_add"))
+            self.recipient_button.clicked.connect(self._choose_recipients)
+            recipient_row.addWidget(self.recipient_label, 1)
+            recipient_row.addWidget(self.recipient_button)
+            layout.addWidget(QLabel("Получатели:"))
+            layout.addLayout(recipient_row)
+            self._update_recipient_summary()
 
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -216,6 +259,38 @@ class ShellOperationDialog(QDialog):
             self.target = Path(selected).expanduser().resolve()
             self.target_label.setText(str(self.target))
 
+    def _choose_recipients(self) -> None:
+        if self.running:
+            return
+        contacts = self.repository.list_contacts()
+        if not contacts:
+            self.status.setObjectName("error")
+            self.status.setText(
+                tr(
+                    "Контакты ещё не добавлены. Импортируйте открытый ключ "
+                    "получателя в главном окне Clever PGP."
+                )
+            )
+            self.status.style().unpolish(self.status)
+            self.status.style().polish(self.status)
+            self.status.show()
+            return
+        dialog = RecipientSelectionDialog(contacts, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.selected_contacts = dialog.selected_contacts
+            self._update_recipient_summary()
+
+    def _update_recipient_summary(self) -> None:
+        if self.recipient_label is None:
+            return
+        if not self.selected_contacts:
+            self.recipient_label.setText(tr("Только текущий профиль"))
+            return
+        names = ", ".join(contact.display_name for contact in self.selected_contacts)
+        self.recipient_label.setText(
+            tr("Текущий профиль и: {names}", names=names)
+        )
+
     def _start(self) -> None:
         if self.running:
             return
@@ -250,6 +325,8 @@ class ShellOperationDialog(QDialog):
         self.choose_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.action_button.setEnabled(False)
+        if self.recipient_button is not None:
+            self.recipient_button.setEnabled(False)
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
         self.show()
         self.progress.show()
@@ -265,6 +342,7 @@ class ShellOperationDialog(QDialog):
             self.target,
             password,
             overwrite,
+            self.selected_contacts,
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -314,6 +392,8 @@ class ShellOperationDialog(QDialog):
         self.worker = None
         self.thread = None
         self.cancel_button.setEnabled(True)
+        if self.recipient_button is not None:
+            self.recipient_button.setEnabled(True)
         if self.operation_succeeded:
             self.action_button.setEnabled(True)
         else:

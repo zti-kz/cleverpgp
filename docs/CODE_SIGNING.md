@@ -71,7 +71,7 @@ $env:BIOPGP_TIMESTAMP_URL = "АДРЕС_RFC3161_ОТ_ПОСТАВЩИКА"
 ## Проверка готового выпуска
 
 ```powershell
-Get-AuthenticodeSignature "E:\Clever\_PGP\Clever-PGP-Setup-0.9.3.exe" |
+Get-AuthenticodeSignature "E:\Clever\_PGP\Clever-PGP-Setup-0.10.0.exe" |
     Select-Object Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 ```
 

@@ -8,9 +8,30 @@ from nacl import pwhash  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from biopgp.core.identity import IdentityService, formatted_fingerprint  # noqa: E402
 from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
 from biopgp.core.storage import ProfileRepository  # noqa: E402
-from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
+from biopgp.ui.shell_dialog import ShellFileWorker, ShellOperationDialog  # noqa: E402
+
+
+def _profile(
+    directory: Path,
+    name: str,
+) -> tuple[ProfileRepository, ProfileService, bytes]:
+    repository = ProfileRepository(directory / f"{name}.sqlite3")
+    repository.initialize()
+    profiles = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    profiles.create_profile(name, "correct horse battery staple")
+    session = profiles.unlock_with_password("correct horse battery staple")
+    master_key = session.master_key_copy()
+    session.lock()
+    return repository, profiles, master_key
 
 
 def test_shell_encrypt_dialog_can_be_created(tmp_path: Path) -> None:
@@ -86,3 +107,52 @@ def test_shell_worker_encrypts_path_with_spaces(tmp_path: Path) -> None:
     assert decrypt_dialog.status.objectName() == "success"
     decrypt_dialog.close()
     application.processEvents()
+
+
+def test_shell_worker_encrypts_for_contact_and_shows_unknown_sender_fingerprint(
+    tmp_path: Path,
+) -> None:
+    _application = QApplication.instance() or QApplication([])
+    alice_repository, _alice_profiles, alice_key = _profile(tmp_path, "Alice")
+    bob_repository, _bob_profiles, bob_key = _profile(tmp_path, "Bob")
+    alice_identity = IdentityService(alice_repository).public_identity(alice_key)
+    bob_bundle = tmp_path / "bob.cpgk"
+    IdentityService(bob_repository).export_public_identity(bob_bundle, bob_key)
+    bob_contact = IdentityService(alice_repository).import_contact(bob_bundle)
+    source = tmp_path / "message.txt"
+    encrypted = tmp_path / "message.txt.cpgp"
+    restored = tmp_path / "restored.txt"
+    source.write_text("signed message for Bob", encoding="utf-8")
+    failures: list[str] = []
+
+    encrypt_worker = ShellFileWorker(
+        alice_repository,
+        "encrypt",
+        source,
+        encrypted,
+        "correct horse battery staple",
+        False,
+        (bob_contact,),
+    )
+    encrypt_worker.failed.connect(failures.append)
+    encrypt_worker.run()
+    assert failures == []
+    assert encrypted.is_file()
+
+    results: list[str] = []
+    decrypt_worker = ShellFileWorker(
+        bob_repository,
+        "decrypt",
+        encrypted,
+        restored,
+        "correct horse battery staple",
+        False,
+    )
+    decrypt_worker.succeeded.connect(results.append)
+    decrypt_worker.failed.connect(failures.append)
+    decrypt_worker.run()
+
+    assert failures == []
+    assert restored.read_text(encoding="utf-8") == "signed message for Bob"
+    assert len(results) == 1
+    assert formatted_fingerprint(alice_identity.fingerprint) in results[0]

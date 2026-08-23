@@ -4,6 +4,8 @@ $Targets = @(
     (Join-Path $ClassesRoot "*\shell\CleverPGP.Encrypt"),
     (Join-Path $ClassesRoot ".cpgp"),
     (Join-Path $ClassesRoot "CleverPGP.EncryptedFile"),
+    (Join-Path $ClassesRoot ".cpgk"),
+    (Join-Path $ClassesRoot "CleverPGP.PublicKey"),
     (Join-Path $ClassesRoot ".cpgv"),
     (Join-Path $ClassesRoot "CleverPGP.ContainerFile"),
     (Join-Path $ClassesRoot "Drive\shell\CleverPGP.Unmount"),
@@ -22,4 +24,4 @@ public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr 
 "@
 [CleverPGP.ShellNotify]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
 
-Write-Host "Контекстное меню и ассоциации .cpgp/.cpgv удалены для текущего пользователя."
+Write-Host "Контекстное меню и ассоциации .cpgp/.cpgk/.cpgv удалены для текущего пользователя."

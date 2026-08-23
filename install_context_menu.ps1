@@ -10,6 +10,8 @@ $ClassesRoot = "HKCU:\Software\Classes"
 $EncryptVerb = Join-Path $ClassesRoot "*\shell\CleverPGP.Encrypt"
 $EncryptedExtension = Join-Path $ClassesRoot ".cpgp"
 $EncryptedType = Join-Path $ClassesRoot "CleverPGP.EncryptedFile"
+$PublicKeyExtension = Join-Path $ClassesRoot ".cpgk"
+$PublicKeyType = Join-Path $ClassesRoot "CleverPGP.PublicKey"
 $ContainerExtension = Join-Path $ClassesRoot ".cpgv"
 $ContainerType = Join-Path $ClassesRoot "CleverPGP.ContainerFile"
 $LegacyUnmountVerb = Join-Path $ClassesRoot "Drive\shell\CleverPGP.Unmount"
@@ -35,6 +37,20 @@ Set-Item -Path $OpenVerb.PSPath -Value "Расшифровать с Clever PGP"
 New-ItemProperty -Path $OpenVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $DecryptCommand = New-Item -Path (Join-Path $OpenVerb.PSPath "command") -Force
 Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp.shell decrypt `"%1`""
+
+New-Item -Path $PublicKeyExtension -Force | Out-Null
+Set-Item -Path $PublicKeyExtension -Value "CleverPGP.PublicKey"
+New-ItemProperty -Path $PublicKeyExtension -Name "Content Type" -Value "application/x-clever-pgp-public-key" -PropertyType String -Force | Out-Null
+
+New-Item -Path $PublicKeyType -Force | Out-Null
+Set-Item -Path $PublicKeyType -Value "Открытый ключ Clever PGP"
+$PublicKeyIcon = New-Item -Path (Join-Path $PublicKeyType "DefaultIcon") -Force
+Set-Item -Path $PublicKeyIcon.PSPath -Value $PythonWindowed
+$ImportVerb = New-Item -Path (Join-Path $PublicKeyType "shell\open") -Force
+Set-Item -Path $ImportVerb.PSPath -Value "Импортировать открытый ключ"
+New-ItemProperty -Path $ImportVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
+$ImportCommand = New-Item -Path (Join-Path $ImportVerb.PSPath "command") -Force
+Set-Item -Path $ImportCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp --import-key `"%1`""
 
 New-Item -Path $ContainerExtension -Force | Out-Null
 Set-Item -Path $ContainerExtension -Value "CleverPGP.ContainerFile"
@@ -87,5 +103,5 @@ public static extern void SHChangeNotify(int eventId, uint flags, System.IntPtr 
 "@
 [CleverPGP.ShellNotify]::SHChangeNotify(0x08000000, 0, [IntPtr]::Zero, [IntPtr]::Zero)
 
-Write-Host "Контекстное меню и двойной клик по дискам Clever PGP установлены для текущего пользователя."
+Write-Host "Контекстное меню и ассоциации Clever PGP установлены для текущего пользователя."
 Write-Host "В Windows 11 команда может находиться в разделе 'Показать дополнительные параметры'."

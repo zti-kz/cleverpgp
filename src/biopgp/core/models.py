@@ -42,3 +42,31 @@ class BiometricProfile:
     model_sha256: str
     match_threshold: float
     enrolled_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class CryptographicIdentity:
+    profile_id: str
+    encryption_public_key: bytes
+    signing_public_key: bytes
+    encrypted_encryption_private_key: bytes
+    encrypted_signing_seed: bytes
+    created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class PublicIdentity:
+    display_name: str
+    fingerprint: str
+    encryption_public_key: bytes
+    signing_public_key: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class Contact:
+    contact_id: str
+    display_name: str
+    fingerprint: str
+    encryption_public_key: bytes
+    signing_public_key: bytes
+    created_at: str

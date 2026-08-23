@@ -33,7 +33,8 @@ from biopgp.core.block_volume import BlockVolumeError
 from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.errors import BioPGPError, InvalidContainerError
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
-from biopgp.core.file_crypto import FileCryptoService
+from biopgp.core.file_crypto import DecryptedFileResult, FileCryptoService
+from biopgp.core.identity import formatted_fingerprint
 from biopgp.core.mount import (
     VaultMountManager,
     mount_backend_available,
@@ -66,6 +67,7 @@ from biopgp.ui.hidden_volume_dialog import (
     OpaqueVolumeUnlockDialog,
 )
 from biopgp.ui.icons import line_icon
+from biopgp.ui.key_dialogs import ContactsDialog, RecipientSelectionDialog
 from biopgp.ui.resize_dialog import ContainerResizeDialog
 from biopgp.ui.settings_dialog import AccessSettingsDialog
 
@@ -123,6 +125,7 @@ class MainWindow(QMainWindow):
             set_language(stored_language)
         self.profile_service = profile_service
         self.file_crypto = file_crypto
+        self.file_crypto.bind_repository(repository)
         self.mount_manager = mount_manager or VaultMountManager()
         self._direct_container_launch = startup_container is not None
         self._direct_mount_pending = False
@@ -449,8 +452,12 @@ class MainWindow(QMainWindow):
         decrypt_button = QPushButton("Расшифровать файл .cpgp")
         decrypt_button.setIcon(line_icon("file_open"))
         decrypt_button.clicked.connect(self._decrypt_file)
+        contacts_button = QPushButton("Открытые ключи и контакты")
+        contacts_button.setIcon(line_icon("key"))
+        contacts_button.clicked.connect(self._show_contacts)
         file_layout.addWidget(encrypt_button)
         file_layout.addWidget(decrypt_button)
+        file_layout.addWidget(contacts_button)
 
         info = QLabel(
             "Файл обрабатывается локально. Для каждого файла создаётся новый случайный "
@@ -768,6 +775,13 @@ class MainWindow(QMainWindow):
         if not source_name:
             return
         source = Path(source_name)
+        selected_contacts = ()
+        contacts = self.repository.list_contacts()
+        if contacts:
+            recipient_dialog = RecipientSelectionDialog(contacts, self)
+            if recipient_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            selected_contacts = recipient_dialog.selected_contacts
         suggested = self.file_crypto.default_encrypted_path(source)
         target_name, _ = QFileDialog.getSaveFileName(
             self,
@@ -783,6 +797,7 @@ class MainWindow(QMainWindow):
                 source,
                 Path(target_name),
                 key,
+                recipients=selected_contacts,
                 overwrite=True,
                 progress=progress,
             ),
@@ -803,21 +818,62 @@ class MainWindow(QMainWindow):
         )
         if not target_name:
             return
-        self._run_file_operation(
-            tr("Расшифровано"),
-            lambda key, progress: self.file_crypto.decrypt_file(
+        def decrypted(result: object) -> None:
+            if not isinstance(result, DecryptedFileResult):
+                self._show_error("Не удалось получить сведения о подписи файла.")
+                return
+            if result.sender_is_self:
+                verification = tr("Подпись текущего профиля подтверждена.")
+            elif result.sender_is_known:
+                verification = tr(
+                    "Подпись контакта {name} подтверждена.",
+                    name=result.sender.display_name,
+                )
+            else:
+                verification = tr(
+                    "Подпись математически верна, но отправитель {name} ещё не "
+                    "сохранён в контактах. Сверьте полный отпечаток по "
+                    "независимому каналу:\n{fingerprint}",
+                    name=result.sender.display_name,
+                    fingerprint=formatted_fingerprint(result.sender.fingerprint),
+                )
+            self._set_dashboard_status(
+                tr("Расшифровано: {path}", path=result.path) + "\n" + verification
+            )
+
+        self._start_key_progress_task(
+            lambda key, progress: self.file_crypto.decrypt_file_detailed(
                 source,
                 Path(target_name),
                 key,
                 overwrite=True,
                 progress=progress,
             ),
+            decrypted,
         )
+
+    def _show_contacts(self) -> None:
+        if self.session is None or not self.session.is_unlocked:
+            self._show_unlock()
+            return
+        key_buffer = bytearray(self.session.master_key_copy())
+        try:
+            dialog = ContactsDialog(
+                self.repository,
+                bytes(key_buffer),
+                self,
+            )
+            dialog.exec()
+        except BioPGPError as error:
+            self._show_error(str(error))
+        finally:
+            for index in range(len(key_buffer)):
+                key_buffer[index] = 0
 
     def _run_file_operation(
         self,
         message: str,
-        operation: Callable[[bytes, Callable[[int, str], None]], Path],
+        operation: Callable[[bytes, Callable[[int, str], None]], object],
     ) -> None:
         self._start_key_progress_task(
             operation,

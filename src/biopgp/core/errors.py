@@ -30,6 +30,14 @@ class OutputExistsError(BioPGPError):
     pass
 
 
+class CryptographicIdentityError(BioPGPError):
+    pass
+
+
+class ContactExistsError(BioPGPError):
+    pass
+
+
 class ContainerError(BioPGPError):
     pass
 

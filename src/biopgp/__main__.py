@@ -92,11 +92,22 @@ def main(argv: list[str] | None = None) -> int:
         )
     if arguments[:1] == ["--container"] and len(arguments) == 2:
         return application_main(Path(arguments[1]).expanduser().resolve())
+    if arguments[:1] == ["--import-key"] and len(arguments) == 2:
+        return application_main(
+            public_key_path=Path(arguments[1]).expanduser().resolve()
+        )
     if (
         len(arguments) == 1
         and Path(arguments[0]).suffix.lower() == ".cpgv"
     ):
         return application_main(Path(arguments[0]).expanduser().resolve())
+    if (
+        len(arguments) == 1
+        and Path(arguments[0]).suffix.lower() == ".cpgk"
+    ):
+        return application_main(
+            public_key_path=Path(arguments[0]).expanduser().resolve()
+        )
     return application_main()
 
 

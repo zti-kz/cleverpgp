@@ -16,6 +16,7 @@ from biopgp.core.storage import ProfileRepository
 from biopgp.localization import set_language
 from biopgp.ui.main_window import MainWindow
 from biopgp.ui.icons import line_icon
+from biopgp.ui.key_dialogs import PublicKeyImportDialog
 
 if TYPE_CHECKING:
     from biopgp.core.windows_storage import WindowsSystemDiskManager
@@ -40,6 +41,7 @@ def main(
     *,
     startup_action: str | None = None,
     startup_drive: str | None = None,
+    public_key_path: Path | None = None,
 ) -> int:
     application = QApplication(sys.argv)
     application.setApplicationName(APP_NAME)
@@ -50,11 +52,20 @@ def main(
     repository.initialize()
     selected_language = set_language(repository.get_setting("language"))
     repository.set_setting("language", selected_language)
+    if public_key_path is not None:
+        dialog = PublicKeyImportDialog(repository, public_key_path)
+        dialog.show()
+        screen = dialog.screen()
+        if screen is not None:
+            geometry = screen.availableGeometry()
+            dialog.move(geometry.center() - dialog.rect().center())
+        return application.exec()
+
     profile_service = ProfileService(repository)
     window = MainWindow(
         repository,
         profile_service,
-        FileCryptoService(),
+        FileCryptoService(repository),
         mount_manager=default_mount_manager(
             force_system_disk=startup_action == "resize"
         ),

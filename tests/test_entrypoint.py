@@ -76,6 +76,24 @@ def test_container_mode_opens_selected_encrypted_disk(tmp_path: Path) -> None:
     application_main.assert_called_once_with(container.resolve())
 
 
+def test_public_key_mode_opens_compact_import_window(tmp_path: Path) -> None:
+    public_key = tmp_path / "alice.cpgk"
+    with patch("biopgp.app.main", return_value=0) as application_main:
+        result = main(["--import-key", str(public_key)])
+
+    assert result == 0
+    application_main.assert_called_once_with(public_key_path=public_key.resolve())
+
+
+def test_public_key_extension_is_opened_directly(tmp_path: Path) -> None:
+    public_key = tmp_path / "alice.cpgk"
+    with patch("biopgp.app.main", return_value=0) as application_main:
+        result = main([str(public_key)])
+
+    assert result == 0
+    application_main.assert_called_once_with(public_key_path=public_key.resolve())
+
+
 def test_old_container_extension_is_not_registered_for_direct_open(tmp_path: Path) -> None:
     container = tmp_path / "private.bpgv"
     with patch("biopgp.app.main", return_value=0) as application_main:
@@ -183,6 +201,27 @@ def test_application_opens_main_window_maximized() -> None:
     assert result == 0
     repository_type.return_value.initialize.assert_called_once_with()
     window_type.return_value.showMaximized.assert_called_once_with()
+
+
+def test_public_key_import_does_not_open_main_window(tmp_path: Path) -> None:
+    public_key = tmp_path / "alice.cpgk"
+    with (
+        patch("biopgp.app.QApplication") as application_type,
+        patch("biopgp.app.ProfileRepository"),
+        patch("biopgp.app.ProfileService") as profile_service_type,
+        patch("biopgp.app.MainWindow") as window_type,
+        patch("biopgp.app.PublicKeyImportDialog") as dialog_type,
+        patch("biopgp.app.line_icon"),
+    ):
+        application_type.return_value.exec.return_value = 0
+
+        result = application_main(public_key_path=public_key)
+
+    assert result == 0
+    dialog_type.assert_called_once()
+    dialog_type.return_value.show.assert_called_once_with()
+    profile_service_type.assert_not_called()
+    window_type.assert_not_called()
 
 
 def test_direct_container_open_uses_compact_window(tmp_path: Path) -> None:

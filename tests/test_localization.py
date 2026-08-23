@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
+from biopgp.core.identity import IdentityService  # noqa: E402
 from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
 from biopgp.core.storage import ProfileRepository  # noqa: E402
 from biopgp.localization import available_languages, set_language, tr  # noqa: E402
@@ -29,6 +30,11 @@ from biopgp.ui.main_window import MainWindow  # noqa: E402
 from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
     HiddenVolumeCreationDialog,
     OpaqueVolumeUnlockDialog,
+)
+from biopgp.ui.key_dialogs import (  # noqa: E402
+    ContactsDialog,
+    PublicKeyImportDialog,
+    RecipientSelectionDialog,
 )
 from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
 from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
@@ -244,6 +250,22 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
     source = tmp_path / "report.txt"
     source.write_text("test", encoding="utf-8")
     shell = ShellOperationDialog(repository, "encrypt", source)
+    contacts = ContactsDialog(
+        repository,
+        window.session.master_key_copy(),
+        window,
+    )
+    recipients = RecipientSelectionDialog((), window)
+    public_key_path = tmp_path / "test.cpgk"
+    IdentityService(repository).export_public_identity(
+        public_key_path,
+        window.session.master_key_copy(),
+    )
+    public_key_import = PublicKeyImportDialog(
+        repository,
+        public_key_path,
+        window,
+    )
 
     russian_letters = re.compile(r"[А-Яа-яЁё]")
     untranslated = [
@@ -257,12 +279,18 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
             disk_password,
             settings,
             shell,
+            contacts,
+            recipients,
+            public_key_import,
         )
         for value in _visible_strings(dialog)
         if russian_letters.search(value)
     ]
     assert untranslated == []
 
+    public_key_import.close()
+    recipients.close()
+    contacts.close()
     shell.close()
     settings.close()
     disk_password.close()

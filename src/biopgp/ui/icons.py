@@ -43,6 +43,19 @@ _SHAPES = {
     "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5h.01"/>',
     "close": '<path d="M6 6l12 12M18 6L6 18"/>',
     "folder": '<path d="M3 7h7l2 2h9v10H3z"/>',
+    "key": (
+        '<circle cx="8" cy="12" r="4"/>'
+        '<path d="M12 12h9M17 12v3M20 12v2"/>'
+    ),
+    "contact_add": (
+        '<circle cx="9" cy="8" r="4"/>'
+        '<path d="M2.5 20c.7-4.3 2.8-6.5 6.5-6.5 2 0 3.6.6 4.7 1.8"/>'
+        '<path d="M18 14v7M14.5 17.5h7"/>'
+    ),
+    "trash": (
+        '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/>'
+        '<path d="M10 11v5M14 11v5"/>'
+    ),
     "shield": '<path d="M12 3l8 3v5c0 5-3.2 8.2-8 10-4.8-1.8-8-5-8-10V6z"/><path d="M8.5 12l2.2 2.2 4.8-5"/>',
     "settings": (
         '<circle cx="12" cy="12" r="3"/>'

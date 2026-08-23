@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.9.3"
+  #define AppVersion "0.10.0"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -107,6 +107,13 @@ Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\DefaultIcon"; Valu
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: ""; ValueData: "Расшифровать с Clever PGP"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell decrypt ""%1"""
+Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.PublicKey"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp-public-key"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey"; ValueType: string; ValueName: ""; ValueData: "Открытый ключ Clever PGP"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExecutable},0"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\shell\open"; ValueType: string; ValueName: ""; ValueData: "Импортировать открытый ключ"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --import-key ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgv"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.ContainerFile"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.cpgv"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp-container"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.ContainerFile"; ValueType: string; ValueName: ""; ValueData: "Зашифрованный диск Clever PGP"; Flags: uninsdeletekey

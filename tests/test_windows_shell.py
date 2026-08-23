@@ -213,3 +213,21 @@ def test_installer_and_development_menu_include_compact_disk_information() -> No
     for source in (installer, development):
         assert "Сведения о диске" in source
         assert "--disk-info" in source
+
+
+def test_public_key_association_imports_from_explorer() -> None:
+    project = Path(__file__).resolve().parents[1]
+    installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
+    development = (project / "install_context_menu.ps1").read_text(
+        encoding="utf-8"
+    )
+    uninstaller = (project / "uninstall_context_menu.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    for source in (installer, development):
+        assert "CleverPGP.PublicKey" in source
+        assert ".cpgk" in source
+        assert "--import-key" in source
+    assert ".cpgk" in uninstaller
+    assert "CleverPGP.PublicKey" in uninstaller

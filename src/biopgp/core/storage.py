@@ -5,10 +5,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from biopgp.core.errors import ProfileExistsError
-from biopgp.core.models import BiometricProfile, Profile, UnlockMode
+from biopgp.core.errors import ContactExistsError, ProfileExistsError
+from biopgp.core.models import (
+    BiometricProfile,
+    Contact,
+    CryptographicIdentity,
+    Profile,
+    UnlockMode,
+)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class ProfileRepository:
@@ -50,6 +56,26 @@ class ProfileRepository:
                     match_threshold REAL NOT NULL,
                     enrolled_at TEXT NOT NULL,
                     FOREIGN KEY(profile_id) REFERENCES profile(profile_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS cryptographic_identity (
+                    singleton_slot INTEGER PRIMARY KEY CHECK (singleton_slot = 1),
+                    profile_id TEXT NOT NULL UNIQUE,
+                    encryption_public_key BLOB NOT NULL,
+                    signing_public_key BLOB NOT NULL,
+                    encrypted_encryption_private_key BLOB NOT NULL,
+                    encrypted_signing_seed BLOB NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(profile_id) REFERENCES profile(profile_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS contact (
+                    contact_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    encryption_public_key BLOB NOT NULL UNIQUE,
+                    signing_public_key BLOB NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
                 );
                 """
             )
@@ -245,6 +271,132 @@ class ProfileRepository:
             match_threshold=float(row["match_threshold"]),
             enrolled_at=row["enrolled_at"],
         )
+
+    def save_cryptographic_identity(
+        self,
+        identity: CryptographicIdentity,
+    ) -> bool:
+        """Store the first local identity and never replace it implicitly."""
+
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO cryptographic_identity(
+                    singleton_slot, profile_id, encryption_public_key,
+                    signing_public_key, encrypted_encryption_private_key,
+                    encrypted_signing_seed, created_at
+                ) VALUES(1, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    identity.profile_id,
+                    identity.encryption_public_key,
+                    identity.signing_public_key,
+                    identity.encrypted_encryption_private_key,
+                    identity.encrypted_signing_seed,
+                    identity.created_at,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def get_cryptographic_identity(self) -> CryptographicIdentity | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT profile_id, encryption_public_key, signing_public_key,
+                       encrypted_encryption_private_key,
+                       encrypted_signing_seed, created_at
+                FROM cryptographic_identity
+                WHERE singleton_slot = 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        return CryptographicIdentity(
+            profile_id=row["profile_id"],
+            encryption_public_key=bytes(row["encryption_public_key"]),
+            signing_public_key=bytes(row["signing_public_key"]),
+            encrypted_encryption_private_key=bytes(
+                row["encrypted_encryption_private_key"]
+            ),
+            encrypted_signing_seed=bytes(row["encrypted_signing_seed"]),
+            created_at=row["created_at"],
+        )
+
+    def save_contact(self, contact: Contact) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO contact(
+                        contact_id, display_name, fingerprint,
+                        encryption_public_key, signing_public_key, created_at
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        contact.contact_id,
+                        contact.display_name,
+                        contact.fingerprint,
+                        contact.encryption_public_key,
+                        contact.signing_public_key,
+                        contact.created_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ContactExistsError(
+                "Контакт с таким открытым ключом уже существует."
+            ) from error
+
+    def list_contacts(self) -> tuple[Contact, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT contact_id, display_name, fingerprint,
+                       encryption_public_key, signing_public_key, created_at
+                FROM contact
+                ORDER BY display_name COLLATE NOCASE, fingerprint
+                """
+            ).fetchall()
+        return tuple(
+            Contact(
+                contact_id=row["contact_id"],
+                display_name=row["display_name"],
+                fingerprint=row["fingerprint"],
+                encryption_public_key=bytes(row["encryption_public_key"]),
+                signing_public_key=bytes(row["signing_public_key"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        )
+
+    def get_contact_by_fingerprint(self, fingerprint: str) -> Contact | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT contact_id, display_name, fingerprint,
+                       encryption_public_key, signing_public_key, created_at
+                FROM contact
+                WHERE fingerprint = ?
+                """,
+                (fingerprint,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Contact(
+            contact_id=row["contact_id"],
+            display_name=row["display_name"],
+            fingerprint=row["fingerprint"],
+            encryption_public_key=bytes(row["encryption_public_key"]),
+            signing_public_key=bytes(row["signing_public_key"]),
+            created_at=row["created_at"],
+        )
+
+    def delete_contact(self, contact_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM contact WHERE contact_id = ?",
+                (contact_id,),
+            )
+        return cursor.rowcount == 1
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
