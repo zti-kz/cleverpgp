@@ -106,6 +106,23 @@ def test_system_disk_formatting_messages_are_localized() -> None:
     )
 
 
+def test_system_disk_extension_messages_are_localized() -> None:
+    set_language("en")
+    assert (
+        tr("Расширение не получило разрешение администратора Windows.")
+        == "Disk extension did not receive Windows administrator permission."
+    )
+    assert (
+        tr("Windows не запустила защищённую операцию (код 5).")
+        == "Windows did not start the protected operation (error 5)."
+    )
+    set_language("kk")
+    assert (
+        tr("Windows не завершила расширение раздела вовремя.")
+        == "Windows бөлімді кеңейтуді уақытында аяқтамады."
+    )
+
+
 def test_new_disk_backend_choice_is_localized() -> None:
     set_language("en")
     assert (

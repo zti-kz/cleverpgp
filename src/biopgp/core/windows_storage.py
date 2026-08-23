@@ -590,6 +590,9 @@ class WindowsSystemDiskManager:
                 )
                 return self._drive
             except MountUnavailableError:
+                refreshed = self._refresh_control_record()
+                if refreshed is not None:
+                    return refreshed.drive
                 # A host can be briefly busy while Windows flushes the volume.
                 # Keep recoverable state while its assigned drive still exists.
                 if self._drive_available(self._drive):
@@ -598,6 +601,30 @@ class WindowsSystemDiskManager:
         self._disk = None
         self._drive = None
         return None
+
+    def _refresh_control_record(self) -> DiskControlRecord | None:
+        drive = self._drive
+        current = self._control_record
+        finder = getattr(self._control_store, "find_by_drive", None)
+        if drive is None or current is None or not callable(finder):
+            return None
+        try:
+            candidate = finder(drive)
+            if candidate is None or candidate == current:
+                return None
+            self._control_store.send(candidate, "ping", timeout=0.35)
+            container_reader = getattr(self._control_store, "container_path", None)
+            container_path = (
+                container_reader(candidate)
+                if callable(container_reader)
+                else self._container_path
+            )
+        except (MountUnavailableError, OSError, TypeError, ValueError):
+            return None
+        self._control_record = candidate
+        self._drive = candidate.drive
+        self._container_path = container_path
+        return candidate
 
     @property
     def mounted_container(self) -> Path | None:
@@ -1006,21 +1033,29 @@ class WindowsSystemDiskManager:
             open_label = "Открыть зашифрованный диск"
             info_label = "Сведения о диске"
             settings_label = "Настройки доступа"
+            resize_label = "Увеличить диск"
             unmount_label = "Отключить зашифрованный диск"
         elif len(context_menu_labels) == 2:
             open_label, unmount_label = context_menu_labels
             info_label = "Сведения о диске"
             settings_label = "Настройки доступа"
+            resize_label = "Увеличить диск"
         elif len(context_menu_labels) == 3:
             open_label, settings_label, unmount_label = context_menu_labels
             info_label = "Сведения о диске"
+            resize_label = "Увеличить диск"
         elif len(context_menu_labels) == 4:
             open_label, info_label, settings_label, unmount_label = (
                 context_menu_labels
             )
+            resize_label = "Увеличить диск"
+        elif len(context_menu_labels) == 5:
+            open_label, info_label, settings_label, resize_label, unmount_label = (
+                context_menu_labels
+            )
         else:
             raise ValueError(
-                "System disk context menu requires two, three, or four labels."
+                "System disk context menu requires two to five labels."
             )
         try:
             self._context_menu.register(
@@ -1028,6 +1063,7 @@ class WindowsSystemDiskManager:
                 open_label=open_label,
                 info_label=info_label,
                 settings_label=settings_label,
+                resize_label=resize_label,
                 unmount_label=unmount_label,
             )
         except OSError:

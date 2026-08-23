@@ -190,7 +190,7 @@ def test_direct_container_open_uses_compact_window(tmp_path: Path) -> None:
     window_type.return_value.showMaximized.assert_not_called()
 
 
-def test_settings_launch_opens_main_window_maximized() -> None:
+def test_explorer_settings_launch_uses_compact_window() -> None:
     with (
         patch("biopgp.app.QApplication") as application_type,
         patch("biopgp.app.ProfileRepository"),
@@ -205,7 +205,31 @@ def test_settings_launch_opens_main_window_maximized() -> None:
 
     assert result == 0
     assert window_type.call_args.kwargs["startup_action"] == "settings"
-    window_type.return_value.showMaximized.assert_called_once_with()
+    window_type.return_value.show.assert_called_once_with()
+    window_type.return_value.showMaximized.assert_not_called()
+
+
+def test_explorer_resize_launch_uses_compact_window() -> None:
+    with (
+        patch("biopgp.app.QApplication") as application_type,
+        patch("biopgp.app.ProfileRepository"),
+        patch("biopgp.app.ProfileService"),
+        patch("biopgp.app.FileCryptoService"),
+        patch("biopgp.app.MainWindow") as window_type,
+        patch("biopgp.app.line_icon"),
+    ):
+        application_type.return_value.exec.return_value = 0
+
+        result = application_main(
+            startup_action="resize",
+            startup_drive="Z:",
+        )
+
+    assert result == 0
+    assert window_type.call_args.kwargs["startup_action"] == "resize"
+    assert window_type.call_args.kwargs["startup_drive"] == "Z:"
+    window_type.return_value.show.assert_called_once_with()
+    window_type.return_value.showMaximized.assert_not_called()
 
 
 def test_winspd_backend_is_enabled_only_by_explicit_environment_setting() -> None:

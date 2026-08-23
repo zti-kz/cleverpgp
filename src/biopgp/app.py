@@ -62,13 +62,14 @@ def main(
         startup_action=startup_action,
         startup_drive=startup_drive,
     )
-    if container_path is None:
+    compact_operation = startup_action in {"resize", "settings"}
+    if container_path is None and not compact_operation:
         # The regular application uses the whole available desktop while
         # keeping the taskbar and standard window controls accessible.
         window.showMaximized()
     else:
-        # Opening a .cpgv directly shows only the compact unlock card. After a
-        # successful mount the window is hidden and the process stays in tray.
+        # Direct container and Explorer operations show only the compact
+        # authentication window. Mounting or resizing then returns to tray.
         window.show()
         screen = window.screen()
         if screen is not None:

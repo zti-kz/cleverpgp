@@ -43,6 +43,7 @@ def drive_context_menu_values(
     open_label: str,
     info_label: str,
     settings_label: str,
+    resize_label: str,
     unmount_label: str,
 ) -> tuple[RegistryValue, ...]:
     normalized_drive = _normalize_drive(drive)
@@ -59,12 +60,16 @@ def drive_context_menu_values(
     settings_command = subprocess.list2cmdline(
         [*prefix, "--settings", "%1"]
     )
+    resize_command = subprocess.list2cmdline(
+        [*prefix, "--resize-drive", "%1"]
+    )
     info_command = subprocess.list2cmdline(
         [*prefix, "--disk-info", "%1"]
     )
     open_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Open"
     info_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Info"
     settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
+    resize_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize"
     unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
     return (
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "MUIVerb", "Clever PGP"),
@@ -80,6 +85,9 @@ def drive_context_menu_values(
         RegistryValue(settings_key, "MUIVerb", settings_label),
         RegistryValue(settings_key, "Icon", icon),
         RegistryValue(settings_key + r"\command", "", settings_command),
+        RegistryValue(resize_key, "MUIVerb", resize_label),
+        RegistryValue(resize_key, "Icon", icon),
+        RegistryValue(resize_key + r"\command", "", resize_command),
         RegistryValue(unmount_key, "MUIVerb", unmount_label),
         RegistryValue(unmount_key, "Icon", icon),
         RegistryValue(unmount_key, "CommandFlags", 0x20, "dword"),
@@ -110,6 +118,7 @@ class WindowsDriveContextMenu:
         open_label: str,
         info_label: str,
         settings_label: str,
+        resize_label: str,
         unmount_label: str,
     ) -> None:
         if sys.platform != "win32" and self._registry is None:
@@ -125,6 +134,7 @@ class WindowsDriveContextMenu:
             open_label=open_label,
             info_label=info_label,
             settings_label=settings_label,
+            resize_label=resize_label,
             unmount_label=unmount_label,
         )
         view = getattr(registry, "KEY_WOW64_64KEY", 0)

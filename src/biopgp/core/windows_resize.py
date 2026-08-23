@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import ctypes
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -8,7 +11,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Protocol
 
 from biopgp.config import app_data_directory
 from biopgp.core.disk_control import DiskControlRecord, DiskControlStore
@@ -28,6 +31,14 @@ _SEE_MASK_FLAG_NO_UI = 0x00000400
 _SW_HIDE = 0
 _WAIT_OBJECT_0 = 0x00000000
 _WAIT_TIMEOUT = 0x00000102
+_TOKEN_SIZE = 32
+_TOKEN_ENTROPY_PREFIX = b"Clever PGP Windows resize request v1\0"
+
+
+class ResizeSecretProtector(Protocol):
+    def protect(self, plaintext: bytes, entropy: bytes) -> bytes: ...
+
+    def unprotect(self, protected: bytes, entropy: bytes) -> bytes: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,14 +57,19 @@ class ResizeExchangePaths:
 
 
 class WindowsResizeExchange:
-    """One-time, non-secret request files used across the UAC boundary."""
+    """One-time authenticated request crossing only the Windows UAC boundary."""
 
-    def __init__(self, directory: Path | None = None) -> None:
+    def __init__(
+        self,
+        directory: Path | None = None,
+        protector: ResizeSecretProtector | None = None,
+    ) -> None:
         self.directory = (
             Path(directory).expanduser().resolve()
             if directory is not None
             else (app_data_directory() / "resize-requests").resolve()
         )
+        self._protector = protector
 
     def create(
         self,
@@ -62,12 +78,26 @@ class WindowsResizeExchange:
     ) -> ResizeExchangePaths:
         request_id = secrets.token_hex(_REQUEST_ID_BYTES)
         paths = self.paths(request_id)
-        payload = {
+        authenticated = {
             "version": RESIZE_PROTOCOL_VERSION,
             "request_id": request_id,
             "record_path": str(record.path.expanduser().resolve()),
             "volume_id": record.volume_id.hex(),
             "volume": asdict(volume),
+        }
+        request_token = secrets.token_bytes(_TOKEN_SIZE)
+        protected_token = self._secret_protector().protect(
+            request_token,
+            _token_entropy(request_id, record.volume_id),
+        )
+        payload = {
+            **authenticated,
+            "protected_token": base64.b64encode(protected_token).decode("ascii"),
+            "request_mac": hmac.new(
+                request_token,
+                _canonical_request(authenticated),
+                hashlib.sha256,
+            ).hexdigest(),
         }
         self.directory.mkdir(parents=True, exist_ok=True)
         self._write_json_atomic(paths.request_path, payload)
@@ -83,6 +113,16 @@ class WindowsResizeExchange:
             payload = json.loads(source.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise TypeError("Resize request must be an object.")
+            if set(payload) != {
+                "version",
+                "request_id",
+                "record_path",
+                "volume_id",
+                "volume",
+                "protected_token",
+                "request_mac",
+            }:
+                raise ValueError("Resize request fields are invalid.")
             if int(payload.get("version", -1)) != RESIZE_PROTOCOL_VERSION:
                 raise ValueError("Resize request version is unsupported.")
             if str(payload.get("request_id")) != request_id:
@@ -94,6 +134,24 @@ class WindowsResizeExchange:
             raw_volume = payload["volume"]
             if not isinstance(raw_volume, dict):
                 raise TypeError("Resize volume information must be an object.")
+            if set(raw_volume) != {
+                "disk_number",
+                "partition_number",
+                "drive",
+                "friendly_name",
+                "serial_number",
+                "unique_id",
+                "bus_type",
+                "disk_size",
+                "partition_size",
+                "partition_offset",
+                "partition_style",
+                "file_system",
+                "data_partition_count",
+                "is_boot",
+                "is_system",
+            }:
+                raise ValueError("Resize volume fields are invalid.")
             volume = WindowsVolumeInfo(
                 disk_number=int(raw_volume["disk_number"]),
                 partition_number=int(raw_volume["partition_number"]),
@@ -111,6 +169,32 @@ class WindowsResizeExchange:
                 is_boot=_strict_bool(raw_volume["is_boot"]),
                 is_system=_strict_bool(raw_volume["is_system"]),
             )
+            protected_token = base64.b64decode(
+                str(payload["protected_token"]),
+                validate=True,
+            )
+            if not protected_token:
+                raise ValueError("Protected resize token is empty.")
+            request_token = self._secret_protector().unprotect(
+                protected_token,
+                _token_entropy(request_id, volume_id),
+            )
+            if len(request_token) != _TOKEN_SIZE:
+                raise ValueError("Resize token has an invalid length.")
+            authenticated = {
+                "version": RESIZE_PROTOCOL_VERSION,
+                "request_id": request_id,
+                "record_path": str(record_path),
+                "volume_id": volume_id.hex(),
+                "volume": asdict(volume),
+            }
+            expected_mac = hmac.new(
+                request_token,
+                _canonical_request(authenticated),
+                hashlib.sha256,
+            ).hexdigest()
+            if not hmac.compare_digest(str(payload["request_mac"]), expected_mac):
+                raise ValueError("Resize request authentication failed.")
         except MountUnavailableError:
             raise
         except (
@@ -123,6 +207,11 @@ class WindowsResizeExchange:
             raise MountUnavailableError(
                 "Запрос расширения системного диска повреждён."
             ) from error
+        finally:
+            try:
+                source.unlink()
+            except FileNotFoundError:
+                pass
         return WindowsResizeRequest(request_id, record_path, volume_id, volume)
 
     def write_success(
@@ -245,6 +334,17 @@ class WindowsResizeExchange:
             except FileNotFoundError:
                 pass
 
+    def _secret_protector(self) -> ResizeSecretProtector:
+        if self._protector is None:
+            if sys.platform != "win32":
+                raise MountUnavailableError(
+                    "Расширение системного диска доступно только в Windows."
+                )
+            from biopgp.biometrics.key_protection import WindowsDpapiProtector
+
+            self._protector = WindowsDpapiProtector()
+        return self._protector
+
 
 def run_elevated_ntfs_extension(
     record: DiskControlRecord,
@@ -252,6 +352,7 @@ def run_elevated_ntfs_extension(
     *,
     exchange: WindowsResizeExchange | None = None,
     command_prefix: Iterable[str] | None = None,
+    launcher: Callable[..., int] | None = None,
     timeout: float = 300.0,
 ) -> WindowsVolumeResizeResult:
     selected_exchange = exchange or WindowsResizeExchange()
@@ -266,8 +367,9 @@ def run_elevated_ntfs_extension(
         str(paths.request_path),
         str(paths.response_path),
     ]
+    selected_launcher = launcher or _launch_elevated
     try:
-        exit_code = _launch_elevated(command, timeout=timeout)
+        exit_code = selected_launcher(command, timeout=timeout)
         if paths.response_path.is_file():
             return selected_exchange.consume(paths)
         if exit_code != 0:
@@ -287,10 +389,16 @@ def run_windows_resize_helper(
     *,
     exchange: WindowsResizeExchange | None = None,
     control_store: DiskControlStore | None = None,
+    administrator_check: Callable[[], bool] | None = None,
 ) -> int:
     selected_exchange = exchange or WindowsResizeExchange()
     request_id = _request_id_from_untrusted_path(request_path)
     try:
+        selected_administrator_check = administrator_check or _is_user_admin
+        if not selected_administrator_check():
+            raise MountUnavailableError(
+                "Расширение не получило разрешение администратора Windows."
+            )
         request = selected_exchange.read(request_path)
         if request.request_id != request_id:
             raise MountUnavailableError("Идентификатор запроса расширения изменился.")
@@ -322,6 +430,7 @@ def run_windows_resize_helper(
             raise MountUnavailableError(
                 "Параметры диска изменились после подтверждения операции."
             )
+        store.send(record, "ping", timeout=1.0)
         result = extend_cleverpgp_ntfs_partition(
             current,
             expected_disk_size=request.volume.disk_size,
@@ -422,6 +531,31 @@ def _strict_bool(value: Any) -> bool:
     if not isinstance(value, bool):
         raise TypeError("Boolean resize field has an invalid type.")
     return value
+
+
+def _is_user_admin() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def _canonical_request(payload: dict[str, object]) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _token_entropy(request_id: str, volume_id: bytes) -> bytes:
+    _validate_request_id(request_id)
+    if len(volume_id) != 16:
+        raise ValueError("Resize volume id must contain 16 bytes.")
+    return _TOKEN_ENTROPY_PREFIX + bytes.fromhex(request_id) + volume_id
 
 
 def _validate_request_id(request_id: str) -> None:

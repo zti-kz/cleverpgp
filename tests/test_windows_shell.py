@@ -101,6 +101,7 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
         open_label="Open encrypted disk",
         info_label="Disk information",
         settings_label="Access settings",
+        resize_label="Increase disk",
         unmount_label="Unmount encrypted disk",
     )
     lookup = {(item.subkey, item.name): item.value for item in values}
@@ -127,7 +128,12 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
     assert "--disk-info" in str(info_command)
     assert "%1" in str(info_command)
     assert "cmd.exe" not in str(info_command).lower()
-    assert "--resize-drive" not in "\n".join(str(item.value) for item in values)
+    resize_command = lookup[
+        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize\command", "")
+    ]
+    assert "--resize-drive" in str(resize_command)
+    assert "%1" in str(resize_command)
+    assert "cmd.exe" not in str(resize_command).lower()
 
 
 def test_context_menu_registers_and_removes_only_its_own_tree(
@@ -151,6 +157,7 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
         open_label="Открыть зашифрованный диск",
         info_label="Сведения о диске",
         settings_label="Настройки доступа",
+        resize_label="Увеличить диск",
         unmount_label="Отключить зашифрованный диск",
     )
 

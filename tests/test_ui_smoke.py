@@ -462,6 +462,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "Увеличить диск",
         "Отключить зашифрованный диск",
     )
 
@@ -478,6 +479,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "Увеличить диск",
         "Отключить зашифрованный диск",
     )
     window._sync_tray_state()
@@ -569,6 +571,7 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
+        "Увеличить диск",
         "Отключить зашифрованный диск",
     )
     assert manager.uses_windows_system_disk

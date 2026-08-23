@@ -496,7 +496,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
             FakeStore.removed = selected
 
     class FakeContextMenu:
-        registered: tuple[str, str, str, str, str] | None = None
+        registered: tuple[str, str, str, str, str, str] | None = None
         removed = False
 
         def register(
@@ -506,6 +506,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
             open_label: str,
             info_label: str,
             settings_label: str,
+            resize_label: str,
             unmount_label: str,
         ) -> None:
             type(self).registered = (
@@ -513,6 +514,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
                 open_label,
                 info_label,
                 settings_label,
+                resize_label,
                 unmount_label,
             )
 
@@ -552,6 +554,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
         "Open disk",
         "Сведения о диске",
         "Access settings",
+        "Увеличить диск",
         "Unmount disk",
     )
     assert FakeContextMenu.removed
@@ -701,6 +704,67 @@ def test_system_manager_removes_stale_detached_host_state(
     assert manager.mounted_drive is None
     assert StaleStore.removed == [record]
     assert menu.removed
+
+
+def test_system_manager_refreshes_record_after_external_resize_remount(
+    tmp_path: Path,
+) -> None:
+    container_path = (tmp_path / "resized.cpgv").resolve()
+    old_record = DiskControlRecord(
+        volume_id=b"v" * 16,
+        drive="Z:",
+        port=23456,
+        process_id=4321,
+        protected_token=b"old-protected-token",
+        path=tmp_path / "mount.json",
+    )
+    new_record = replace(
+        old_record,
+        port=23457,
+        process_id=4322,
+        protected_token=b"new-protected-token",
+    )
+
+    class RefreshedStore:
+        commands: list[DiskControlRecord] = []
+
+        @classmethod
+        def send(
+            cls,
+            selected: DiskControlRecord,
+            command: str,
+            *,
+            timeout: float = 3.0,
+        ) -> None:
+            assert command == "ping"
+            assert timeout == 0.35
+            cls.commands.append(selected)
+            if selected == old_record:
+                raise MountUnavailableError("old host is gone")
+
+        @staticmethod
+        def find_by_drive(drive: str) -> DiskControlRecord | None:
+            assert drive == "Z:"
+            return new_record
+
+        @staticmethod
+        def container_path(selected: DiskControlRecord) -> Path:
+            assert selected == new_record
+            return container_path
+
+    manager = WindowsSystemDiskManager(
+        FakeProcessManager(),  # type: ignore[arg-type]
+        control_store=RefreshedStore(),  # type: ignore[arg-type]
+        drive_available=lambda _drive: True,
+        recover_existing=False,
+    )
+    manager._control_record = old_record
+    manager._drive = "Z:"
+
+    assert manager.mounted_drive == "Z:"
+    assert manager._control_record == new_record
+    assert manager.mounted_container == container_path
+    assert RefreshedStore.commands == [old_record, new_record, new_record]
 
 
 def test_system_manager_grows_remounts_and_extends_ntfs(

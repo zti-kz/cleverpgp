@@ -57,6 +57,7 @@ def run(marker: Path) -> int:
         open_label="Open",
         info_label="Info",
         settings_label="Settings",
+        resize_label="Resize",
         unmount_label="Unmount",
     )
     shell_lookup = {
@@ -66,6 +67,11 @@ def run(marker: Path) -> int:
         'System.ItemPathDisplay:="Z:\\' + '"'
     ):
         raise RuntimeError("Проверка контекстного меню системного диска не пройдена.")
+    resize_command = shell_lookup.get(
+        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize\command", "")
+    )
+    if "--resize-drive" not in str(resize_command):
+        raise RuntimeError("Команда увеличения системного диска не упакована.")
     marker.write_text(
         json.dumps(
             {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,16 @@ from biopgp.core.windows_storage import (
     WindowsVolumeInfo,
     WindowsVolumeResizeResult,
 )
+
+
+class FakeProtector:
+    def protect(self, plaintext: bytes, entropy: bytes) -> bytes:
+        assert entropy.startswith(b"Clever PGP Windows resize request v1\0")
+        return bytes(value ^ 0xA7 for value in plaintext)
+
+    def unprotect(self, protected: bytes, entropy: bytes) -> bytes:
+        assert entropy.startswith(b"Clever PGP Windows resize request v1\0")
+        return bytes(value ^ 0xA7 for value in protected)
 
 
 def volume_info(*, unique_id: str = "unique-7") -> WindowsVolumeInfo:
@@ -75,7 +86,7 @@ def test_elevated_helper_requires_live_control_record_and_exact_disk(
     mounted_directory = tmp_path / "mounted-disks"
     resize_directory = tmp_path / "resize-requests"
     mounted_directory.mkdir()
-    exchange = WindowsResizeExchange(resize_directory)
+    exchange = WindowsResizeExchange(resize_directory, FakeProtector())
     record = control_record(mounted_directory)
     store = FakeControlStore(mounted_directory, record)
     info = volume_info()
@@ -101,11 +112,15 @@ def test_elevated_helper_requires_live_control_record_and_exact_disk(
             paths.response_path,
             exchange=exchange,
             control_store=store,  # type: ignore[arg-type]
+            administrator_check=lambda: True,
         )
 
     assert exit_code == 0
     assert exchange.consume(paths) == result
-    assert store.commands == [(record, "ping", 1.0)]
+    assert store.commands == [
+        (record, "ping", 1.0),
+        (record, "ping", 1.0),
+    ]
     inspect.assert_called_once_with("Z:")
     extend.assert_called_once_with(
         info,
@@ -121,7 +136,7 @@ def test_elevated_helper_refuses_identity_change_before_partition_command(
     mounted_directory = tmp_path / "mounted-disks"
     resize_directory = tmp_path / "resize-requests"
     mounted_directory.mkdir()
-    exchange = WindowsResizeExchange(resize_directory)
+    exchange = WindowsResizeExchange(resize_directory, FakeProtector())
     record = control_record(mounted_directory)
     store = FakeControlStore(mounted_directory, record)
     paths = exchange.create(record, volume_info())
@@ -140,6 +155,7 @@ def test_elevated_helper_refuses_identity_change_before_partition_command(
             paths.response_path,
             exchange=exchange,
             control_store=store,  # type: ignore[arg-type]
+            administrator_check=lambda: True,
         )
 
     assert exit_code == 1
@@ -154,7 +170,10 @@ def test_parent_uses_one_time_files_and_passes_no_key_to_elevated_command(
 ) -> None:
     mounted_directory = tmp_path / "mounted-disks"
     mounted_directory.mkdir()
-    exchange = WindowsResizeExchange(tmp_path / "resize-requests")
+    exchange = WindowsResizeExchange(
+        tmp_path / "resize-requests",
+        FakeProtector(),
+    )
     record = control_record(mounted_directory)
     info = volume_info()
     expected = WindowsVolumeResizeResult(
@@ -173,16 +192,76 @@ def test_parent_uses_one_time_files_and_passes_no_key_to_elevated_command(
         exchange.write_success(response_path, request.request_id, expected)
         return 0
 
-    with patch("biopgp.core.windows_resize._launch_elevated", side_effect=launch):
-        result = run_elevated_ntfs_extension(
-            record,
-            info,
-            exchange=exchange,
-            command_prefix=("CleverPGP.exe",),
-            timeout=12.0,
-        )
+    result = run_elevated_ntfs_extension(
+        record,
+        info,
+        exchange=exchange,
+        command_prefix=("CleverPGP.exe",),
+        launcher=launch,
+        timeout=12.0,
+    )
 
     assert result == expected
     assert captured[1] == "--windows-resize-helper"
     assert all("master" not in argument.casefold() for argument in captured)
     assert list(exchange.directory.glob("*.json")) == []
+
+
+def test_resize_request_is_authenticated_and_one_time(tmp_path: Path) -> None:
+    exchange = WindowsResizeExchange(
+        tmp_path / "resize-requests",
+        FakeProtector(),
+    )
+    record = control_record(tmp_path / "mounted-disks")
+    paths = exchange.create(record, volume_info())
+
+    request = exchange.read(paths.request_path)
+
+    assert request.volume == volume_info()
+    assert not paths.request_path.exists()
+    with pytest.raises(MountUnavailableError, match="повреждён"):
+        exchange.read(paths.request_path)
+
+
+def test_tampered_resize_identity_is_rejected_before_use(tmp_path: Path) -> None:
+    exchange = WindowsResizeExchange(
+        tmp_path / "resize-requests",
+        FakeProtector(),
+    )
+    record = control_record(tmp_path / "mounted-disks")
+    paths = exchange.create(record, volume_info())
+    payload = json.loads(paths.request_path.read_text(encoding="utf-8"))
+    payload["volume"]["disk_number"] = 8
+    paths.request_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(MountUnavailableError, match="повреждён"):
+        exchange.read(paths.request_path)
+
+    assert not paths.request_path.exists()
+
+
+def test_resize_helper_requires_administrator_before_request_is_used(
+    tmp_path: Path,
+) -> None:
+    mounted_directory = tmp_path / "mounted-disks"
+    resize_directory = tmp_path / "resize-requests"
+    mounted_directory.mkdir()
+    exchange = WindowsResizeExchange(resize_directory, FakeProtector())
+    record = control_record(mounted_directory)
+    store = FakeControlStore(mounted_directory, record)
+    paths = exchange.create(record, volume_info())
+
+    exit_code = run_windows_resize_helper(
+        paths.request_path,
+        paths.response_path,
+        exchange=exchange,
+        control_store=store,  # type: ignore[arg-type]
+        administrator_check=lambda: False,
+    )
+
+    assert exit_code == 1
+    with pytest.raises(MountUnavailableError, match="администратора"):
+        exchange.consume(paths)
+    assert store.commands == []
+    assert paths.request_path.exists()
+    exchange.cleanup(paths)
