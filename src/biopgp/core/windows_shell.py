@@ -41,6 +41,7 @@ def drive_context_menu_values(
     command_prefix: Iterable[str],
     icon_path: Path,
     open_label: str,
+    info_label: str,
     settings_label: str,
     unmount_label: str,
 ) -> tuple[RegistryValue, ...]:
@@ -58,7 +59,11 @@ def drive_context_menu_values(
     settings_command = subprocess.list2cmdline(
         [*prefix, "--settings", "%1"]
     )
+    info_command = subprocess.list2cmdline(
+        [*prefix, "--disk-info", "%1"]
+    )
     open_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Open"
+    info_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Info"
     settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
     unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
     return (
@@ -69,6 +74,9 @@ def drive_context_menu_values(
         RegistryValue(open_key, "MUIVerb", open_label),
         RegistryValue(open_key, "Icon", icon),
         RegistryValue(open_key + r"\command", "", open_command),
+        RegistryValue(info_key, "MUIVerb", info_label),
+        RegistryValue(info_key, "Icon", icon),
+        RegistryValue(info_key + r"\command", "", info_command),
         RegistryValue(settings_key, "MUIVerb", settings_label),
         RegistryValue(settings_key, "Icon", icon),
         RegistryValue(settings_key + r"\command", "", settings_command),
@@ -100,6 +108,7 @@ class WindowsDriveContextMenu:
         drive: str,
         *,
         open_label: str,
+        info_label: str,
         settings_label: str,
         unmount_label: str,
     ) -> None:
@@ -114,6 +123,7 @@ class WindowsDriveContextMenu:
             command_prefix=self._command_prefix,
             icon_path=self._icon_path,
             open_label=open_label,
+            info_label=info_label,
             settings_label=settings_label,
             unmount_label=unmount_label,
         )

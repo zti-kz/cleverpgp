@@ -76,6 +76,17 @@ def test_unmount_mode_is_dispatched_to_drive_control() -> None:
     unmount.assert_called_once_with("Z:\\")
 
 
+def test_disk_info_mode_opens_only_compact_information_window() -> None:
+    with patch(
+        "biopgp.ui.disk_info_dialog.run_disk_info_dialog",
+        return_value=0,
+    ) as disk_info:
+        result = main(["--disk-info", "Z:\\"])
+
+    assert result == 0
+    disk_info.assert_called_once_with("Z:\\")
+
+
 def test_settings_mode_opens_access_settings_window() -> None:
     with patch("biopgp.app.main", return_value=0) as application_main:
         result = main(["--settings", "Z:\\"])

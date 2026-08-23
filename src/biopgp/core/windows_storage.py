@@ -947,19 +947,29 @@ class WindowsSystemDiskManager:
         )
         if context_menu_labels is None:
             open_label = "Открыть зашифрованный диск"
+            info_label = "Сведения о диске"
             settings_label = "Настройки доступа"
             unmount_label = "Отключить зашифрованный диск"
         elif len(context_menu_labels) == 2:
             open_label, unmount_label = context_menu_labels
+            info_label = "Сведения о диске"
             settings_label = "Настройки доступа"
         elif len(context_menu_labels) == 3:
             open_label, settings_label, unmount_label = context_menu_labels
+            info_label = "Сведения о диске"
+        elif len(context_menu_labels) == 4:
+            open_label, info_label, settings_label, unmount_label = (
+                context_menu_labels
+            )
         else:
-            raise ValueError("System disk context menu requires two or three labels.")
+            raise ValueError(
+                "System disk context menu requires two, three, or four labels."
+            )
         try:
             self._context_menu.register(
                 drive,
                 open_label=open_label,
+                info_label=info_label,
                 settings_label=settings_label,
                 unmount_label=unmount_label,
             )

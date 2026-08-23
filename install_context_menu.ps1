@@ -66,6 +66,13 @@ New-ItemProperty -Path $OpenDriveVerb -Name "Icon" -Value $PythonWindowed -Prope
 $OpenDriveCommand = New-Item -Path (Join-Path $OpenDriveVerb "command") -Force
 Set-Item -Path $OpenDriveCommand.PSPath -Value "`"$env:SystemRoot\explorer.exe`" `"%1`""
 
+$InfoVerb = Join-Path $DriveMenu "shell\Info"
+New-Item -Path $InfoVerb -Force | Out-Null
+New-ItemProperty -Path $InfoVerb -Name "MUIVerb" -Value "Сведения о диске" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $InfoVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
+$InfoCommand = New-Item -Path (Join-Path $InfoVerb "command") -Force
+Set-Item -Path $InfoCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp --disk-info `"%1`""
+
 $UnmountVerb = Join-Path $DriveMenu "shell\Unmount"
 New-Item -Path $UnmountVerb -Force | Out-Null
 New-ItemProperty -Path $UnmountVerb -Name "MUIVerb" -Value "Отключить зашифрованный диск" -PropertyType String -Force | Out-Null

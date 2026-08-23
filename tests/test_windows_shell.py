@@ -99,6 +99,7 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
         command_prefix=(str(executable),),
         icon_path=executable,
         open_label="Open encrypted disk",
+        info_label="Disk information",
         settings_label="Access settings",
         unmount_label="Unmount encrypted disk",
     )
@@ -120,6 +121,12 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
     assert "--settings" in str(settings_command)
     assert "%1" in str(settings_command)
     assert "cmd.exe" not in str(settings_command).lower()
+    info_command = lookup[
+        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Info\command", "")
+    ]
+    assert "--disk-info" in str(info_command)
+    assert "%1" in str(info_command)
+    assert "cmd.exe" not in str(info_command).lower()
     assert "--resize-drive" not in "\n".join(str(item.value) for item in values)
 
 
@@ -142,6 +149,7 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
     menu.register(
         "Y:",
         open_label="Открыть зашифрованный диск",
+        info_label="Сведения о диске",
         settings_label="Настройки доступа",
         unmount_label="Отключить зашифрованный диск",
     )
@@ -161,3 +169,15 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
     )
     assert r"Software\Classes\Drive\shell\Unrelated" in registry.keys
     assert notifications == [True, True]
+
+
+def test_installer_and_development_menu_include_compact_disk_information() -> None:
+    project = Path(__file__).resolve().parents[1]
+    installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
+    development = (project / "install_context_menu.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    for source in (installer, development):
+        assert "Сведения о диске" in source
+        assert "--disk-info" in source

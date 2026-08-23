@@ -614,6 +614,7 @@ class MainWindow(QMainWindow):
                 logical_capacity=selected_capacity,
                 context_menu_labels=(
                     tr("Открыть зашифрованный диск"),
+                    tr("Сведения о диске"),
                     tr("Настройки доступа"),
                     tr("Отключить зашифрованный диск"),
                 ),
@@ -724,6 +725,7 @@ class MainWindow(QMainWindow):
                         file_system=file_system,
                         context_menu_labels=(
                             tr("Открыть зашифрованный диск"),
+                            tr("Сведения о диске"),
                             tr("Настройки доступа"),
                             tr("Отключить зашифрованный диск"),
                         ),
@@ -836,6 +838,7 @@ class MainWindow(QMainWindow):
                     master_key,
                     context_menu_labels=(
                         tr("Открыть зашифрованный диск"),
+                        tr("Сведения о диске"),
                         tr("Настройки доступа"),
                         tr("Отключить зашифрованный диск"),
                     ),

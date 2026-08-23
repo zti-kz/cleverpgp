@@ -460,6 +460,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.create_call["file_system"] == "EXFAT"
     assert manager.create_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
+        "Сведения о диске",
         "Настройки доступа",
         "Отключить зашифрованный диск",
     )
@@ -475,6 +476,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.mount_call is not None
     assert manager.mount_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
+        "Сведения о диске",
         "Настройки доступа",
         "Отключить зашифрованный диск",
     )

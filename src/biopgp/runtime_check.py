@@ -55,6 +55,7 @@ def run(marker: Path) -> int:
         command_prefix=(sys.executable,),
         icon_path=Path(sys.executable),
         open_label="Open",
+        info_label="Info",
         settings_label="Settings",
         unmount_label="Unmount",
     )

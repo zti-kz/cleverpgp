@@ -63,6 +63,10 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             return 1
         return 0
+    if arguments[:1] == ["--disk-info"] and len(arguments) == 2:
+        from biopgp.ui.disk_info_dialog import run_disk_info_dialog
+
+        return run_disk_info_dialog(arguments[1])
 
     from biopgp.app import main as application_main
 
