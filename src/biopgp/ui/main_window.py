@@ -1291,7 +1291,6 @@ class MainWindow(QMainWindow):
 
     def _container_mounted(self, result: object) -> None:
         drive = str(result)
-        direct_launch = self._direct_mount_pending
         self._direct_mount_pending = False
         self._sync_tray_state()
         self._set_dashboard_status(
@@ -1301,8 +1300,10 @@ class MainWindow(QMainWindow):
             )
         )
         QDesktopServices.openUrl(QUrl.fromLocalFile(f"{drive}\\"))
-        if direct_launch:
-            QTimer.singleShot(0, self._hide_to_tray)
+        # The mounted disk is served independently from the unlocked GUI.
+        # Always leave Explorer in front and remove the profile key from this
+        # process as soon as the mount operation has completed.
+        QTimer.singleShot(0, self._hide_to_tray)
 
     def _mount_startup_container(self) -> None:
         source = self.startup_container
@@ -1556,9 +1557,7 @@ class MainWindow(QMainWindow):
             self.show()
 
     def _lock(self) -> None:
-        if self.session is not None:
-            self.session.lock()
-            self.session = None
+        self._clear_session()
         self._show_unlock()
         if self.mount_manager.mounted_drive is not None:
             self._hide_to_tray()
@@ -1568,9 +1567,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self._compact_settings_launch:
-            if self.session is not None:
-                self.session.lock()
-                self.session = None
+            self._clear_session()
             self._tray_icon.hide()
             event.accept()
             return
@@ -1578,9 +1575,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             self._hide_to_tray()
             return
-        if self.session is not None:
-            self.session.lock()
-            self.session = None
+        self._clear_session()
         self._tray_icon.hide()
         event.accept()
 
@@ -1653,11 +1648,19 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._close_background_window)
 
     def _hide_to_tray(self) -> None:
+        self._clear_session()
+        if self.repository.get_profile() is not None:
+            self._show_unlock()
         self._sync_tray_state()
         self._tray_icon.show()
         self.hide()
 
     def _show_from_tray(self) -> None:
+        if self.session is None or not self.session.is_unlocked:
+            if self.repository.get_profile() is None:
+                self._show_create_profile()
+            else:
+                self._show_unlock()
         self.showMaximized()
         self.raise_()
         self.activateWindow()
@@ -1689,13 +1692,16 @@ class MainWindow(QMainWindow):
         self._close_background_window()
 
     def _close_background_window(self) -> None:
-        if self.session is not None:
-            self.session.lock()
-            self.session = None
+        self._clear_session()
         self._tray_icon.hide()
         application = QApplication.instance()
         if application is not None:
             application.quit()
+
+    def _clear_session(self) -> None:
+        if self.session is not None:
+            self.session.lock()
+            self.session = None
 
     def _show_about(self) -> None:
         AboutDialog(self).exec()

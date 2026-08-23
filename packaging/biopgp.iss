@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.12.1"
+  #define AppVersion "0.12.2"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1

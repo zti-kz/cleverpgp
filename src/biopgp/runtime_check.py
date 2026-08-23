@@ -120,11 +120,15 @@ def run(marker: Path) -> int:
 
 def run_ui_worker(marker: Path) -> int:
     """Verify that packaged background UI tasks start and report completion."""
-    from PySide6.QtCore import QCoreApplication, QTimer
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QApplication
 
     from biopgp.ui.main_window import BackgroundTaskThread
 
-    application = QCoreApplication.instance() or QCoreApplication([])
+    application = QApplication.instance() or QApplication([])
+    event_loop = QEventLoop()
+    timeout_timer = QTimer()
+    timeout_timer.setSingleShot(True)
     state: dict[str, object] = {"progress": []}
 
     def operation(report_progress):
@@ -140,22 +144,24 @@ def run_ui_worker(marker: Path) -> int:
 
     def on_succeeded(result: object) -> None:
         state["result"] = result
-        application.quit()
+        event_loop.quit()
 
     def on_failed(message: str) -> None:
         state["error"] = message
-        application.quit()
+        event_loop.quit()
 
     def on_timeout() -> None:
         state["error"] = "Background UI task did not finish within 10 seconds."
-        application.quit()
+        event_loop.quit()
 
     thread.progress.connect(on_progress)
     thread.succeeded.connect(on_succeeded)
     thread.failed.connect(on_failed)
-    QTimer.singleShot(10_000, on_timeout)
+    timeout_timer.timeout.connect(on_timeout)
     thread.start()
-    application.exec()
+    timeout_timer.start(10_000)
+    event_loop.exec()
+    timeout_timer.stop()
     thread.wait(2_000)
 
     if thread.isRunning():

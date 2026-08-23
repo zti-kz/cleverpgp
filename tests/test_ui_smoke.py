@@ -1189,6 +1189,7 @@ def test_opaque_disk_falls_back_to_compact_password_dialog(
 def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     class MountedDisk:
         mounted_drive = "Z:"
+        uses_windows_system_disk = True
 
         def __init__(self) -> None:
             self.unmount_calls = 0
@@ -1206,6 +1207,8 @@ def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
             memlimit=pwhash.argon2id.MEMLIMIT_MIN,
         ),
     )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
     mounted_disk = MountedDisk()
     window = MainWindow(
         repository,
@@ -1213,6 +1216,9 @@ def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
         FileCryptoService(),
         mount_manager=mounted_disk,
     )
+    unlocked_session = profile_service.unlock_with_password(password)
+    window.session = unlocked_session
+    window._show_dashboard()
     window.show()
     application.processEvents()
     event = QCloseEvent()
@@ -1222,9 +1228,70 @@ def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     assert not event.isAccepted()
     assert window.isHidden()
     assert mounted_disk.unmount_calls == 0
-    assert not window._tray_exit_action.isEnabled()
+    assert window._tray_exit_action.isEnabled()
+    assert window.session is None
+    assert not unlocked_session.is_unlocked
+    assert any(
+        button.text() == "Разблокировать паролем"
+        for button in window.findChildren(QPushButton)
+    )
 
     mounted_disk.mounted_drive = None
+    window.close()
+    application.processEvents()
+
+
+def test_successful_mount_always_hides_and_locks_gui_session(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class MountedDisk:
+        mounted_drive = "Z:"
+        uses_windows_system_disk = True
+
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=MountedDisk(),  # type: ignore[arg-type]
+    )
+    unlocked_session = profile_service.unlock_with_password(password)
+    window.session = unlocked_session
+    window._show_dashboard()
+    opened_urls: list[str] = []
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url.toLocalFile()) or True,
+    )
+    window.show()
+    application.processEvents()
+
+    window._container_mounted("Z:")
+    application.processEvents()
+
+    assert opened_urls == ["Z:/"]
+    assert window.isHidden()
+    assert window.session is None
+    assert not unlocked_session.is_unlocked
+    assert any(
+        button.text() == "Разблокировать паролем"
+        for button in window.findChildren(QPushButton)
+    )
+
+    window.mount_manager.mounted_drive = None
     window.close()
     application.processEvents()
 
