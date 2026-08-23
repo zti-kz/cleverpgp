@@ -33,7 +33,9 @@ class FakeSystemManager:
         self.mounted_drive = mounted_drive
         self.mounted_container = mounted_container
         self.create_calls: list[dict[str, object]] = []
+        self.hidden_create_calls: list[dict[str, object]] = []
         self.mount_calls: list[dict[str, object]] = []
+        self.opaque_mount_calls: list[dict[str, object]] = []
         self.unmount_calls = 0
 
     def mount(
@@ -70,6 +72,42 @@ class FakeSystemManager:
             }
         )
         self.mounted_drive = "N:"
+        self.mounted_container = container_path
+        return self.mounted_drive
+
+    def create_hidden_and_mount(
+        self,
+        container_path: Path,
+        outer_password: str,
+        hidden_password: str,
+        **options: object,
+    ) -> str:
+        self.hidden_create_calls.append(
+            {
+                "container_path": container_path,
+                "outer_password": outer_password,
+                "hidden_password": hidden_password,
+                **options,
+            }
+        )
+        self.mounted_drive = "H:"
+        self.mounted_container = container_path
+        return self.mounted_drive
+
+    def mount_opaque(
+        self,
+        container_path: Path,
+        password: str,
+        **options: object,
+    ) -> str:
+        self.opaque_mount_calls.append(
+            {
+                "container_path": container_path,
+                "password": password,
+                **options,
+            }
+        )
+        self.mounted_drive = "O:"
         self.mounted_container = container_path
         return self.mounted_drive
 
@@ -212,6 +250,45 @@ def test_fast_windows_disk_creation_routes_without_removing_winfsp(
             "progress": progress,
         }
     ]
+    assert not winfsp.mount_calls
+
+
+def test_hidden_creation_and_password_mount_route_only_to_windows(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "hidden.cpgv"
+    system = FakeSystemManager()
+    winfsp = FakeWinFspManager()
+    manager = AutomaticMountManager(
+        system_manager=system,
+        winfsp_manager=winfsp,  # type: ignore[arg-type]
+    )
+
+    created = manager.create_hidden_and_mount(
+        container_path,
+        "outer correct horse battery staple",
+        "hidden correct horse battery staple",
+        outer_capacity=96 * 1024 * 1024,
+        hidden_capacity=32 * 1024 * 1024,
+    )
+
+    assert created == "H:"
+    assert system.hidden_create_calls[0]["container_path"] == (
+        container_path.resolve()
+    )
+    assert manager.active_backend == BACKEND_WINDOWS
+    manager.unmount()
+
+    opened = manager.mount_opaque(
+        container_path,
+        "hidden correct horse battery staple",
+        hidden_protection_password=None,
+    )
+
+    assert opened == "O:"
+    assert system.opaque_mount_calls[0]["container_path"] == (
+        container_path.resolve()
+    )
     assert not winfsp.mount_calls
 
 

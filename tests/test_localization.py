@@ -7,6 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from nacl import pwhash  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
+    QAbstractButton,
     QApplication,
     QLabel,
     QComboBox,
@@ -22,6 +23,10 @@ from biopgp.localization import available_languages, set_language, tr  # noqa: E
 from biopgp.ui.about_dialog import AboutDialog  # noqa: E402
 from biopgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
 from biopgp.ui.main_window import MainWindow  # noqa: E402
+from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
+    HiddenVolumeCreationDialog,
+    OpaqueVolumeUnlockDialog,
+)
 from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
 from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
 
@@ -173,7 +178,7 @@ def test_header_language_selector_applies_and_saves_language(tmp_path) -> None:
 def _visible_strings(widget: QWidget) -> list[str]:
     strings = [widget.windowTitle()]
     strings.extend(label.text() for label in widget.findChildren(QLabel))
-    strings.extend(button.text() for button in widget.findChildren(QPushButton))
+    strings.extend(button.text() for button in widget.findChildren(QAbstractButton))
     strings.extend(line.placeholderText() for line in widget.findChildren(QLineEdit))
     strings.extend(
         combo.itemText(index)
@@ -181,7 +186,9 @@ def _visible_strings(widget: QWidget) -> list[str]:
         if combo.objectName() != "languageSelector"
         for index in range(combo.count())
     )
-    strings.extend(button.toolTip() for button in widget.findChildren(QPushButton))
+    strings.extend(
+        button.toolTip() for button in widget.findChildren(QAbstractButton)
+    )
     return [value for value in strings if value]
 
 
@@ -210,6 +217,16 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
         allow_backend_choice=True,
         system_backend_available=True,
         winfsp_backend_available=True,
+        hidden_volume_available=True,
+    )
+    hidden = HiddenVolumeCreationDialog(
+        96 * 1024 * 1024,
+        "Outer",
+        window,
+    )
+    opaque_unlock = OpaqueVolumeUnlockDialog(
+        tmp_path / "hidden.cpgv",
+        window,
     )
     settings = AccessSettingsDialog(
         window.repository.get_profile().unlock_mode,
@@ -223,7 +240,15 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
     russian_letters = re.compile(r"[А-Яа-яЁё]")
     untranslated = [
         value
-        for dialog in (window, about, container, settings, shell)
+        for dialog in (
+            window,
+            about,
+            container,
+            hidden,
+            opaque_unlock,
+            settings,
+            shell,
+        )
         for value in _visible_strings(dialog)
         if russian_letters.search(value)
     ]
@@ -231,7 +256,16 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
 
     shell.close()
     settings.close()
+    opaque_unlock.close()
+    hidden.close()
     container.close()
     about.close()
     window.close()
     application.processEvents()
+
+
+def test_hidden_disk_primary_actions_are_available_in_kazakh() -> None:
+    set_language("kk")
+
+    assert tr("Создать скрытый диск") == "Жасырын диск жасау"
+    assert tr("Разблокировать диск") == "Дискіні бұғаттан шығару"

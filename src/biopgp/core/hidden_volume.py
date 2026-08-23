@@ -179,6 +179,17 @@ class HiddenBlockVolume:
         hidden_blocks = HiddenBlockVolume._hidden_block_count(logical_capacity)
         return math.ceil(hidden_blocks * HIDDEN_SLOT_SIZE / LOGICAL_BLOCK_SIZE)
 
+    @staticmethod
+    def maximum_logical_capacity(region_block_count: int) -> int:
+        """Return the largest block-aligned hidden disk fitting a region."""
+
+        if not isinstance(region_block_count, int) or region_block_count <= 0:
+            raise ValidationError("Некорректный размер области скрытого тома.")
+        hidden_blocks = (
+            region_block_count * LOGICAL_BLOCK_SIZE // HIDDEN_SLOT_SIZE
+        )
+        return hidden_blocks * LOGICAL_BLOCK_SIZE
+
     @property
     def path(self) -> Path:
         return self._cover.path

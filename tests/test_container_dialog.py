@@ -12,12 +12,16 @@ from PySide6.QtWidgets import QApplication, QComboBox, QSlider  # noqa: E402
 from biopgp.ui.container_dialog import (  # noqa: E402
     DISK_BACKEND_WINDOWS,
     DISK_BACKEND_WINFSP,
+    VOLUME_KIND_HIDDEN,
     TEBIBYTE,
     MEBIBYTE,
     ContainerCreationDialog,
 )
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
-from biopgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY  # noqa: E402
+from biopgp.core.winspd import (  # noqa: E402
+    MIN_HIDDEN_WINDOWS_COVER_CAPACITY,
+    MIN_WINDOWS_DISK_CAPACITY,
+)
 from biopgp.ui.resize_dialog import ContainerResizeDialog  # noqa: E402
 
 
@@ -138,6 +142,34 @@ def test_automatic_dialog_uses_winfsp_when_system_component_is_missing() -> None
     assert not dialog.system_disk
     assert dialog.format_card.isHidden()
 
+    dialog.close()
+    application.processEvents()
+
+
+def test_hidden_kind_raises_outer_slider_minimum_and_requires_winspd() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog(
+        minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+        allow_backend_choice=True,
+        system_backend_available=True,
+        winfsp_backend_available=True,
+        hidden_volume_available=True,
+    )
+
+    dialog.volume_kind_input.setCurrentIndex(
+        dialog.volume_kind_input.findData(VOLUME_KIND_HIDDEN)
+    )
+
+    assert dialog.hidden_volume
+    assert dialog.data_capacity >= MIN_HIDDEN_WINDOWS_COVER_CAPACITY
+    assert "внешний" in dialog.volume_kind_description.text()
+
+    dialog.backend_input.setCurrentIndex(
+        dialog.backend_input.findData(DISK_BACKEND_WINFSP)
+    )
+
+    assert not dialog.hidden_volume
+    assert dialog.volume_kind_card.isHidden()
     dialog.close()
     application.processEvents()
 

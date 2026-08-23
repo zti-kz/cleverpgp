@@ -1388,7 +1388,7 @@ class WindowsSystemDiskManager:
                 open_label=open_label,
                 info_label=info_label,
                 settings_label=settings_label,
-                resize_label=resize_label,
+                resize_label=resize_label or None,
                 unmount_label=unmount_label,
             )
         except OSError:

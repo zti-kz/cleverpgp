@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from biopgp.core.container import MIN_DATA_CAPACITY  # noqa: E402
+from biopgp.core.block_volume import InvalidBlockVolumeError  # noqa: E402
 from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
 from biopgp.core.models import BiometricProfile, UnlockMode  # noqa: E402
 from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
@@ -23,6 +24,10 @@ from biopgp.core.storage import ProfileRepository  # noqa: E402
 from biopgp.ui.main_window import MainWindow  # noqa: E402
 from biopgp.ui import main_window as main_window_module  # noqa: E402
 from biopgp.ui.settings_dialog import AccessSettingsRequest  # noqa: E402
+from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
+    HiddenVolumeCreationRequest,
+    OpaqueVolumeUnlockRequest,
+)
 
 
 def test_first_window_can_be_created(tmp_path: Path) -> None:
@@ -351,8 +356,10 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
             *,
             minimum_capacity: int,
             system_disk: bool,
+            hidden_volume_available: bool,
         ) -> None:
             del parent
+            assert hidden_volume_available
             type(self).requested_minimum = minimum_capacity
             type(self).requested_system_mode = system_disk
 
@@ -687,6 +694,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
         "allow_backend_choice": True,
         "system_backend_available": True,
         "winfsp_backend_available": True,
+        "hidden_volume_available": True,
     }
     assert manager.create_call is not None
     assert manager.create_call["container_path"] == tmp_path / "automatic-created.cpgv"
@@ -696,6 +704,221 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
 
     manager.mounted_drive = None
     manager.uses_windows_system_disk = False
+    window.close()
+    application.processEvents()
+
+
+def test_hidden_disk_creation_uses_dual_password_windows_workflow(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class CreationDialog:
+        container_path = tmp_path / "hidden-created.cpgv"
+        data_capacity = 96 * 1024 * 1024
+        volume_label = "Outer"
+        file_system = "NTFS"
+        system_disk = True
+        hidden_volume = True
+
+        def __init__(self, parent: object = None, **_options: object) -> None:
+            del parent
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class HiddenDialog:
+        request = HiddenVolumeCreationRequest(
+            32 * 1024 * 1024,
+            "outer correct horse battery staple",
+            "hidden correct horse battery staple",
+            "Private",
+        )
+
+        def __init__(
+            self,
+            outer_capacity: int,
+            outer_label: str,
+            parent: object = None,
+        ) -> None:
+            del parent
+            assert outer_capacity == 96 * 1024 * 1024
+            assert outer_label == "Outer"
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class Manager:
+        automatically_selects_backend = True
+        uses_windows_system_disk = False
+
+        def __init__(self) -> None:
+            self.mounted_drive: str | None = None
+            self.hidden_call: dict[str, object] | None = None
+
+        def create_hidden_and_mount(
+            self,
+            path: Path,
+            outer_password: str,
+            hidden_password: str,
+            **options: object,
+        ) -> str:
+            progress = options.pop("progress")
+            assert callable(progress)
+            self.hidden_call = {
+                "path": path,
+                "outer_password": outer_password,
+                "hidden_password": hidden_password,
+                **options,
+            }
+            self.uses_windows_system_disk = True
+            self.mounted_drive = "H:"
+            progress(100, "Скрытый виртуальный диск готов")
+            return self.mounted_drive
+
+        def unmount(self) -> None:
+            self.mounted_drive = None
+
+    monkeypatch.setattr(main_window_module, "ContainerCreationDialog", CreationDialog)
+    monkeypatch.setattr(main_window_module, "HiddenVolumeCreationDialog", HiddenDialog)
+    monkeypatch.setattr(main_window_module, "winspd_driver_available", lambda: True)
+    monkeypatch.setattr(main_window_module, "mount_backend_available", lambda: True)
+    monkeypatch.setattr(main_window_module.QDesktopServices, "openUrl", lambda _url: True)
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    service.create_profile("Test", password)
+    manager = Manager()
+    window = MainWindow(
+        repository,
+        service,
+        FileCryptoService(),
+        mount_manager=manager,  # type: ignore[arg-type]
+    )
+    window.session = service.unlock_with_password(password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+
+    window._create_container()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert manager.hidden_call is not None
+    assert manager.hidden_call["outer_password"].startswith("outer")
+    assert manager.hidden_call["hidden_password"].startswith("hidden")
+    assert manager.hidden_call["outer_capacity"] == 96 * 1024 * 1024
+    assert manager.hidden_call["hidden_capacity"] == 32 * 1024 * 1024
+    assert manager.hidden_call["context_menu_labels"] == (
+        "Открыть зашифрованный диск",
+        "Сведения о диске",
+        "Настройки доступа",
+        "",
+        "Отключить зашифрованный диск",
+    )
+    assert manager.mounted_drive == "H:"
+    manager.mounted_drive = None
+    window.close()
+    application.processEvents()
+
+
+def test_opaque_disk_falls_back_to_compact_password_dialog(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "hidden.cpgv"
+    source.touch()
+
+    class UnlockDialog:
+        request = OpaqueVolumeUnlockRequest(
+            "outer correct horse battery staple",
+            "hidden correct horse battery staple",
+        )
+
+        def __init__(self, selected: Path, parent: object = None) -> None:
+            del parent
+            assert selected == source
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class Manager:
+        automatically_selects_backend = True
+        uses_windows_system_disk = False
+
+        def __init__(self) -> None:
+            self.mounted_drive: str | None = None
+            self.opaque_call: dict[str, object] | None = None
+
+        def mount(self, *_args: object, **_options: object) -> str:
+            raise InvalidBlockVolumeError("Opaque header")
+
+        def mount_opaque(
+            self,
+            path: Path,
+            password: str,
+            **options: object,
+        ) -> str:
+            progress = options.pop("progress")
+            assert callable(progress)
+            self.opaque_call = {
+                "path": path,
+                "password": password,
+                **options,
+            }
+            self.uses_windows_system_disk = True
+            self.mounted_drive = "O:"
+            progress(100, "Виртуальный диск подключён")
+            return self.mounted_drive
+
+        def unmount(self) -> None:
+            self.mounted_drive = None
+
+    monkeypatch.setattr(main_window_module, "OpaqueVolumeUnlockDialog", UnlockDialog)
+    monkeypatch.setattr(main_window_module.QDesktopServices, "openUrl", lambda _url: True)
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    profile_password = "correct horse battery staple"
+    service.create_profile("Test", profile_password)
+    manager = Manager()
+    window = MainWindow(
+        repository,
+        service,
+        FileCryptoService(),
+        mount_manager=manager,  # type: ignore[arg-type]
+    )
+    window.session = service.unlock_with_password(profile_password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+
+    window._mount_container(source)
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert manager.opaque_call is not None
+    assert manager.opaque_call["password"].startswith("outer")
+    assert manager.opaque_call["hidden_protection_password"].startswith("hidden")
+    assert manager.opaque_call["context_menu_labels"][3] == ""
+    assert manager.mounted_drive == "O:"
+    manager.mounted_drive = None
     window.close()
     application.processEvents()
 

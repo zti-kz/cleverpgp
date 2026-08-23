@@ -167,3 +167,17 @@ def test_hidden_capacity_reserves_nonce_and_authentication_overhead() -> None:
     assert required * LOGICAL_BLOCK_SIZE >= (
         MIN_LOGICAL_CAPACITY // LOGICAL_BLOCK_SIZE
     ) * (LOGICAL_BLOCK_SIZE + 40)
+
+
+def test_maximum_hidden_capacity_fits_region_without_overflow() -> None:
+    requested = 32 * 1024 * 1024
+    region_blocks = HiddenBlockVolume.required_region_blocks(requested)
+
+    maximum = HiddenBlockVolume.maximum_logical_capacity(region_blocks)
+
+    assert maximum >= requested
+    assert HiddenBlockVolume.required_region_blocks(maximum) <= region_blocks
+    assert (
+        HiddenBlockVolume.required_region_blocks(maximum + LOGICAL_BLOCK_SIZE)
+        > region_blocks
+    )

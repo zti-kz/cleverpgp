@@ -23,6 +23,7 @@ from biopgp.core.block_container import (
     BlockVaultContainer as EncryptedContainer,
 )
 from biopgp.core.errors import ValidationError
+from biopgp.core.winspd import MIN_HIDDEN_WINDOWS_COVER_CAPACITY
 from biopgp.localization import localize_widget_tree, tr
 from biopgp.ui.icons import line_icon
 
@@ -35,6 +36,8 @@ MINIMUM_CAPACITY = MEBIBYTE
 DEFAULT_CAPACITY = 20 * MEBIBYTE
 DISK_BACKEND_WINDOWS = "windows"
 DISK_BACKEND_WINFSP = "winfsp"
+VOLUME_KIND_NORMAL = "normal"
+VOLUME_KIND_HIDDEN = "hidden"
 
 
 class ContainerCreationDialog(QDialog):
@@ -47,14 +50,17 @@ class ContainerCreationDialog(QDialog):
         allow_backend_choice: bool = False,
         system_backend_available: bool = True,
         winfsp_backend_available: bool = True,
+        hidden_volume_available: bool = False,
     ) -> None:
         super().__init__(parent)
         if minimum_capacity < MINIMUM_CAPACITY:
             raise ValueError("Minimum capacity must be at least 1 MiB.")
+        self._base_minimum_capacity = minimum_capacity
         self._minimum_capacity = minimum_capacity
         self._allow_backend_choice = allow_backend_choice
         self._system_backend_available = system_backend_available
         self._winfsp_backend_available = winfsp_backend_available
+        self._hidden_volume_available = hidden_volume_available
         self._system_disk = (
             system_disk
             if not allow_backend_choice
@@ -69,7 +75,9 @@ class ContainerCreationDialog(QDialog):
         self.setMinimumWidth(640)
         self.resize(
             680,
-            880
+            940
+            if self._hidden_volume_available
+            else 880
             if self._allow_backend_choice
             else (820 if self._system_disk else 720),
         )
@@ -107,6 +115,14 @@ class ContainerCreationDialog(QDialog):
             DISK_BACKEND_WINDOWS
             if self._system_disk
             else DISK_BACKEND_WINFSP
+        )
+
+    @property
+    def hidden_volume(self) -> bool:
+        return bool(
+            self._hidden_volume_available
+            and self._system_disk
+            and self.volume_kind_input.currentData() == VOLUME_KIND_HIDDEN
         )
 
     def _build_ui(self) -> None:
@@ -162,6 +178,32 @@ class ContainerCreationDialog(QDialog):
             backend_layout.addWidget(self.backend_input)
             backend_layout.addWidget(self.backend_description)
             outer.addWidget(backend_card)
+
+        if self._hidden_volume_available:
+            self.volume_kind_card = QFrame()
+            self.volume_kind_card.setObjectName("backendCard")
+            kind_layout = QVBoxLayout(self.volume_kind_card)
+            kind_layout.setContentsMargins(16, 14, 16, 14)
+            kind_layout.setSpacing(8)
+            kind_title = QLabel("Структура зашифрованного диска")
+            kind_title.setObjectName("fieldTitle")
+            self.volume_kind_input = QComboBox()
+            self.volume_kind_input.setObjectName("volumeKindInput")
+            self.volume_kind_input.addItem(
+                "Обычный зашифрованный диск",
+                VOLUME_KIND_NORMAL,
+            )
+            self.volume_kind_input.addItem(
+                "Скрытый диск внутри внешнего",
+                VOLUME_KIND_HIDDEN,
+            )
+            self.volume_kind_description = QLabel()
+            self.volume_kind_description.setObjectName("muted")
+            self.volume_kind_description.setWordWrap(True)
+            kind_layout.addWidget(kind_title)
+            kind_layout.addWidget(self.volume_kind_input)
+            kind_layout.addWidget(self.volume_kind_description)
+            outer.addWidget(self.volume_kind_card)
 
         path_title = QLabel("Где сохранить контейнер")
         path_title.setObjectName("fieldTitle")
@@ -314,11 +356,19 @@ class ContainerCreationDialog(QDialog):
             self.backend_input.currentIndexChanged.connect(
                 self._update_backend_description
             )
+        if self._hidden_volume_available:
+            self.volume_kind_input.currentIndexChanged.connect(
+                self._update_volume_kind
+            )
         localize_widget_tree(self)
         if self._system_disk or self._allow_backend_choice:
             self._update_file_system_description()
         if self._allow_backend_choice:
             self._update_backend_description()
+        elif self._hidden_volume_available:
+            self._update_volume_kind_availability()
+        if self._hidden_volume_available:
+            self._update_volume_kind()
         self._update_storage_summary()
 
     def _update_backend_description(self, *_: object) -> None:
@@ -337,6 +387,32 @@ class ContainerCreationDialog(QDialog):
                 "формат контейнера и используется как совместимый резервный вариант."
             )
         self.backend_description.setText(tr(description))
+        if self._hidden_volume_available:
+            self._update_volume_kind_availability()
+
+    def _update_volume_kind_availability(self) -> None:
+        self.volume_kind_card.setVisible(self._system_disk)
+        if not self._system_disk:
+            self.volume_kind_input.setCurrentIndex(0)
+
+    def _update_volume_kind(self, *_: object) -> None:
+        if self.hidden_volume:
+            self._minimum_capacity = max(
+                self._base_minimum_capacity,
+                MIN_HIDDEN_WINDOWS_COVER_CAPACITY,
+            )
+            description = (
+                "Один файл .cpgv содержит внешний и скрытый диски. Какой диск "
+                "откроется, определяется введённым паролем."
+            )
+        else:
+            self._minimum_capacity = self._base_minimum_capacity
+            description = (
+                "Один пароль профиля открывает обычный зашифрованный диск."
+            )
+        self.volume_kind_description.setText(tr(description))
+        if self._current_path is not None:
+            self._update_storage_summary()
 
     def _update_file_system_description(self, *_: object) -> None:
         if self.file_system == "EXFAT":
@@ -367,6 +443,11 @@ class ContainerCreationDialog(QDialog):
             if not self.volume_label:
                 raise ValueError("Введите название диска.")
             capacity = self.data_capacity
+            if self.hidden_volume and capacity < MIN_HIDDEN_WINDOWS_COVER_CAPACITY:
+                raise ValueError(
+                    "Увеличьте внешний диск, чтобы разместить внешнюю и "
+                    "скрытую файловые системы."
+                )
             _, maximum_capacity = EncryptedContainer.storage_space(path)
             if capacity > maximum_capacity:
                 raise ValueError(

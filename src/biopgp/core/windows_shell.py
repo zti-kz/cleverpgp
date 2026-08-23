@@ -43,7 +43,7 @@ def drive_context_menu_values(
     open_label: str,
     info_label: str,
     settings_label: str,
-    resize_label: str,
+    resize_label: str | None,
     unmount_label: str,
 ) -> tuple[RegistryValue, ...]:
     normalized_drive = _normalize_drive(drive)
@@ -71,7 +71,7 @@ def drive_context_menu_values(
     settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
     resize_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize"
     unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
-    return (
+    values = [
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "MUIVerb", "Clever PGP"),
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "Icon", icon),
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "AppliesTo", applies_to),
@@ -85,14 +85,24 @@ def drive_context_menu_values(
         RegistryValue(settings_key, "MUIVerb", settings_label),
         RegistryValue(settings_key, "Icon", icon),
         RegistryValue(settings_key + r"\command", "", settings_command),
-        RegistryValue(resize_key, "MUIVerb", resize_label),
-        RegistryValue(resize_key, "Icon", icon),
-        RegistryValue(resize_key + r"\command", "", resize_command),
+    ]
+    if resize_label:
+        values.extend(
+            [
+                RegistryValue(resize_key, "MUIVerb", resize_label),
+                RegistryValue(resize_key, "Icon", icon),
+                RegistryValue(resize_key + r"\command", "", resize_command),
+            ]
+        )
+    values.extend(
+        [
         RegistryValue(unmount_key, "MUIVerb", unmount_label),
         RegistryValue(unmount_key, "Icon", icon),
         RegistryValue(unmount_key, "CommandFlags", 0x20, "dword"),
         RegistryValue(unmount_key + r"\command", "", unmount_command),
+        ]
     )
+    return tuple(values)
 
 
 class WindowsDriveContextMenu:
@@ -118,7 +128,7 @@ class WindowsDriveContextMenu:
         open_label: str,
         info_label: str,
         settings_label: str,
-        resize_label: str,
+        resize_label: str | None,
         unmount_label: str,
     ) -> None:
         if sys.platform != "win32" and self._registry is None:

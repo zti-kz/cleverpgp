@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import hmac
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal, Slot
@@ -28,7 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from biopgp.core.errors import BioPGPError
+from biopgp.core.block_volume import BlockVolumeError
+from biopgp.core.errors import BioPGPError, InvalidContainerError
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
 from biopgp.core.file_crypto import FileCryptoService
 from biopgp.core.mount import VaultMountManager, mount_backend_available
@@ -53,6 +55,11 @@ from biopgp.biometrics.service import BiometricService
 from biopgp.ui.about_dialog import AboutDialog
 from biopgp.ui.container_dialog import ContainerCreationDialog
 from biopgp.ui.face_dialog import FaceEnrollmentDialog, FaceVerificationDialog
+from biopgp.ui.hidden_volume_dialog import (
+    HiddenVolumeCreationDialog,
+    HiddenVolumeCreationRequest,
+    OpaqueVolumeUnlockDialog,
+)
 from biopgp.ui.icons import line_icon
 from biopgp.ui.resize_dialog import ContainerResizeDialog
 from biopgp.ui.settings_dialog import AccessSettingsDialog
@@ -81,6 +88,11 @@ class BackgroundWorker(QObject):
 
     def _report_progress(self, value: int, message: str) -> None:
         self.progress.emit(max(0, min(100, int(value))), message)
+
+
+@dataclass(frozen=True, slots=True)
+class _OpaquePasswordRequired:
+    source: Path
 
 
 class MainWindow(QMainWindow):
@@ -709,6 +721,7 @@ class MainWindow(QMainWindow):
                 self,
                 minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
                 system_disk=True,
+                hidden_volume_available=True,
             )
         elif self._automatically_selects_disk_backend:
             dialog = ContainerCreationDialog(
@@ -717,6 +730,7 @@ class MainWindow(QMainWindow):
                 allow_backend_choice=True,
                 system_backend_available=winspd_driver_available(),
                 winfsp_backend_available=mount_backend_available(),
+                hidden_volume_available=winspd_driver_available(),
             )
         else:
             dialog = ContainerCreationDialog(self)
@@ -729,6 +743,64 @@ class MainWindow(QMainWindow):
         create_as_system_disk = self._uses_windows_system_disk or (
             self._automatically_selects_disk_backend and dialog.system_disk
         )
+        hidden_request: HiddenVolumeCreationRequest | None = None
+        if getattr(dialog, "hidden_volume", False):
+            try:
+                hidden_dialog = HiddenVolumeCreationDialog(
+                    data_capacity,
+                    volume_label,
+                    self,
+                )
+            except ValueError as error:
+                self._show_error(str(error))
+                return
+            if (
+                hidden_dialog.exec() != QDialog.DialogCode.Accepted
+                or hidden_dialog.request is None
+            ):
+                return
+            hidden_request = hidden_dialog.request
+
+        def create_hidden_container(
+            progress: Callable[[int, str], None],
+        ) -> tuple[Path, str | None, str | None]:
+            assert hidden_request is not None
+            creator = getattr(
+                self.mount_manager,
+                "create_hidden_and_mount",
+                None,
+            )
+            if not callable(creator):
+                raise BioPGPError(
+                    "Скрытый виртуальный диск доступен только в Windows с WinSpd."
+                )
+            passwords: list[str | None] = [
+                hidden_request.outer_password,
+                hidden_request.hidden_password,
+            ]
+            try:
+                drive = creator(
+                    target,
+                    passwords[0],
+                    passwords[1],
+                    outer_capacity=data_capacity,
+                    hidden_capacity=hidden_request.hidden_capacity,
+                    outer_label=volume_label,
+                    hidden_label=hidden_request.hidden_label,
+                    file_system=file_system,
+                    context_menu_labels=(
+                        tr("Открыть зашифрованный диск"),
+                        tr("Сведения о диске"),
+                        tr("Настройки доступа"),
+                        "",
+                        tr("Отключить зашифрованный диск"),
+                    ),
+                    progress=progress,
+                )
+            finally:
+                passwords[0] = None
+                passwords[1] = None
+            return target, drive, None
 
         def create_container(
             master_key: bytes, progress: Callable[[int, str], None]
@@ -801,7 +873,10 @@ class MainWindow(QMainWindow):
                     )
                 )
 
-        self._start_key_progress_task(create_container, created)
+        if hidden_request is not None:
+            self._start_progress_task(create_hidden_container, created)
+        else:
+            self._start_key_progress_task(create_container, created)
 
     @property
     def _uses_windows_system_disk(self) -> bool:
@@ -869,34 +944,87 @@ class MainWindow(QMainWindow):
         def mount_container(
             master_key: bytes,
             progress: Callable[[int, str], None],
-        ) -> str:
-            if self._uses_windows_system_disk or getattr(
-                self.mount_manager,
-                "automatically_selects_backend",
-                False,
-            ):
+        ) -> str | _OpaquePasswordRequired:
+            try:
+                if self._uses_windows_system_disk or getattr(
+                    self.mount_manager,
+                    "automatically_selects_backend",
+                    False,
+                ):
+                    return self.mount_manager.mount(
+                        source,
+                        master_key,
+                        context_menu_labels=(
+                            tr("Открыть зашифрованный диск"),
+                            tr("Сведения о диске"),
+                            tr("Настройки доступа"),
+                            tr("Увеличить диск"),
+                            tr("Отключить зашифрованный диск"),
+                        ),
+                        progress=progress,
+                    )
                 return self.mount_manager.mount(
                     source,
                     master_key,
+                    progress=progress,
+                )
+            except (BlockVolumeError, InvalidContainerError):
+                if callable(getattr(self.mount_manager, "mount_opaque", None)):
+                    return _OpaquePasswordRequired(source)
+                raise
+
+        def mounted(result: object) -> None:
+            if isinstance(result, _OpaquePasswordRequired):
+                self._prompt_opaque_volume_password(result.source)
+                return
+            self._container_mounted(result)
+
+        self._start_key_progress_task(
+            mount_container,
+            mounted,
+        )
+
+    def _prompt_opaque_volume_password(self, source: Path) -> None:
+        dialog = OpaqueVolumeUnlockDialog(source, self)
+        if (
+            dialog.exec() != QDialog.DialogCode.Accepted
+            or dialog.request is None
+        ):
+            if self._direct_mount_pending:
+                self._direct_mount_pending = False
+                self._show_dashboard()
+            return
+        request = dialog.request
+        passwords: list[str | None] = [
+            request.password,
+            request.hidden_protection_password,
+        ]
+
+        def mount_opaque(progress: Callable[[int, str], None]) -> str:
+            opener = getattr(self.mount_manager, "mount_opaque", None)
+            if not callable(opener):
+                raise BioPGPError(
+                    "Этот зашифрованный диск нельзя открыть выбранным способом."
+                )
+            try:
+                return opener(
+                    source,
+                    passwords[0],
+                    hidden_protection_password=passwords[1],
                     context_menu_labels=(
                         tr("Открыть зашифрованный диск"),
                         tr("Сведения о диске"),
                         tr("Настройки доступа"),
-                        tr("Увеличить диск"),
+                        "",
                         tr("Отключить зашифрованный диск"),
                     ),
                     progress=progress,
                 )
-            return self.mount_manager.mount(
-                source,
-                master_key,
-                progress=progress,
-            )
+            finally:
+                passwords[0] = None
+                passwords[1] = None
 
-        self._start_key_progress_task(
-            mount_container,
-            self._container_mounted,
-        )
+        self._start_progress_task(mount_opaque, self._container_mounted)
 
     def _container_mounted(self, result: object) -> None:
         drive = str(result)

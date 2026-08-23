@@ -153,6 +153,68 @@ class AutomaticMountManager:
         self._mounted_container = source
         return str(mounted)
 
+    def create_hidden_and_mount(
+        self,
+        container_path: Path,
+        outer_password: str,
+        hidden_password: str,
+        **options: object,
+    ) -> str:
+        """Create a new file-hosted outer/hidden disk through WinSpd."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый диск Clever PGP."
+            )
+        source = resolve_file_hosted_container_path(container_path)
+        manager = self._system_manager
+        creator = (
+            getattr(manager, "create_hidden_and_mount", None)
+            if manager is not None
+            else None
+        )
+        if not callable(creator):
+            raise MountUnavailableError(
+                "Скрытый виртуальный диск можно создать только в Windows с WinSpd."
+            )
+        mounted = creator(
+            source,
+            outer_password,
+            hidden_password,
+            **options,
+        )
+        self._active_manager = manager
+        self._mounted_container = source
+        return str(mounted)
+
+    def mount_opaque(
+        self,
+        container_path: Path,
+        password: str,
+        **options: object,
+    ) -> str:
+        """Unlock an opaque outer/hidden disk with its own password."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый диск Clever PGP."
+            )
+        source = resolve_file_hosted_container_path(container_path)
+        manager = self._system_manager
+        opener = (
+            getattr(manager, "mount_opaque", None)
+            if manager is not None
+            else None
+        )
+        if not callable(opener):
+            raise MountUnavailableError(
+                "Этот зашифрованный диск можно открыть только в Windows с WinSpd."
+            )
+        mounted = opener(source, password, **options)
+        self._active_manager = manager
+        self._mounted_container = source
+        return str(mounted)
+
     def unmount(self) -> None:
         manager = self._selected_active_manager()
         if manager is None:

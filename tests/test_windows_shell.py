@@ -178,6 +178,23 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
     assert notifications == [True, True]
 
 
+def test_hidden_disk_menu_omits_unsupported_resize_action(tmp_path: Path) -> None:
+    executable = tmp_path / "CleverPGP.exe"
+    values = drive_context_menu_values(
+        "H:",
+        command_prefix=(str(executable),),
+        icon_path=executable,
+        open_label="Open",
+        info_label="Info",
+        settings_label="Settings",
+        resize_label=None,
+        unmount_label="Unmount",
+    )
+
+    assert not any("\\Resize" in value.subkey for value in values)
+    assert any("\\Unmount" in value.subkey for value in values)
+
+
 def test_installer_and_development_menu_include_compact_disk_information() -> None:
     project = Path(__file__).resolve().parents[1]
     installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
