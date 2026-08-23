@@ -32,6 +32,7 @@ from biopgp.core.errors import BioPGPError
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
 from biopgp.core.file_crypto import FileCryptoService
 from biopgp.core.mount import VaultMountManager, mount_backend_available
+from biopgp.core.mount_router import AutomaticMountManager
 from biopgp.core.models import UnlockMode
 from biopgp.core.profile_service import ProfileService, UnlockedSession
 from biopgp.core.storage import ProfileRepository
@@ -88,7 +89,12 @@ class MainWindow(QMainWindow):
         repository: ProfileRepository,
         profile_service: ProfileService,
         file_crypto: FileCryptoService,
-        mount_manager: VaultMountManager | WindowsSystemDiskManager | None = None,
+        mount_manager: (
+            VaultMountManager
+            | WindowsSystemDiskManager
+            | AutomaticMountManager
+            | None
+        ) = None,
         startup_container: Path | None = None,
         startup_action: str | None = None,
         startup_drive: str | None = None,
@@ -786,6 +792,13 @@ class MainWindow(QMainWindow):
 
     @property
     def _uses_windows_system_disk(self) -> bool:
+        selected = getattr(
+            self.mount_manager,
+            "uses_windows_system_disk",
+            None,
+        )
+        if isinstance(selected, bool):
+            return selected
         return isinstance(self.mount_manager, WindowsSystemDiskManager)
 
     def _disk_backend_available(self) -> bool:
@@ -832,7 +845,11 @@ class MainWindow(QMainWindow):
             master_key: bytes,
             progress: Callable[[int, str], None],
         ) -> str:
-            if self._uses_windows_system_disk:
+            if self._uses_windows_system_disk or getattr(
+                self.mount_manager,
+                "automatically_selects_backend",
+                False,
+            ):
                 return self.mount_manager.mount(
                     source,
                     master_key,

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from biopgp.config import APP_NAME, ORGANIZATION_NAME, database_path
 from biopgp.core.file_crypto import FileCryptoService
 from biopgp.core.mount import VaultMountManager
+from biopgp.core.mount_router import AutomaticMountManager
 from biopgp.core.profile_service import ProfileService
 from biopgp.core.storage import ProfileRepository
 from biopgp.localization import set_language
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 def default_mount_manager(
     *,
     force_system_disk: bool = False,
-) -> VaultMountManager | WindowsSystemDiskManager:
+) -> VaultMountManager | WindowsSystemDiskManager | AutomaticMountManager:
     if (
         force_system_disk
         or os.environ.get("CLEVERPGP_DISK_BACKEND", "").casefold() == "winspd"
@@ -31,7 +32,7 @@ def default_mount_manager(
         from biopgp.core.windows_storage import WindowsSystemDiskManager
 
         return WindowsSystemDiskManager()
-    return VaultMountManager()
+    return AutomaticMountManager()
 
 
 def main(

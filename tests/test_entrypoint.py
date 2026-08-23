@@ -203,10 +203,10 @@ def test_winspd_backend_is_enabled_only_by_explicit_environment_setting() -> Non
     assert manager is manager_type.return_value
 
 
-def test_default_backend_remains_winfsp() -> None:
+def test_default_backend_automatically_selects_container_format() -> None:
     with (
         patch.dict(os.environ, {"CLEVERPGP_DISK_BACKEND": ""}),
-        patch("biopgp.app.VaultMountManager") as manager_type,
+        patch("biopgp.app.AutomaticMountManager") as manager_type,
     ):
         manager = default_mount_manager()
 

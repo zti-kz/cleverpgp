@@ -489,6 +489,100 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     application.processEvents()
 
 
+def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class AutomaticDiskManager:
+        automatically_selects_backend = True
+
+        def __init__(self) -> None:
+            self.mounted_drive: str | None = None
+            self.uses_windows_system_disk = False
+            self.mount_call: dict[str, object] | None = None
+
+        def mount(
+            self,
+            source: Path,
+            key: bytes,
+            **options: object,
+        ) -> str:
+            progress = options.pop("progress")
+            assert callable(progress)
+            self.mount_call = {
+                "source": source,
+                "key": key,
+                **options,
+            }
+            progress(3, "Проверка типа зашифрованного диска")
+            self.uses_windows_system_disk = True
+            self.mounted_drive = "R:"
+            progress(100, "Системный диск готов")
+            return self.mounted_drive
+
+        def unmount(self) -> None:
+            self.mounted_drive = None
+            self.uses_windows_system_disk = False
+
+    opened_urls: list[str] = []
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened_urls.append(url.toLocalFile()) or True,
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    manager = AutomaticDiskManager()
+    container_path = tmp_path / "automatic-system.cpgv"
+    container_path.touch()
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=manager,  # type: ignore[arg-type]
+        startup_container=container_path,
+    )
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+    window._direct_mount_pending = True
+
+    window._mount_container(container_path)
+    deadline = time.monotonic() + 5
+    while (window._busy or window.isVisible()) and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert manager.mount_call is not None
+    assert manager.mount_call["source"] == container_path
+    assert manager.mount_call["context_menu_labels"] == (
+        "Открыть зашифрованный диск",
+        "Сведения о диске",
+        "Настройки доступа",
+        "Отключить зашифрованный диск",
+    )
+    assert manager.uses_windows_system_disk
+    assert manager.mounted_drive == "R:"
+    assert opened_urls[-1].rstrip("\\/") == "R:"
+    assert not window.isVisible()
+    assert window._tray_exit_action.isEnabled()
+
+    manager.mounted_drive = None
+    manager.uses_windows_system_disk = False
+    window.close()
+    application.processEvents()
+
+
 def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     class MountedDisk:
         mounted_drive = "Z:"

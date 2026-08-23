@@ -73,6 +73,22 @@ def test_language_catalog_translates_primary_action() -> None:
     assert tr("Зашифровать файл") == "Файлды шифрлау"
 
 
+def test_backend_detection_messages_are_localized() -> None:
+    set_language("en")
+    assert (
+        tr("Проверка типа зашифрованного диска")
+        == "Checking encrypted disk type"
+    )
+    set_language("kk")
+    assert (
+        tr(
+            "Назначение зашифрованного диска не поддерживается "
+            "этой версией Clever PGP."
+        )
+        == "Шифрланған дискінің бұл түрін Clever PGP-дің осы нұсқасы қолдамайды."
+    )
+
+
 def test_header_language_selector_applies_and_saves_language(tmp_path) -> None:
     application = QApplication.instance() or QApplication([])
     repository = ProfileRepository(tmp_path / "profile.sqlite3")
