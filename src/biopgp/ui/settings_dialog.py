@@ -35,6 +35,7 @@ class AccessSettingsDialog(QDialog):
         current_mode: UnlockMode,
         *,
         biometric_enrolled: bool,
+        drive: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -42,16 +43,21 @@ class AccessSettingsDialog(QDialog):
         self.request: AccessSettingsRequest | None = None
         self.setWindowTitle("Настройки доступа — Clever PGP")
         self.setModal(True)
-        self.setMinimumWidth(620)
-        self.resize(680, 690)
+        self.setMinimumWidth(680)
+        self.resize(760, 760)
         self.setStyleSheet(SETTINGS_STYLESHEET)
-        self._build_ui(current_mode)
+        self._build_ui(current_mode, drive=drive)
         localize_widget_tree(self)
 
-    def _build_ui(self, current_mode: UnlockMode) -> None:
+    def _build_ui(
+        self,
+        current_mode: UnlockMode,
+        *,
+        drive: str | None,
+    ) -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(30, 26, 30, 28)
-        outer.setSpacing(18)
+        outer.setSpacing(14)
 
         header = QHBoxLayout()
         identity = QVBoxLayout()
@@ -67,6 +73,20 @@ class AccessSettingsDialog(QDialog):
         icon.setPixmap(line_icon("settings", "#7dd3fc").pixmap(42, 42))
         header.addWidget(icon)
         outer.addLayout(header)
+
+        if drive is not None:
+            selected_disk = QLabel(tr("Подключённый диск: {drive}", drive=drive))
+            selected_disk.setObjectName("path")
+            outer.addWidget(selected_disk)
+
+        scope_note = QLabel(
+            "Эти настройки относятся к локальному профилю Clever PGP. "
+            "Пароли внешнего и скрытого дисков изменяются "
+            "отдельной командой в контекстном меню."
+        )
+        scope_note.setObjectName("muted")
+        scope_note.setWordWrap(True)
+        outer.addWidget(scope_note)
 
         mode_card = self._card()
         mode_layout = QVBoxLayout(mode_card)
@@ -235,6 +255,13 @@ QLabel#title { color: #f9fafb; font-size: 24px; font-weight: 650; }
 QLabel#sectionTitle { color: #f9fafb; font-size: 16px; font-weight: 650; }
 QLabel#muted { color: #9ca3af; }
 QLabel#success { color: #86efac; }
+QLabel#path {
+    background: #0d2135;
+    border: 1px solid #1e4f70;
+    border-radius: 9px;
+    color: #cbd5e1;
+    padding: 10px;
+}
 QLabel#error {
     color: #fecaca;
     background: #3f1d2b;

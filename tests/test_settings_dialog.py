@@ -4,7 +4,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 
 from biopgp.core.models import UnlockMode  # noqa: E402
 from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
@@ -35,6 +35,25 @@ def test_settings_dialog_uses_title_bar_for_closing() -> None:
         "Обновить данные лица",
         "Изменить мастер-пароль",
     }
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_settings_dialog_identifies_selected_disk_and_profile_scope() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = AccessSettingsDialog(
+        UnlockMode.PASSWORD_OR_FACE,
+        biometric_enrolled=True,
+        drive="Z:",
+    )
+    visible_text = " ".join(
+        label.text() for label in dialog.findChildren(QLabel)
+    )
+
+    assert "Подключённый диск: Z:" in visible_text
+    assert "относятся к локальному профилю" in visible_text
+    assert "изменяются отдельной командой" in visible_text
 
     dialog.close()
     application.processEvents()

@@ -81,7 +81,10 @@ def main(argv: list[str] | None = None) -> int:
     from biopgp.app import main as application_main
 
     if arguments[:1] == ["--settings"] and len(arguments) in (1, 2):
-        return application_main(startup_action="settings")
+        return application_main(
+            startup_action="settings",
+            startup_drive=arguments[1] if len(arguments) == 2 else None,
+        )
     if arguments[:1] == ["--resize-drive"] and len(arguments) == 2:
         return application_main(
             startup_action="resize",

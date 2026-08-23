@@ -69,6 +69,8 @@
     "Заблокировать": "Lock",
     "Настройки доступа": "Access settings",
     "Настройки доступа — Clever PGP": "Access settings — Clever PGP",
+    "Эти настройки относятся к локальному профилю Clever PGP. Пароли внешнего и скрытого дисков изменяются отдельной командой в контекстном меню.": "These settings belong to the local Clever PGP profile. Outer and hidden disk passwords are changed with a separate context-menu command.",
+    "Подключённый диск продолжает работать.": "The mounted disk remains available.",
     "Способ разблокировки": "Unlock method",
     "Выберите, какие факторы требуются при следующей разблокировке. Мастер-пароль сохраняется как локальный аварийный способ доступа.": "Choose which factors are required the next time the profile is unlocked. The master password remains available as a local emergency access method.",
     "Применить режим": "Apply mode",

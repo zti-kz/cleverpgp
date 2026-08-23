@@ -33,7 +33,11 @@ from biopgp.core.block_volume import BlockVolumeError
 from biopgp.core.errors import BioPGPError, InvalidContainerError
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
 from biopgp.core.file_crypto import FileCryptoService
-from biopgp.core.mount import VaultMountManager, mount_backend_available
+from biopgp.core.mount import (
+    VaultMountManager,
+    mount_backend_available,
+    normalized_drive_name,
+)
 from biopgp.core.mount_router import AutomaticMountManager
 from biopgp.core.models import UnlockMode
 from biopgp.core.profile_service import ProfileService, UnlockedSession
@@ -123,6 +127,9 @@ class MainWindow(QMainWindow):
         self._direct_mount_pending = False
         self._startup_action = startup_action
         self._startup_drive = startup_drive
+        self._compact_settings_launch = startup_action == "settings"
+        self._compact_result_message: str | None = None
+        self._compact_result_error = False
         self.startup_container = (
             startup_container.expanduser().resolve()
             if startup_container is not None
@@ -135,6 +142,7 @@ class MainWindow(QMainWindow):
         self._task_result: object = None
         self._task_error: str | None = None
         self._task_success_handler: Callable[[object], None] | None = None
+        self._task_failure_handler: Callable[[str], None] | None = None
         self._task_determinate = False
 
         title_suffix = (
@@ -390,14 +398,18 @@ class MainWindow(QMainWindow):
         self.session = session
         if self.startup_container is not None:
             self._mount_startup_container()
-        else:
-            self._show_dashboard()
-            if self._startup_action == "settings":
-                self._startup_action = None
-                QTimer.singleShot(0, self._show_access_settings)
-            elif self._startup_action == "resize":
-                self._startup_action = None
-                QTimer.singleShot(0, self._show_resize_dialog)
+            return
+        if self._startup_action == "settings":
+            self._startup_action = None
+            if not self._validate_compact_settings_drive():
+                return
+            QTimer.singleShot(0, self._show_access_settings)
+            return
+
+        self._show_dashboard()
+        if self._startup_action == "resize":
+            self._startup_action = None
+            QTimer.singleShot(0, self._show_resize_dialog)
 
     def _show_dashboard(self) -> None:
         profile = self.repository.get_profile()
@@ -541,13 +553,34 @@ class MainWindow(QMainWindow):
         dialog = AccessSettingsDialog(
             profile.unlock_mode,
             biometric_enrolled=self.repository.has_biometric_profile(),
+            drive=(
+                normalized_drive_name(self._startup_drive)
+                if self._compact_settings_launch
+                and self._startup_drive is not None
+                else None
+            ),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.request is None:
+            if self._compact_settings_launch:
+                self.close()
             return
         request = dialog.request
         if request.operation == "face":
-            self._enroll_face()
+            if self._compact_settings_launch:
+                self._enroll_face(
+                    on_success=lambda: self._show_compact_settings_result(
+                        "Лицо зарегистрировано. Биометрический ключ "
+                        "защищён Windows."
+                    ),
+                    on_cancel=lambda: QTimer.singleShot(
+                        0,
+                        self._show_access_settings,
+                    ),
+                    on_failure=self._show_compact_settings_error,
+                )
+            else:
+                self._enroll_face()
             return
         if request.operation == "unlock_mode" and request.unlock_mode is not None:
             selected_mode = request.unlock_mode
@@ -559,10 +592,25 @@ class MainWindow(QMainWindow):
                 return changed
 
             def mode_changed(_result: object) -> None:
-                self._show_dashboard()
-                self._set_dashboard_status(tr("Режим разблокировки изменён."))
+                if self._compact_settings_launch:
+                    self._show_compact_settings_result(
+                        "Режим разблокировки изменён."
+                    )
+                else:
+                    self._show_dashboard()
+                    self._set_dashboard_status(
+                        tr("Режим разблокировки изменён.")
+                    )
 
-            self._start_progress_task(change_mode, mode_changed)
+            self._start_progress_task(
+                change_mode,
+                mode_changed,
+                on_failure=(
+                    self._show_compact_settings_error
+                    if self._compact_settings_launch
+                    else None
+                ),
+            )
             return
         if request.operation == "password":
             current_password = request.current_password
@@ -576,10 +624,70 @@ class MainWindow(QMainWindow):
                 )
 
             def password_changed(_result: object) -> None:
-                self._show_dashboard()
-                self._set_dashboard_status(tr("Мастер-пароль успешно изменён."))
+                if self._compact_settings_launch:
+                    self._show_compact_settings_result(
+                        "Мастер-пароль успешно изменён."
+                    )
+                else:
+                    self._show_dashboard()
+                    self._set_dashboard_status(
+                        tr("Мастер-пароль успешно изменён.")
+                    )
 
-            self._start_progress_task(change_password, password_changed)
+            self._start_progress_task(
+                change_password,
+                password_changed,
+                on_failure=(
+                    self._show_compact_settings_error
+                    if self._compact_settings_launch
+                    else None
+                ),
+            )
+
+    def _validate_compact_settings_drive(self) -> bool:
+        if self._startup_drive is None:
+            return True
+        try:
+            expected = normalized_drive_name(self._startup_drive)
+        except BioPGPError as error:
+            self._show_compact_settings_error(str(error))
+            return False
+        try:
+            active = self.mount_manager.mounted_drive
+        except (BioPGPError, OSError, TypeError, ValueError) as error:
+            self._show_compact_settings_error(str(error))
+            return False
+        if active != expected:
+            self._show_compact_settings_error(
+                "Выбранный виртуальный диск Clever PGP не подключён."
+            )
+            return False
+        return True
+
+    def _show_compact_settings_result(
+        self,
+        message: str,
+        *,
+        error: bool = False,
+    ) -> None:
+        self._compact_result_message = message
+        self._compact_result_error = error
+        page, content = self._base_page(
+            "Настройки доступа",
+            "Подключённый диск продолжает работать.",
+            compact=True,
+            page_icon="settings",
+        )
+        status = QLabel(tr(message))
+        status.setObjectName("error" if error else "success")
+        status.setWordWrap(True)
+        status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content.addWidget(status)
+        localize_widget_tree(page)
+        self.setCentralWidget(page)
+
+    def _show_compact_settings_error(self, message: str) -> None:
+        self._show_compact_settings_result(message, error=True)
 
     def _show_resize_dialog(self) -> None:
         if not self._uses_windows_system_disk:
@@ -907,15 +1015,26 @@ class MainWindow(QMainWindow):
             return winspd_driver_available() or mount_backend_available()
         return mount_backend_available()
 
-    def _enroll_face(self) -> None:
+    def _enroll_face(
+        self,
+        *,
+        on_success: Callable[[], None] | None = None,
+        on_cancel: Callable[[], None] | None = None,
+        on_failure: Callable[[str], None] | None = None,
+    ) -> None:
         try:
             dialog = FaceEnrollmentDialog(self)
             if dialog.exec() != QDialog.DialogCode.Accepted or dialog.template is None:
+                if on_cancel is not None:
+                    on_cancel()
                 return
             template = dialog.template.copy()
             service = self._new_biometric_service()
         except BioPGPError as error:
-            self._show_error(str(error))
+            if on_failure is not None:
+                on_failure(str(error))
+            else:
+                self._show_error(str(error))
             return
 
         def enroll(master_key: bytes) -> None:
@@ -924,11 +1043,21 @@ class MainWindow(QMainWindow):
             finally:
                 template.fill(0)
 
+        def enrolled(_result: object) -> None:
+            if on_success is not None:
+                on_success()
+            else:
+                self._set_dashboard_status(
+                    tr(
+                        "Лицо зарегистрировано. Биометрический ключ "
+                        "защищён Windows."
+                    )
+                )
+
         self._start_key_task(
             enroll,
-            lambda result: self._set_dashboard_status(
-                tr("Лицо зарегистрировано. Биометрический ключ защищён Windows.")
-            ),
+            enrolled,
+            on_failure=on_failure,
         )
 
     def _open_container(self) -> None:
@@ -1107,6 +1236,8 @@ class MainWindow(QMainWindow):
         self,
         operation: Callable[[bytes], object],
         on_success: Callable[[object], None],
+        *,
+        on_failure: Callable[[str], None] | None = None,
     ) -> None:
         if self.session is None:
             self._show_unlock()
@@ -1120,7 +1251,11 @@ class MainWindow(QMainWindow):
                 for index in range(len(key_buffer)):
                     key_buffer[index] = 0
 
-        self._start_task(protected_operation, on_success)
+        self._start_task(
+            protected_operation,
+            on_success,
+            on_failure=on_failure,
+        )
 
     def _start_key_progress_task(
         self,
@@ -1145,15 +1280,43 @@ class MainWindow(QMainWindow):
         self,
         operation: Callable[[], object],
         on_success: Callable[[object], None],
+        *,
+        on_failure: Callable[[str], None] | None = None,
     ) -> None:
-        self._start_worker(lambda _progress: operation(), on_success, determinate=False)
+        if on_failure is None:
+            self._start_worker(
+                lambda _progress: operation(),
+                on_success,
+                determinate=False,
+            )
+        else:
+            self._start_worker(
+                lambda _progress: operation(),
+                on_success,
+                determinate=False,
+                on_failure=on_failure,
+            )
 
     def _start_progress_task(
         self,
         operation: Callable[[Callable[[int, str], None]], object],
         on_success: Callable[[object], None],
+        *,
+        on_failure: Callable[[str], None] | None = None,
     ) -> None:
-        self._start_worker(operation, on_success, determinate=True)
+        if on_failure is None:
+            self._start_worker(
+                operation,
+                on_success,
+                determinate=True,
+            )
+        else:
+            self._start_worker(
+                operation,
+                on_success,
+                determinate=True,
+                on_failure=on_failure,
+            )
 
     def _start_worker(
         self,
@@ -1161,12 +1324,14 @@ class MainWindow(QMainWindow):
         on_success: Callable[[object], None],
         *,
         determinate: bool,
+        on_failure: Callable[[str], None] | None = None,
     ) -> None:
         if self._busy:
             return
         self._task_result = None
         self._task_error = None
         self._task_success_handler = on_success
+        self._task_failure_handler = on_failure
         self._task_determinate = determinate
         self._set_busy(True, determinate=determinate)
 
@@ -1208,14 +1373,19 @@ class MainWindow(QMainWindow):
         result = self._task_result
         error = self._task_error
         handler = self._task_success_handler
+        failure_handler = self._task_failure_handler
         self._task_thread = None
         self._task_worker = None
         self._task_result = None
         self._task_error = None
         self._task_success_handler = None
+        self._task_failure_handler = None
         self._task_determinate = False
         self._set_busy(False)
         if error is not None:
+            if failure_handler is not None:
+                failure_handler(error)
+                return
             if self._direct_mount_pending:
                 self._direct_mount_pending = False
                 self._show_dashboard()
@@ -1270,6 +1440,13 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self._busy:
             event.ignore()
+            return
+        if self._compact_settings_launch:
+            if self.session is not None:
+                self.session.lock()
+                self.session = None
+            self._tray_icon.hide()
+            event.accept()
             return
         if self.mount_manager.mounted_drive is not None:
             event.ignore()
@@ -1512,6 +1689,15 @@ class MainWindow(QMainWindow):
         set_language(code)
         self.repository.set_setting("language", code)
         self._retranslate_tray()
+        if self._compact_settings_launch and self.session is not None:
+            if self._compact_result_message is not None:
+                self._show_compact_settings_result(
+                    self._compact_result_message,
+                    error=self._compact_result_error,
+                )
+            else:
+                QTimer.singleShot(0, self._show_access_settings)
+            return
         if self.session is not None and self.session.is_unlocked:
             self._show_dashboard()
         elif self.repository.has_profile():
@@ -1573,6 +1759,14 @@ QLabel#success {
     border: 1px solid #0f766e;
     border-radius: 10px;
     color: #99f6e4;
+    padding: 18px;
+    font-size: 16px;
+}
+QLabel#error {
+    background: #3f151b;
+    border: 1px solid #991b1b;
+    border-radius: 10px;
+    color: #fecaca;
     padding: 18px;
     font-size: 16px;
 }

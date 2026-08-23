@@ -120,7 +120,10 @@ def test_settings_mode_opens_access_settings_window() -> None:
         result = main(["--settings", "Z:\\"])
 
     assert result == 0
-    application_main.assert_called_once_with(startup_action="settings")
+    application_main.assert_called_once_with(
+        startup_action="settings",
+        startup_drive="Z:\\",
+    )
 
 
 def test_runtime_check_mode_is_dispatched(tmp_path: Path) -> None:

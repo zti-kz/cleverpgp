@@ -11,6 +11,7 @@ from PySide6.QtGui import QCloseEvent  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
+    QLabel,
     QPushButton,
     QScrollArea,
 )
@@ -203,6 +204,175 @@ def test_access_settings_changes_password_without_replacing_session_key(
     changed_session.lock()
     assert "Мастер-пароль успешно изменён" in window.dashboard_status.text()
 
+    window.close()
+    application.processEvents()
+
+
+def test_explorer_settings_open_without_showing_dashboard(
+    tmp_path: Path,
+) -> None:
+    class MountedDisk:
+        mounted_drive = "Z:"
+
+        def unmount(self) -> None:
+            raise AssertionError("Settings must not disconnect the disk")
+
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=MountedDisk(),  # type: ignore[arg-type]
+        startup_action="settings",
+        startup_drive="z:\\",
+    )
+    settings_calls: list[bool] = []
+    window._show_access_settings = lambda: settings_calls.append(True)  # type: ignore[method-assign]
+
+    window._complete_unlock(profile_service.unlock_with_password(password))
+    application.processEvents()
+
+    assert settings_calls == [True]
+    assert not hasattr(window, "dashboard_status")
+    window.close()
+    application.processEvents()
+
+
+def test_explorer_settings_reject_wrong_drive_without_disconnect(
+    tmp_path: Path,
+) -> None:
+    class MountedDisk:
+        mounted_drive = "Y:"
+
+        def __init__(self) -> None:
+            self.unmount_calls = 0
+
+        def unmount(self) -> None:
+            self.unmount_calls += 1
+
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    mounted = MountedDisk()
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=mounted,  # type: ignore[arg-type]
+        startup_action="settings",
+        startup_drive="Z:\\",
+    )
+
+    window._complete_unlock(profile_service.unlock_with_password(password))
+    application.processEvents()
+    visible_text = " ".join(
+        label.text() for label in window.centralWidget().findChildren(QLabel)
+    )
+
+    assert "Выбранный виртуальный диск Clever PGP не подключён" in visible_text
+    assert mounted.unmount_calls == 0
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted()
+    assert mounted.unmount_calls == 0
+    window.close()
+    application.processEvents()
+
+
+def test_explorer_settings_change_password_without_opening_dashboard(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    old_password = "correct horse battery staple"
+    new_password = "new correct horse battery staple"
+
+    class PasswordDialog:
+        request = AccessSettingsRequest(
+            "password",
+            current_password=old_password,
+            new_password=new_password,
+        )
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            assert _kwargs["drive"] == "Z:"
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class MountedDisk:
+        mounted_drive = "Z:"
+
+        def __init__(self) -> None:
+            self.unmount_calls = 0
+
+        def unmount(self) -> None:
+            self.unmount_calls += 1
+
+    monkeypatch.setattr(
+        main_window_module,
+        "AccessSettingsDialog",
+        PasswordDialog,
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    profile_service.create_profile("Test", old_password)
+    mounted = MountedDisk()
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=mounted,  # type: ignore[arg-type]
+        startup_action="settings",
+        startup_drive="Z:\\",
+    )
+    session = profile_service.unlock_with_password(old_password)
+    original_key = session.master_key_copy()
+
+    window._complete_unlock(session)
+    application.processEvents()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+    visible_text = " ".join(
+        label.text() for label in window.centralWidget().findChildren(QLabel)
+    )
+
+    assert not window._busy
+    assert "Мастер-пароль успешно изменён" in visible_text
+    assert not hasattr(window, "dashboard_status")
+    assert mounted.unmount_calls == 0
+    changed_session = profile_service.unlock_with_password(new_password)
+    assert changed_session.master_key_copy() == original_key
+    changed_session.lock()
     window.close()
     application.processEvents()
 
