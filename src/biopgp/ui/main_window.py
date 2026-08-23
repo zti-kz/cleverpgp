@@ -709,6 +709,14 @@ class MainWindow(QMainWindow):
                 minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
                 system_disk=True,
             )
+        elif self._automatically_selects_disk_backend:
+            dialog = ContainerCreationDialog(
+                self,
+                minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+                allow_backend_choice=True,
+                system_backend_available=winspd_driver_available(),
+                winfsp_backend_available=mount_backend_available(),
+            )
         else:
             dialog = ContainerCreationDialog(self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -717,11 +725,14 @@ class MainWindow(QMainWindow):
         data_capacity = dialog.data_capacity
         volume_label = dialog.volume_label
         file_system = dialog.file_system
+        create_as_system_disk = self._uses_windows_system_disk or (
+            self._automatically_selects_disk_backend and dialog.system_disk
+        )
 
         def create_container(
             master_key: bytes, progress: Callable[[int, str], None]
         ) -> tuple[Path, str | None, str | None]:
-            if self._uses_windows_system_disk:
+            if create_as_system_disk:
                 try:
                     drive = self.mount_manager.create_and_mount(
                         target,
@@ -801,9 +812,21 @@ class MainWindow(QMainWindow):
             return selected
         return isinstance(self.mount_manager, WindowsSystemDiskManager)
 
+    @property
+    def _automatically_selects_disk_backend(self) -> bool:
+        return bool(
+            getattr(
+                self.mount_manager,
+                "automatically_selects_backend",
+                False,
+            )
+        )
+
     def _disk_backend_available(self) -> bool:
         if self._uses_windows_system_disk:
             return winspd_driver_available()
+        if self._automatically_selects_disk_backend:
+            return winspd_driver_available() or mount_backend_available()
         return mount_backend_available()
 
     def _enroll_face(self) -> None:

@@ -10,6 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QComboBox, QSlider  # noqa: E402
 
 from biopgp.ui.container_dialog import (  # noqa: E402
+    DISK_BACKEND_WINDOWS,
+    DISK_BACKEND_WINFSP,
     TEBIBYTE,
     MEBIBYTE,
     ContainerCreationDialog,
@@ -88,6 +90,53 @@ def test_legacy_disk_dialog_keeps_implicit_ntfs_without_format_selector() -> Non
 
     assert dialog.file_system == "NTFS"
     assert dialog.findChild(QComboBox, "fileSystemInput") is None
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_automatic_dialog_recommends_fast_windows_disk_and_keeps_winfsp() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog(
+        minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+        allow_backend_choice=True,
+        system_backend_available=True,
+        winfsp_backend_available=True,
+    )
+
+    assert dialog.backend_input.count() == 2
+    assert dialog.backend_input.currentData() == DISK_BACKEND_WINDOWS
+    assert dialog.system_disk
+    assert dialog.disk_backend == DISK_BACKEND_WINDOWS
+    assert "больших файлов" in dialog.backend_description.text()
+    assert not dialog.format_card.isHidden()
+
+    dialog.backend_input.setCurrentIndex(1)
+
+    assert dialog.backend_input.currentData() == DISK_BACKEND_WINFSP
+    assert not dialog.system_disk
+    assert dialog.disk_backend == DISK_BACKEND_WINFSP
+    assert dialog.file_system == "NTFS"
+    assert "резервный вариант" in dialog.backend_description.text()
+    assert dialog.format_card.isHidden()
+
+    dialog.close()
+    application.processEvents()
+
+
+def test_automatic_dialog_uses_winfsp_when_system_component_is_missing() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog(
+        minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
+        allow_backend_choice=True,
+        system_backend_available=False,
+        winfsp_backend_available=True,
+    )
+
+    assert dialog.backend_input.count() == 1
+    assert dialog.backend_input.currentData() == DISK_BACKEND_WINFSP
+    assert not dialog.system_disk
+    assert dialog.format_card.isHidden()
 
     dialog.close()
     application.processEvents()

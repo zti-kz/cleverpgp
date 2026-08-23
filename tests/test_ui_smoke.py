@@ -583,6 +583,120 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
     application.processEvents()
 
 
+def test_automatic_manager_creates_selected_fast_windows_disk(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class CreationDialog:
+        container_path = tmp_path / "automatic-created.cpgv"
+        data_capacity = 96 * 1024 * 1024
+        volume_label = "Fast disk"
+        file_system = "NTFS"
+        system_disk = True
+        options: dict[str, object] | None = None
+
+        def __init__(self, parent: object = None, **options: object) -> None:
+            del parent
+            type(self).options = options
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class AutomaticDiskManager:
+        automatically_selects_backend = True
+        uses_windows_system_disk = False
+
+        def __init__(self) -> None:
+            self.mounted_drive: str | None = None
+            self.create_call: dict[str, object] | None = None
+
+        def create_and_mount(
+            self,
+            container_path: Path,
+            master_key: bytes,
+            **options: object,
+        ) -> str:
+            progress = options.pop("progress")
+            assert callable(progress)
+            progress(82, "Ожидание разрешения Windows")
+            self.create_call = {
+                "container_path": container_path,
+                "master_key": master_key,
+                **options,
+            }
+            self.uses_windows_system_disk = True
+            self.mounted_drive = "Q:"
+            progress(100, "Системный диск готов")
+            return self.mounted_drive
+
+        def unmount(self) -> None:
+            self.mounted_drive = None
+            self.uses_windows_system_disk = False
+
+    def unexpected_legacy_creation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("WinFsp creation was used for the selected fast disk.")
+
+    monkeypatch.setattr(
+        main_window_module, "ContainerCreationDialog", CreationDialog
+    )
+    monkeypatch.setattr(main_window_module, "winspd_driver_available", lambda: True)
+    monkeypatch.setattr(main_window_module, "mount_backend_available", lambda: True)
+    monkeypatch.setattr(
+        main_window_module.EncryptedContainer,
+        "create",
+        unexpected_legacy_creation,
+    )
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices, "openUrl", lambda _url: True
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    manager = AutomaticDiskManager()
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=manager,  # type: ignore[arg-type]
+    )
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+
+    assert window._disk_backend_available()
+    window._create_container()
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert CreationDialog.options == {
+        "minimum_capacity": 32 * 1024 * 1024,
+        "allow_backend_choice": True,
+        "system_backend_available": True,
+        "winfsp_backend_available": True,
+    }
+    assert manager.create_call is not None
+    assert manager.create_call["container_path"] == tmp_path / "automatic-created.cpgv"
+    assert manager.create_call["logical_capacity"] == 96 * 1024 * 1024
+    assert manager.create_call["file_system"] == "NTFS"
+    assert manager.mounted_drive == "Q:"
+
+    manager.mounted_drive = None
+    manager.uses_windows_system_disk = False
+    window.close()
+    application.processEvents()
+
+
 def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     class MountedDisk:
         mounted_drive = "Z:"

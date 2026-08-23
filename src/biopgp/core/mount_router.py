@@ -123,6 +123,34 @@ class AutomaticMountManager:
         self._mounted_container = source
         return str(mounted)
 
+    def create_and_mount(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        **options: object,
+    ) -> str:
+        """Create the preferred fast Windows disk without removing WinFsp."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый диск Clever PGP."
+            )
+        manager = self._system_manager
+        if manager is None:
+            raise MountUnavailableError(
+                "Системный диск Clever PGP можно создать только в Windows."
+            )
+        source = Path(container_path).expanduser().resolve()
+        creator = getattr(manager, "create_and_mount", None)
+        if not callable(creator):
+            raise MountUnavailableError(
+                "Компонент создания системного диска недоступен."
+            )
+        mounted = creator(source, master_key, **options)
+        self._active_manager = manager
+        self._mounted_container = source
+        return str(mounted)
+
     def unmount(self) -> None:
         manager = self._selected_active_manager()
         if manager is None:

@@ -33,6 +33,8 @@ PEBIBYTE = 1024 * TEBIBYTE
 EXBIBYTE = 1024 * PEBIBYTE
 MINIMUM_CAPACITY = MEBIBYTE
 DEFAULT_CAPACITY = 20 * MEBIBYTE
+DISK_BACKEND_WINDOWS = "windows"
+DISK_BACKEND_WINFSP = "winfsp"
 
 
 class ContainerCreationDialog(QDialog):
@@ -42,12 +44,22 @@ class ContainerCreationDialog(QDialog):
         *,
         minimum_capacity: int = MINIMUM_CAPACITY,
         system_disk: bool = False,
+        allow_backend_choice: bool = False,
+        system_backend_available: bool = True,
+        winfsp_backend_available: bool = True,
     ) -> None:
         super().__init__(parent)
         if minimum_capacity < MINIMUM_CAPACITY:
             raise ValueError("Minimum capacity must be at least 1 MiB.")
         self._minimum_capacity = minimum_capacity
-        self._system_disk = system_disk
+        self._allow_backend_choice = allow_backend_choice
+        self._system_backend_available = system_backend_available
+        self._winfsp_backend_available = winfsp_backend_available
+        self._system_disk = (
+            system_disk
+            if not allow_backend_choice
+            else system_backend_available
+        )
         self._selected_path: Path | None = None
         self._selected_capacity = max(DEFAULT_CAPACITY, self._minimum_capacity)
         self._maximum_capacity = self._selected_capacity
@@ -55,7 +67,12 @@ class ContainerCreationDialog(QDialog):
         self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
         self.setMinimumWidth(640)
-        self.resize(680, 820 if self._system_disk else 720)
+        self.resize(
+            680,
+            880
+            if self._allow_backend_choice
+            else (820 if self._system_disk else 720),
+        )
         self.setStyleSheet(CONTAINER_DIALOG_STYLESHEET)
         self._build_ui()
 
@@ -80,10 +97,22 @@ class ContainerCreationDialog(QDialog):
         selected = str(self.file_system_input.currentData() or "NTFS").upper()
         return selected if selected in ("NTFS", "EXFAT") else "NTFS"
 
+    @property
+    def system_disk(self) -> bool:
+        return self._system_disk
+
+    @property
+    def disk_backend(self) -> str:
+        return (
+            DISK_BACKEND_WINDOWS
+            if self._system_disk
+            else DISK_BACKEND_WINFSP
+        )
+
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(32, 28, 32, 28)
-        outer.setSpacing(18)
+        outer.setContentsMargins(28, 20, 28, 20)
+        outer.setSpacing(12)
 
         brand_row = QHBoxLayout()
         brand = QLabel("Clever PGP")
@@ -105,6 +134,34 @@ class ContainerCreationDialog(QDialog):
         subtitle.setWordWrap(True)
         outer.addWidget(title)
         outer.addWidget(subtitle)
+
+        if self._allow_backend_choice:
+            backend_card = QFrame()
+            backend_card.setObjectName("backendCard")
+            backend_layout = QVBoxLayout(backend_card)
+            backend_layout.setContentsMargins(16, 14, 16, 14)
+            backend_layout.setSpacing(8)
+            backend_title = QLabel("Тип зашифрованного диска")
+            backend_title.setObjectName("fieldTitle")
+            self.backend_input = QComboBox()
+            self.backend_input.setObjectName("diskBackendInput")
+            if self._system_backend_available:
+                self.backend_input.addItem(
+                    "Системный диск Windows — быстрый (рекомендуется)",
+                    DISK_BACKEND_WINDOWS,
+                )
+            if self._winfsp_backend_available:
+                self.backend_input.addItem(
+                    "Универсальный диск Clever PGP",
+                    DISK_BACKEND_WINFSP,
+                )
+            self.backend_description = QLabel()
+            self.backend_description.setObjectName("muted")
+            self.backend_description.setWordWrap(True)
+            backend_layout.addWidget(backend_title)
+            backend_layout.addWidget(self.backend_input)
+            backend_layout.addWidget(self.backend_description)
+            outer.addWidget(backend_card)
 
         path_title = QLabel("Где сохранить контейнер")
         path_title.setObjectName("fieldTitle")
@@ -146,8 +203,8 @@ class ContainerCreationDialog(QDialog):
         shadow.setColor(QColor(2, 132, 199, 70))
         size_card.setGraphicsEffect(shadow)
         size_layout = QVBoxLayout(size_card)
-        size_layout.setContentsMargins(24, 22, 24, 22)
-        size_layout.setSpacing(12)
+        size_layout.setContentsMargins(20, 16, 20, 16)
+        size_layout.setSpacing(8)
 
         size_header = QHBoxLayout()
         size_caption = QLabel("Ёмкость зашифрованного диска")
@@ -197,10 +254,10 @@ class ContainerCreationDialog(QDialog):
         size_layout.addWidget(no_limit)
         outer.addWidget(size_card)
 
-        if self._system_disk:
-            format_card = QFrame()
-            format_card.setObjectName("formatCard")
-            format_layout = QVBoxLayout(format_card)
+        if self._system_disk or self._allow_backend_choice:
+            self.format_card = QFrame()
+            self.format_card.setObjectName("formatCard")
+            format_layout = QVBoxLayout(self.format_card)
             format_layout.setContentsMargins(16, 14, 16, 14)
             format_layout.setSpacing(8)
             format_title = QLabel("Файловая система")
@@ -222,7 +279,7 @@ class ContainerCreationDialog(QDialog):
             format_layout.addWidget(format_title)
             format_layout.addWidget(self.file_system_input)
             format_layout.addWidget(self.file_system_description)
-            outer.addWidget(format_card)
+            outer.addWidget(self.format_card)
 
         label_title = QLabel("Название диска")
         label_title.setObjectName("fieldTitle")
@@ -253,10 +310,33 @@ class ContainerCreationDialog(QDialog):
 
         self.size_slider.valueChanged.connect(self._slider_changed)
         self.path_input.textChanged.connect(self._update_storage_summary)
+        if self._allow_backend_choice:
+            self.backend_input.currentIndexChanged.connect(
+                self._update_backend_description
+            )
         localize_widget_tree(self)
-        if self._system_disk:
+        if self._system_disk or self._allow_backend_choice:
             self._update_file_system_description()
+        if self._allow_backend_choice:
+            self._update_backend_description()
         self._update_storage_summary()
+
+    def _update_backend_description(self, *_: object) -> None:
+        selected = self.backend_input.currentData()
+        self._system_disk = selected == DISK_BACKEND_WINDOWS
+        self.format_card.setVisible(self._system_disk)
+        if self._system_disk:
+            description = (
+                "Windows использует обычную файловую систему NTFS или exFAT и "
+                "системное кэширование. Этот вариант лучше подходит для больших "
+                "файлов, фильмов и повседневной работы."
+            )
+        else:
+            description = (
+                "Собственная файловая система Clever PGP сохраняет переносимый "
+                "формат контейнера и используется как совместимый резервный вариант."
+            )
+        self.backend_description.setText(tr(description))
 
     def _update_file_system_description(self, *_: object) -> None:
         if self.file_system == "EXFAT":
@@ -275,6 +355,10 @@ class ContainerCreationDialog(QDialog):
 
     def accept(self) -> None:
         try:
+            if self._allow_backend_choice and self.backend_input.count() == 0:
+                raise ValueError(
+                    "Компоненты зашифрованного диска не установлены."
+                )
             path = self._normalized_path()
             if not path.parent.is_dir():
                 raise ValueError("Выбранная папка не существует.")
@@ -514,7 +598,7 @@ QLabel#capacityWarning {
     color: #fca5a5;
     padding-top: 4px;
 }
-QFrame#storageCard {
+QFrame#storageCard, QFrame#backendCard {
     background: #0d2135;
     border: 1px solid #1e4f70;
     border-radius: 10px;

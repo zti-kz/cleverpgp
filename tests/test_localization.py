@@ -106,6 +106,19 @@ def test_system_disk_formatting_messages_are_localized() -> None:
     )
 
 
+def test_new_disk_backend_choice_is_localized() -> None:
+    set_language("en")
+    assert (
+        tr("Системный диск Windows — быстрый (рекомендуется)")
+        == "Windows system disk — fast (recommended)"
+    )
+    set_language("kk")
+    assert (
+        tr("Универсальный диск Clever PGP")
+        == "Әмбебап Clever PGP дискі"
+    )
+
+
 def test_header_language_selector_applies_and_saves_language(tmp_path) -> None:
     application = QApplication.instance() or QApplication([])
     repository = ProfileRepository(tmp_path / "profile.sqlite3")
@@ -177,7 +190,9 @@ def test_english_windows_have_no_untranslated_russian_interface_text(tmp_path) -
     container = ContainerCreationDialog(
         window,
         minimum_capacity=32 * 1024 * 1024,
-        system_disk=True,
+        allow_backend_choice=True,
+        system_backend_available=True,
+        winfsp_backend_available=True,
     )
     settings = AccessSettingsDialog(
         window.repository.get_profile().unlock_mode,

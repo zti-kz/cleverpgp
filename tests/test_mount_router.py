@@ -32,6 +32,7 @@ class FakeSystemManager:
     ) -> None:
         self.mounted_drive = mounted_drive
         self.mounted_container = mounted_container
+        self.create_calls: list[dict[str, object]] = []
         self.mount_calls: list[dict[str, object]] = []
         self.unmount_calls = 0
 
@@ -52,6 +53,23 @@ class FakeSystemManager:
             }
         )
         self.mounted_drive = "S:"
+        self.mounted_container = container_path
+        return self.mounted_drive
+
+    def create_and_mount(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        **options: object,
+    ) -> str:
+        self.create_calls.append(
+            {
+                "container_path": container_path,
+                "master_key": master_key,
+                **options,
+            }
+        )
+        self.mounted_drive = "N:"
         self.mounted_container = container_path
         return self.mounted_drive
 
@@ -159,6 +177,42 @@ def test_block_vault_routes_to_winfsp_manager(tmp_path: Path) -> None:
     assert manager.mounted_container == container_path.resolve()
     assert winfsp.mount_calls[0]["drive"] == "V:"
     assert not system.mount_calls
+
+
+def test_fast_windows_disk_creation_routes_without_removing_winfsp(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "new-system.cpgv"
+    system = FakeSystemManager()
+    winfsp = FakeWinFspManager()
+    manager = AutomaticMountManager(
+        system_manager=system,
+        winfsp_manager=winfsp,  # type: ignore[arg-type]
+    )
+    progress = object()
+
+    mounted = manager.create_and_mount(
+        container_path,
+        MASTER_KEY,
+        logical_capacity=64 * 1024 * 1024,
+        file_system="NTFS",
+        progress=progress,
+    )
+
+    assert mounted == "N:"
+    assert manager.active_backend == BACKEND_WINDOWS
+    assert manager.uses_windows_system_disk
+    assert manager.mounted_container == container_path.resolve()
+    assert system.create_calls == [
+        {
+            "container_path": container_path.resolve(),
+            "master_key": MASTER_KEY,
+            "logical_capacity": 64 * 1024 * 1024,
+            "file_system": "NTFS",
+            "progress": progress,
+        }
+    ]
+    assert not winfsp.mount_calls
 
 
 @pytest.mark.parametrize(
