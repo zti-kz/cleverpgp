@@ -18,11 +18,14 @@ from nacl.encoding import RawEncoder
 
 from biopgp.core.errors import ContainerError, OutputExistsError, ValidationError
 
-MAGIC = b"CPGPBLK2"
-FORMAT_VERSION = 2
+MAGIC = b"CPGPBLK3"
+FORMAT_VERSION = 3
 HEADER_PREFIX = struct.Struct(">8sBI")
 HEADER_AREA_SIZE = 64 * 1024
 HEADER_JSON_LENGTH = struct.Struct(">I")
+HEADER_SLOT_COUNT = 3
+HEADER_SLOT_SIZE = HEADER_AREA_SIZE // HEADER_SLOT_COUNT
+HEADER_UNUSED_SIZE = HEADER_AREA_SIZE - HEADER_SLOT_COUNT * HEADER_SLOT_SIZE
 LOGICAL_BLOCK_SIZE = 4096
 NONCE_SIZE = bindings.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
 TAG_SIZE = bindings.crypto_aead_xchacha20poly1305_ietf_ABYTES
@@ -32,6 +35,8 @@ INITIALIZATION_BATCH_BLOCKS = 256
 ALGORITHM = "XCHACHA20-POLY1305-BLOCK-V1"
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
 GENERIC_STORAGE_FORMAT = "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
+HEADER_STATE_COMMITTED = "committed"
+HEADER_STATE_PREPARING = "preparing"
 
 
 class BlockVolumeError(ContainerError):
@@ -47,7 +52,7 @@ class BlockIntegrityError(BlockVolumeError):
 
 
 class EncryptedBlockVolume:
-    """Random-access authenticated storage for the version 2 disk backend.
+    """Random-access authenticated storage for the version 3 disk backend.
 
     Each logical 4096-byte block has an independent random nonce and
     authentication tag. Rewriting one block therefore never serializes or
@@ -63,6 +68,9 @@ class EncryptedBlockVolume:
         volume_id: bytes,
         block_count: int,
         metadata: dict[str, object],
+        *,
+        active_header_slot: int,
+        pending_resize: bool = False,
     ) -> None:
         self.path = Path(path)
         self._stream = stream
@@ -70,6 +78,9 @@ class EncryptedBlockVolume:
         self._volume_id = bytes(volume_id)
         self._block_count = block_count
         self._metadata = metadata
+        self._active_header_slot = active_header_slot
+        self._header_generation = int(metadata["header_generation"])
+        self._pending_resize = pending_resize
         self._lock = threading.RLock()
         self._closed = False
 
@@ -112,23 +123,17 @@ class EncryptedBlockVolume:
             "algorithm": ALGORITHM,
             "block_count": block_count,
             "created_at": datetime.now(UTC).isoformat(),
+            "header_generation": 1,
             "key_wrap": KEY_WRAP,
             "label": label,
             "logical_block_size": LOGICAL_BLOCK_SIZE,
             "storage_format": storage_format,
+            "resize_state": HEADER_STATE_COMMITTED,
             "volume_id": base64.b64encode(volume_id).decode("ascii"),
             "wrapped_volume_key": base64.b64encode(wrapped_key).decode("ascii"),
         }
-        authenticated = cls._canonical_metadata(metadata)
-        metadata["header_auth"] = base64.b64encode(
-            hash.blake2b(
-                authenticated,
-                key=volume_key,
-                digest_size=32,
-                encoder=RawEncoder,
-            )
-        ).decode("ascii")
-        raw_header = cls._encode_header(metadata)
+        metadata = cls._authenticated_metadata(metadata, volume_key)
+        raw_header = cls._encode_initial_header(metadata)
 
         temporary_path: Path | None = None
         try:
@@ -188,39 +193,20 @@ class EncryptedBlockVolume:
             if header_size != HEADER_AREA_SIZE:
                 raise InvalidBlockVolumeError("Некорректный размер заголовка диска.")
             header_area = cls._read_exact(stream, header_size)
-            metadata = cls._decode_header(header_area)
-            cls._validate_metadata(metadata)
-
-            wrapped_key = base64.b64decode(
-                str(metadata["wrapped_volume_key"]), validate=True
+            candidates = cls._authenticated_header_candidates(
+                header_area,
+                master_key,
             )
-            volume_key = secret.SecretBox(master_key).decrypt(wrapped_key)
-            volume_id = base64.b64decode(
-                str(metadata["volume_id"]), validate=True
-            )
-            expected_auth = base64.b64decode(
-                str(metadata["header_auth"]), validate=True
-            )
-            authenticated_metadata = dict(metadata)
-            del authenticated_metadata["header_auth"]
-            actual_auth = hash.blake2b(
-                cls._canonical_metadata(authenticated_metadata),
-                key=volume_key,
-                digest_size=32,
-                encoder=RawEncoder,
-            )
-            if not bindings.sodium_memcmp(expected_auth, actual_auth):
-                raise InvalidBlockVolumeError(
-                    "Заголовок зашифрованного диска повреждён."
+            metadata, volume_key, volume_id, active_slot, pending_resize = (
+                cls._select_header_candidate(
+                    candidates,
+                    physical_file_size=source.stat().st_size,
                 )
-
+            )
             block_count = int(metadata["block_count"])
-            if len(volume_id) != 16:
-                raise InvalidBlockVolumeError("Некорректный идентификатор диска.")
-            if source.stat().st_size != cls.physical_size(block_count):
-                raise InvalidBlockVolumeError(
-                    "Размер файла не соответствует заголовку диска."
-                )
+        except InvalidBlockVolumeError:
+            stream.close()
+            raise
         except (
             OSError,
             struct.error,
@@ -231,13 +217,20 @@ class EncryptedBlockVolume:
             exceptions.CryptoError,
         ) as error:
             stream.close()
-            if isinstance(error, InvalidBlockVolumeError):
-                raise
             raise InvalidBlockVolumeError(
                 "Диск повреждён или создан другим профилем."
             ) from error
 
-        return cls(source, stream, volume_key, volume_id, block_count, metadata)
+        return cls(
+            source,
+            stream,
+            volume_key,
+            volume_id,
+            block_count,
+            metadata,
+            active_header_slot=active_slot,
+            pending_resize=pending_resize,
+        )
 
     @property
     def block_count(self) -> int:
@@ -327,6 +320,105 @@ class EncryptedBlockVolume:
             self._ensure_open()
             self._stream.seek(self._slot_offset(block_address))
             self._stream.write(encrypted)
+
+    def resize(
+        self,
+        logical_capacity: int,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> None:
+        """Increase the logical capacity with a crash-recoverable header update."""
+
+        new_block_count = self._block_count_for_capacity(logical_capacity)
+        with self._lock:
+            self._ensure_open()
+            if new_block_count < self._block_count:
+                raise ValidationError(
+                    "Уменьшение зашифрованного диска пока не поддерживается безопасно."
+                )
+            if new_block_count == self._block_count:
+                if progress is not None:
+                    progress(1, 1)
+                return
+
+            self._discard_incomplete_resize()
+            added_blocks = new_block_count - self._block_count
+            required_growth = added_blocks * PHYSICAL_SLOT_SIZE
+            free_bytes = int(shutil.disk_usage(self.path.parent).free)
+            if required_growth > free_bytes:
+                raise ValidationError(
+                    "Недостаточно свободного места на выбранном накопителе."
+                )
+
+            generation = self._header_generation + 1
+            resized_at = datetime.now(UTC).isoformat()
+            preparing_slot = (self._active_header_slot + 1) % HEADER_SLOT_COUNT
+            committed_slot = (self._active_header_slot + 2) % HEADER_SLOT_COUNT
+            base_metadata = dict(self._metadata)
+            base_metadata.pop("header_auth", None)
+            base_metadata.update(
+                {
+                    "block_count": new_block_count,
+                    "header_generation": generation,
+                    "resized_at": resized_at,
+                }
+            )
+            preparing_metadata = dict(base_metadata)
+            preparing_metadata["resize_state"] = HEADER_STATE_PREPARING
+            preparing_metadata = self._authenticated_metadata(
+                preparing_metadata,
+                bytes(self._volume_key),
+            )
+            self._write_verified_header_slot(preparing_slot, preparing_metadata)
+            self.flush()
+            self._pending_resize = True
+
+            zero_block = bytes(LOGICAL_BLOCK_SIZE)
+            completed = 0
+            self._stream.seek(self.physical_size(self._block_count))
+            while completed < added_blocks:
+                batch_count = min(
+                    INITIALIZATION_BATCH_BLOCKS,
+                    added_blocks - completed,
+                )
+                batch = bytearray()
+                for offset in range(batch_count):
+                    block_index = self._block_count + completed + offset
+                    batch.extend(
+                        self._encrypt_block(
+                            zero_block,
+                            block_index,
+                            self._volume_id,
+                            bytes(self._volume_key),
+                        )
+                    )
+                self._stream.write(batch)
+                completed += batch_count
+                if progress is not None:
+                    progress(completed, added_blocks)
+            self.flush()
+
+            committed_metadata = dict(base_metadata)
+            committed_metadata["resize_state"] = HEADER_STATE_COMMITTED
+            committed_metadata = self._authenticated_metadata(
+                committed_metadata,
+                bytes(self._volume_key),
+            )
+            self._write_verified_header_slot(committed_slot, committed_metadata)
+            self.flush()
+            previous_active_slot = self._active_header_slot
+            self._metadata = committed_metadata
+            self._block_count = new_block_count
+            self._active_header_slot = committed_slot
+            self._header_generation = generation
+            self._pending_resize = False
+            try:
+                self._invalidate_header_slot(previous_active_slot)
+            except OSError:
+                # The new committed header is already durable. Keeping the old
+                # authenticated slot is safe, although less strict against a
+                # later whole-file rollback.
+                pass
 
     def flush(self) -> None:
         with self._lock:
@@ -431,24 +523,35 @@ class EncryptedBlockVolume:
         ).encode("utf-8")
 
     @classmethod
-    def _encode_header(cls, metadata: dict[str, object]) -> bytes:
+    def _encode_initial_header(cls, metadata: dict[str, object]) -> bytes:
+        first_slot = cls._encode_header_slot(metadata)
+        remaining_slots = utils.random(HEADER_SLOT_SIZE * (HEADER_SLOT_COUNT - 1))
+        unused = utils.random(HEADER_UNUSED_SIZE)
+        return (
+            HEADER_PREFIX.pack(MAGIC, FORMAT_VERSION, HEADER_AREA_SIZE)
+            + first_slot
+            + remaining_slots
+            + unused
+        )
+
+    @classmethod
+    def _encode_header_slot(cls, metadata: dict[str, object]) -> bytes:
         encoded = cls._canonical_metadata(metadata)
-        if len(encoded) + HEADER_JSON_LENGTH.size > HEADER_AREA_SIZE:
+        if len(encoded) + HEADER_JSON_LENGTH.size > HEADER_SLOT_SIZE:
             raise ValidationError("Заголовок диска слишком большой.")
-        padding_size = HEADER_AREA_SIZE - HEADER_JSON_LENGTH.size - len(encoded)
-        header_area = HEADER_JSON_LENGTH.pack(len(encoded)) + encoded + utils.random(
+        padding_size = HEADER_SLOT_SIZE - HEADER_JSON_LENGTH.size - len(encoded)
+        return HEADER_JSON_LENGTH.pack(len(encoded)) + encoded + utils.random(
             padding_size
         )
-        return HEADER_PREFIX.pack(MAGIC, FORMAT_VERSION, HEADER_AREA_SIZE) + header_area
 
     @staticmethod
-    def _decode_header(header_area: bytes) -> dict[str, object]:
-        if len(header_area) != HEADER_AREA_SIZE:
-            raise InvalidBlockVolumeError("Заголовок диска оборван.")
+    def _decode_header_slot(header_area: bytes) -> dict[str, object]:
+        if len(header_area) != HEADER_SLOT_SIZE:
+            raise InvalidBlockVolumeError("Слот заголовка диска оборван.")
         (json_size,) = HEADER_JSON_LENGTH.unpack(
             header_area[: HEADER_JSON_LENGTH.size]
         )
-        if not 1 <= json_size <= HEADER_AREA_SIZE - HEADER_JSON_LENGTH.size:
+        if not 1 <= json_size <= HEADER_SLOT_SIZE - HEADER_JSON_LENGTH.size:
             raise InvalidBlockVolumeError("Некорректная длина заголовка диска.")
         decoded = json.loads(
             header_area[
@@ -458,6 +561,116 @@ class EncryptedBlockVolume:
         if not isinstance(decoded, dict):
             raise InvalidBlockVolumeError("Некорректный заголовок диска.")
         return decoded
+
+    @classmethod
+    def _authenticated_header_candidates(
+        cls,
+        header_area: bytes,
+        master_key: bytes,
+    ) -> list[tuple[dict[str, object], bytes, bytes, int]]:
+        if len(header_area) != HEADER_AREA_SIZE:
+            raise InvalidBlockVolumeError("Заголовок диска оборван.")
+        candidates: list[tuple[dict[str, object], bytes, bytes, int]] = []
+        for slot in range(HEADER_SLOT_COUNT):
+            start = slot * HEADER_SLOT_SIZE
+            try:
+                metadata = cls._decode_header_slot(
+                    header_area[start : start + HEADER_SLOT_SIZE]
+                )
+                cls._validate_metadata(metadata)
+                wrapped_key = base64.b64decode(
+                    str(metadata["wrapped_volume_key"]),
+                    validate=True,
+                )
+                volume_key = secret.SecretBox(master_key).decrypt(wrapped_key)
+                volume_id = base64.b64decode(
+                    str(metadata["volume_id"]),
+                    validate=True,
+                )
+                if len(volume_id) != 16:
+                    raise ValueError("volume id")
+                expected_auth = base64.b64decode(
+                    str(metadata["header_auth"]),
+                    validate=True,
+                )
+                actual_auth = cls._metadata_auth(metadata, volume_key)
+                if not bindings.sodium_memcmp(expected_auth, actual_auth):
+                    raise ValueError("header authentication")
+            except (
+                InvalidBlockVolumeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                binascii.Error,
+                exceptions.CryptoError,
+            ):
+                continue
+            candidates.append((metadata, volume_key, volume_id, slot))
+        if not candidates:
+            raise InvalidBlockVolumeError(
+                "Диск повреждён или создан другим профилем."
+            )
+        identities = {
+            (candidate[1], candidate[2]) for candidate in candidates
+        }
+        if len(identities) != 1:
+            raise InvalidBlockVolumeError(
+                "Заголовки диска относятся к разным криптографическим томам."
+            )
+        return candidates
+
+    @classmethod
+    def _select_header_candidate(
+        cls,
+        candidates: list[tuple[dict[str, object], bytes, bytes, int]],
+        *,
+        physical_file_size: int,
+    ) -> tuple[dict[str, object], bytes, bytes, int, bool]:
+        committed = [
+            candidate
+            for candidate in candidates
+            if candidate[0]["resize_state"] == HEADER_STATE_COMMITTED
+        ]
+        exact = [
+            candidate
+            for candidate in committed
+            if cls.physical_size(int(candidate[0]["block_count"]))
+            == physical_file_size
+        ]
+        if exact:
+            selected = max(
+                exact,
+                key=lambda candidate: int(candidate[0]["header_generation"]),
+            )
+            return (*selected, False)
+
+        older = [
+            candidate
+            for candidate in committed
+            if cls.physical_size(int(candidate[0]["block_count"]))
+            < physical_file_size
+        ]
+        if not older:
+            raise InvalidBlockVolumeError(
+                "Размер файла не соответствует подтверждённому заголовку диска."
+            )
+        selected = max(
+            older,
+            key=lambda candidate: int(candidate[0]["header_generation"]),
+        )
+        selected_generation = int(selected[0]["header_generation"])
+        pending = any(
+            candidate[0]["resize_state"] == HEADER_STATE_PREPARING
+            and int(candidate[0]["header_generation"]) > selected_generation
+            and cls.physical_size(int(candidate[0]["block_count"]))
+            >= physical_file_size
+            for candidate in candidates
+        )
+        if not pending:
+            raise InvalidBlockVolumeError(
+                "Обнаружены неаутентифицированные данные после конца диска."
+            )
+        return (*selected, True)
 
     @classmethod
     def _validate_metadata(cls, metadata: dict[str, object]) -> None:
@@ -470,6 +683,14 @@ class EncryptedBlockVolume:
             raise InvalidBlockVolumeError("Некорректное число блоков диска.")
         if not str(metadata.get("label", "")):
             raise InvalidBlockVolumeError("В заголовке отсутствует название диска.")
+        generation = int(metadata.get("header_generation", 0))
+        if generation <= 0:
+            raise InvalidBlockVolumeError("Некорректное поколение заголовка диска.")
+        if metadata.get("resize_state") not in (
+            HEADER_STATE_COMMITTED,
+            HEADER_STATE_PREPARING,
+        ):
+            raise InvalidBlockVolumeError("Некорректное состояние размера диска.")
         storage_format = metadata.get("storage_format")
         if storage_format is not None and (
             not isinstance(storage_format, str) or not storage_format
@@ -478,6 +699,80 @@ class EncryptedBlockVolume:
         for name in ("volume_id", "wrapped_volume_key", "header_auth"):
             if not isinstance(metadata.get(name), str):
                 raise InvalidBlockVolumeError("Заголовок диска содержит неверные поля.")
+
+    @classmethod
+    def _authenticated_metadata(
+        cls,
+        metadata: dict[str, object],
+        volume_key: bytes,
+    ) -> dict[str, object]:
+        authenticated = dict(metadata)
+        authenticated.pop("header_auth", None)
+        authenticated["header_auth"] = base64.b64encode(
+            hash.blake2b(
+                cls._canonical_metadata(authenticated),
+                key=volume_key,
+                digest_size=32,
+                encoder=RawEncoder,
+            )
+        ).decode("ascii")
+        return authenticated
+
+    @classmethod
+    def _metadata_auth(
+        cls,
+        metadata: dict[str, object],
+        volume_key: bytes,
+    ) -> bytes:
+        authenticated = dict(metadata)
+        del authenticated["header_auth"]
+        return hash.blake2b(
+            cls._canonical_metadata(authenticated),
+            key=volume_key,
+            digest_size=32,
+            encoder=RawEncoder,
+        )
+
+    def _write_verified_header_slot(
+        self,
+        slot: int,
+        metadata: dict[str, object],
+    ) -> None:
+        if not 0 <= slot < HEADER_SLOT_COUNT:
+            raise ValueError("Header slot is out of range.")
+        encoded = self._encode_header_slot(metadata)
+        offset = HEADER_PREFIX.size + slot * HEADER_SLOT_SIZE
+        self._stream.seek(offset)
+        self._stream.write(encoded)
+        self._stream.flush()
+        os.fsync(self._stream.fileno())
+        self._stream.seek(offset)
+        stored = self._read_exact(self._stream, HEADER_SLOT_SIZE)
+        if not bindings.sodium_memcmp(stored, encoded):
+            raise BlockVolumeError("Не удалось проверить запись заголовка диска.")
+
+    def _discard_incomplete_resize(self) -> None:
+        expected_size = self.physical_size(self._block_count)
+        actual_size = self.path.stat().st_size
+        if actual_size < expected_size:
+            raise InvalidBlockVolumeError("Файл зашифрованного диска оборван.")
+        if actual_size > expected_size:
+            if not self._pending_resize:
+                raise InvalidBlockVolumeError(
+                    "Обнаружены данные после подтверждённого конца диска."
+                )
+            self._stream.truncate(expected_size)
+            self.flush()
+        self._pending_resize = False
+
+    def _invalidate_header_slot(self, slot: int) -> None:
+        if not 0 <= slot < HEADER_SLOT_COUNT:
+            raise ValueError("Header slot is out of range.")
+        offset = HEADER_PREFIX.size + slot * HEADER_SLOT_SIZE
+        self._stream.seek(offset)
+        self._stream.write(utils.random(HEADER_SLOT_SIZE))
+        self._stream.flush()
+        os.fsync(self._stream.fileno())
 
     @staticmethod
     def _read_exact(stream: object, size: int) -> bytes:

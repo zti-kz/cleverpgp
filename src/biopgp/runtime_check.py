@@ -162,6 +162,8 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
     from biopgp.core.winspd import (
         WinSpdLibrary,
         create_windows_block_volume,
+        open_windows_block_volume,
+        resize_windows_block_volume,
     )
     from biopgp.core.windows_storage import WindowsSystemDiskManager
 
@@ -180,6 +182,15 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             library=library,
         )
         volume.close()
+        resized_capacity = 40 * 1024 * 1024
+        resize_windows_block_volume(
+            container_path,
+            master_key,
+            logical_capacity=resized_capacity,
+        )
+        with open_windows_block_volume(container_path, master_key) as resized:
+            if resized.logical_capacity != resized_capacity:
+                raise RuntimeError("Увеличение блочного контейнера не сохранилось.")
         manager = WinSpdHostManager()
         manager.start(
             container_path,
@@ -263,6 +274,7 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 "key_transport": "dpapi-one-time-request",
                 "external_control": "authenticated-loopback",
                 "restart_recovery": "verified",
+                "resized_capacity_mib": resized_capacity // (1024 * 1024),
             },
             ensure_ascii=False,
             indent=2,

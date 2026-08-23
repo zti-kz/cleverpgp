@@ -20,6 +20,7 @@ from biopgp.core.winspd import (
     WINDOWS_BLOCK_STORAGE_FORMAT,
     initialize_windows_partition,
     open_windows_block_volume,
+    resize_windows_block_volume,
 )
 
 
@@ -165,3 +166,32 @@ def test_windows_backend_opens_its_explicit_storage_format(tmp_path: Path) -> No
 
     with open_windows_block_volume(path, key) as reopened:
         assert reopened.storage_format == WINDOWS_BLOCK_STORAGE_FORMAT
+
+
+def test_windows_backend_can_grow_closed_container(tmp_path: Path) -> None:
+    key = utils.random(secret.SecretBox.KEY_SIZE)
+    path = tmp_path / "grow-windows.cpgv"
+    original_capacity = 32 * 1024 * 1024
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=original_capacity,
+        storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+    )
+    marker = b"partition-data".ljust(LOGICAL_BLOCK_SIZE, b"!")
+    volume.write_blocks(0, marker)
+    volume.close()
+    progress: list[tuple[int, int]] = []
+
+    result = resize_windows_block_volume(
+        path,
+        key,
+        logical_capacity=40 * 1024 * 1024,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert result == 40 * 1024 * 1024
+    assert progress[-1][0] == progress[-1][1]
+    with open_windows_block_volume(path, key) as reopened:
+        assert reopened.logical_capacity == 40 * 1024 * 1024
+        assert reopened.read_blocks(0, 1) == marker

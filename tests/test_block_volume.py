@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from nacl import secret, utils
@@ -14,6 +16,7 @@ from biopgp.core.block_volume import (
     EncryptedBlockVolume,
     InvalidBlockVolumeError,
 )
+from biopgp.core.errors import ValidationError
 
 
 def master_key() -> bytes:
@@ -155,3 +158,202 @@ def test_plaintext_is_absent_and_physical_overhead_is_explicit(tmp_path: Path) -
     assert path.stat().st_size == expected_size
     assert expected_size > capacity
     assert marker not in path.read_bytes()
+
+
+def test_block_volume_can_grow_without_changing_existing_data(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "grow.cpgv"
+    old_capacity = 1024 * 1024
+    new_capacity = 2 * old_capacity
+    marker = b"existing-data".ljust(LOGICAL_BLOCK_SIZE, b"!")
+    progress: list[tuple[int, int]] = []
+
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=old_capacity,
+    ) as volume:
+        old_volume_id = volume.volume_id
+        volume.write_blocks(volume.block_count - 1, marker)
+        volume.flush()
+        volume.resize(
+            new_capacity,
+            progress=lambda completed, total: progress.append((completed, total)),
+        )
+
+        assert volume.logical_capacity == new_capacity
+        assert volume.volume_id == old_volume_id
+        assert volume.read_blocks(old_capacity // LOGICAL_BLOCK_SIZE - 1, 1) == marker
+        assert volume.read_blocks(old_capacity // LOGICAL_BLOCK_SIZE, 1) == bytes(
+            LOGICAL_BLOCK_SIZE
+        )
+        volume.write_blocks(volume.block_count - 1, b"new".ljust(LOGICAL_BLOCK_SIZE, b"?"))
+
+    assert progress[-1][0] == progress[-1][1]
+    assert path.stat().st_size == EncryptedBlockVolume.physical_size(
+        new_capacity // LOGICAL_BLOCK_SIZE
+    )
+    with EncryptedBlockVolume.open(path, key) as reopened:
+        assert reopened.logical_capacity == new_capacity
+        assert reopened.volume_id == old_volume_id
+        assert reopened.read_blocks(old_capacity // LOGICAL_BLOCK_SIZE - 1, 1) == marker
+        assert reopened.read_blocks(reopened.block_count - 1, 1).startswith(b"new")
+
+
+def test_resize_refuses_shrink_unaligned_size_and_insufficient_space(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "resize-validation.cpgv"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=2 * 1024 * 1024,
+    ) as volume:
+        with pytest.raises(ValidationError, match="Уменьшение"):
+            volume.resize(1024 * 1024)
+        with pytest.raises(ValidationError, match="кратен"):
+            volume.resize(3 * 1024 * 1024 + 1)
+        with patch(
+            "biopgp.core.block_volume.shutil.disk_usage",
+            return_value=SimpleNamespace(free=0),
+        ):
+            with pytest.raises(ValidationError, match="Недостаточно свободного места"):
+                volume.resize(3 * 1024 * 1024)
+
+        assert volume.logical_capacity == 2 * 1024 * 1024
+
+
+def test_interrupted_resize_falls_back_to_last_committed_capacity(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "interrupted-grow.cpgv"
+    old_capacity = 1024 * 1024
+    marker = b"preserved".ljust(LOGICAL_BLOCK_SIZE, b".")
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=old_capacity,
+    )
+    volume.write_blocks(2, marker)
+    volume.flush()
+    old_physical_size = path.stat().st_size
+    original_descriptor = EncryptedBlockVolume.__dict__["_encrypt_block"]
+    original_encrypt = EncryptedBlockVolume._encrypt_block
+    first_new_block = volume.block_count
+
+    def interrupted_encrypt(
+        cls: type[EncryptedBlockVolume],
+        plaintext: bytes,
+        block_index: int,
+        volume_id: bytes,
+        volume_key: bytes,
+        context: bytes = b"",
+    ) -> bytes:
+        del cls
+        if block_index >= first_new_block + 256:
+            raise OSError("simulated interruption")
+        return original_encrypt(
+            plaintext,
+            block_index,
+            volume_id,
+            volume_key,
+            context,
+        )
+
+    monkeypatch.setattr(
+        EncryptedBlockVolume,
+        "_encrypt_block",
+        classmethod(interrupted_encrypt),
+    )
+    with pytest.raises(OSError, match="simulated interruption"):
+        volume.resize(3 * 1024 * 1024)
+    volume.close()
+
+    assert path.stat().st_size > old_physical_size
+    with EncryptedBlockVolume.open(path, key) as recovered:
+        assert recovered.logical_capacity == old_capacity
+        assert recovered.read_blocks(2, 1) == marker
+        monkeypatch.setattr(
+            EncryptedBlockVolume,
+            "_encrypt_block",
+            original_descriptor,
+        )
+        recovered.resize(2 * 1024 * 1024)
+        assert recovered.logical_capacity == 2 * 1024 * 1024
+
+    with EncryptedBlockVolume.open(path, key) as reopened:
+        assert reopened.logical_capacity == 2 * 1024 * 1024
+        assert reopened.read_blocks(2, 1) == marker
+
+
+def test_unauthenticated_trailing_data_is_rejected(tmp_path: Path) -> None:
+    key = master_key()
+    path = tmp_path / "trailing-data.cpgv"
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+    )
+    volume.close()
+    with path.open("ab") as stream:
+        stream.write(b"unauthenticated-tail")
+
+    with pytest.raises(InvalidBlockVolumeError, match="неаутентифицированные"):
+        EncryptedBlockVolume.open(path, key)
+
+
+def test_invalid_header_closes_the_underlying_file(tmp_path: Path) -> None:
+    key = master_key()
+    path = tmp_path / "invalid-header.cpgv"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+    ):
+        pass
+    with path.open("r+b") as stream:
+        stream.write(b"BROKEN!!")
+
+    original_open = Path.open
+    opened_streams: list[object] = []
+
+    def tracked_open(candidate: Path, *args: object, **kwargs: object) -> object:
+        stream = original_open(candidate, *args, **kwargs)
+        opened_streams.append(stream)
+        return stream
+
+    with patch.object(Path, "open", tracked_open):
+        with pytest.raises(InvalidBlockVolumeError, match="поддерживаемой версии"):
+            EncryptedBlockVolume.open(path, key)
+
+    assert opened_streams
+    assert opened_streams[-1].closed
+
+
+def test_completed_resize_cannot_be_rolled_back_by_truncating_file(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "resize-rollback.cpgv"
+    old_capacity = 1024 * 1024
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=old_capacity,
+    ) as volume:
+        volume.resize(2 * old_capacity)
+
+    with path.open("r+b") as stream:
+        stream.truncate(
+            EncryptedBlockVolume.physical_size(
+                old_capacity // LOGICAL_BLOCK_SIZE
+            )
+        )
+
+    with pytest.raises(InvalidBlockVolumeError, match="подтверждённому заголовку"):
+        EncryptedBlockVolume.open(path, key)

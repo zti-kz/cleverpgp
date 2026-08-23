@@ -313,6 +313,27 @@ def open_windows_block_volume(
     return volume
 
 
+def resize_windows_block_volume(
+    path: Path,
+    master_key: bytes,
+    *,
+    logical_capacity: int,
+    progress: Callable[[int, int], None] | None = None,
+) -> int:
+    """Grow a closed Windows block container before its partition is extended."""
+
+    if logical_capacity < MIN_WINDOWS_DISK_CAPACITY:
+        raise ValidationError(
+            "Системный зашифрованный диск должен быть не меньше 32 МБ."
+        )
+    volume = open_windows_block_volume(path, master_key)
+    try:
+        volume.resize(logical_capacity, progress=progress)
+        return volume.logical_capacity
+    finally:
+        volume.close()
+
+
 class WinSpdBlockDevice:
     """Expose EncryptedBlockVolume through WinSpd SCSI block operations.
 
