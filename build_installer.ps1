@@ -42,7 +42,7 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.9.1"
+$AppVersion = "0.9.2"
 $SignToolPath = $env:BIOPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:BIOPGP_SIGN_CERT_SHA1
 $TimestampUrl = $env:BIOPGP_TIMESTAMP_URL
@@ -83,6 +83,20 @@ function Download-VerifiedFile(
     if ($ActualHash -ne $ExpectedSha256) {
         Remove-Item -LiteralPath $Destination -Force
         throw "Проверка SHA-256 не пройдена для $Destination. Получено: $ActualHash"
+    }
+}
+
+function Assert-TrustedNavimaticsSignature([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Подписанный системный компонент не найден: $Path"
+    }
+    $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if (
+        $Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+        $null -eq $Signature.SignerCertificate -or
+        $Signature.SignerCertificate.Subject -notlike "CN=NAVIMATICS LLC*"
+    ) {
+        throw "Цифровая подпись официального системного компонента не подтверждена: $Path"
     }
 }
 
@@ -160,13 +174,7 @@ function Expand-VerifiedWinSpdPackage {
     if ($TestHash -ne $WinSpdStgTestSha256) {
         throw "Проверка SHA-256 утилиты WinSpd не пройдена: $TestHash"
     }
-    $DllSignature = Get-AuthenticodeSignature -LiteralPath $WinSpdDll
-    if (
-        $DllSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
-        $DllSignature.SignerCertificate.Subject -notlike "CN=NAVIMATICS LLC*"
-    ) {
-        throw "Цифровая подпись библиотеки WinSpd не подтверждена."
-    }
+    Assert-TrustedNavimaticsSignature $WinSpdDll
 }
 
 if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
@@ -193,6 +201,7 @@ New-Item -ItemType Directory -Path $ToolsDirectory -Force | Out-Null
 
 Write-Host "Подготовка системных компонентов диска..."
 Download-VerifiedFile $WinSpdUrl $WinSpdInstaller $WinSpdSha256
+Assert-TrustedNavimaticsSignature $WinSpdInstaller
 Expand-VerifiedWinSpdPackage
 $env:CLEVERPGP_WINSPD_DLL_SOURCE = $WinSpdDll
 
@@ -290,6 +299,7 @@ Write-Host "Виртуальный диск собранного приложе�
 
 Write-Host "Подготовка установщика виртуального диска..."
 Download-VerifiedFile $WinFspUrl $WinFspInstaller $WinFspSha256
+Assert-TrustedNavimaticsSignature $WinFspInstaller
 
 if (-not (Test-Path -LiteralPath $InnoCompiler -PathType Leaf)) {
     Write-Host "Подготовка конструктора установщика..."

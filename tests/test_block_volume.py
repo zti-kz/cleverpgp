@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -17,6 +18,7 @@ from biopgp.core.block_volume import (
     InvalidBlockVolumeError,
 )
 from biopgp.core.errors import ValidationError
+from biopgp.core.mapped_stream import MappedFileStream
 
 
 def master_key() -> bytes:
@@ -49,6 +51,94 @@ def test_block_volume_supports_independent_random_access(tmp_path: Path) -> None
     with EncryptedBlockVolume.open(path, key) as reopened:
         assert reopened.read_blocks(3, 1) == b"A" * LOGICAL_BLOCK_SIZE
         assert reopened.read_blocks(4, 1) == bytes(LOGICAL_BLOCK_SIZE)
+
+
+def test_mapped_winspd_io_persists_concurrent_authenticated_ranges(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "mapped.cpgv"
+    ranges = [
+        (index * 16, bytes([65 + index]) * (16 * LOGICAL_BLOCK_SIZE))
+        for index in range(4)
+    ]
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+    ) as volume:
+        assert volume.enable_mapped_io()
+        assert volume.enable_mapped_io()
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            list(executor.map(lambda item: volume.write_blocks(*item), ranges))
+        volume.flush()
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            restored = list(
+                executor.map(
+                    lambda item: volume.read_blocks(
+                        item[0],
+                        len(item[1]) // LOGICAL_BLOCK_SIZE,
+                    ),
+                    ranges,
+                )
+            )
+        assert restored == [payload for _address, payload in ranges]
+
+    with EncryptedBlockVolume.open(path, key) as reopened:
+        for address, payload in ranges:
+            assert reopened.read_blocks(
+                address,
+                len(payload) // LOGICAL_BLOCK_SIZE,
+            ) == payload
+
+
+def test_contiguous_block_read_uses_one_backing_file_operation(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "coalesced-read.cpgv"
+    volume = EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+    )
+
+    class CountingStream:
+        def __init__(self, delegate: object) -> None:
+            self.delegate = delegate
+            self.read_calls = 0
+
+        def read(self, size: int = -1) -> bytes:
+            self.read_calls += 1
+            return self.delegate.read(size)  # type: ignore[attr-defined]
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self.delegate, name)
+
+    tracked = CountingStream(volume._stream)
+    volume._stream = tracked
+    try:
+        assert volume.read_blocks(0, 64) == bytes(64 * LOGICAL_BLOCK_SIZE)
+        assert tracked.read_calls == 1
+    finally:
+        volume.close()
+
+
+def test_mapped_io_failure_keeps_regular_ciphertext_stream(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "mapped-fallback.cpgv"
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+    ) as volume:
+        with patch.object(MappedFileStream, "__init__", side_effect=OSError("map")):
+            assert not volume.enable_mapped_io()
+        payload = b"fallback".ljust(LOGICAL_BLOCK_SIZE, b"!")
+        volume.write_blocks(9, payload)
+        assert volume.read_blocks(9, 1) == payload
 
 
 def test_rewriting_one_block_does_not_rewrite_other_blocks(tmp_path: Path) -> None:

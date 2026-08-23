@@ -525,6 +525,9 @@ def run_disk_host(request_path: Path) -> int:
                 raise WinSpdError(
                     "Это не виртуальный зашифрованный диск Clever PGP."
                 )
+        mapped_io = getattr(volume, "enable_mapped_io", None)
+        if callable(mapped_io):
+            mapped_io()
         server = DiskControlServer()
         device = WinSpdBlockDevice(
             volume,

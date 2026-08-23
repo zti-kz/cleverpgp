@@ -319,6 +319,12 @@ def test_detached_host_opens_v4_material_without_password(tmp_path: Path) -> Non
     class FakeVolume:
         volume_id = cover_id
         storage_format = "CLEVERPGP-WINDOWS-BLOCK-DISK-V1"
+        mapped_io_enabled = False
+
+        @classmethod
+        def enable_mapped_io(cls) -> bool:
+            cls.mapped_io_enabled = True
+            return True
 
         @staticmethod
         def close() -> None:
@@ -364,6 +370,7 @@ def test_detached_host_opens_v4_material_without_password(tmp_path: Path) -> Non
 
     assert result == 0
     assert FakeExchange.ready
+    assert FakeVolume.mapped_io_enabled
     opener.assert_called_once_with(
         decoded.container_path,
         outer,

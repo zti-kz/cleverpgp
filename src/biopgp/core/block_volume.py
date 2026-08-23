@@ -17,6 +17,7 @@ from nacl import bindings, exceptions, hash, secret, utils
 from nacl.encoding import RawEncoder
 
 from biopgp.core.errors import ContainerError, OutputExistsError, ValidationError
+from biopgp.core.mapped_stream import MappedFileStream
 
 MAGIC = b"CPGPBLK3"
 FORMAT_VERSION = 3
@@ -262,30 +263,41 @@ class EncryptedBlockVolume:
     ) -> bytes:
         self._validate_range(block_address, block_count)
         authenticated_context = self._validate_context(context)
-        result = bytearray()
         with self._lock:
             self._ensure_open()
             self._stream.seek(self._slot_offset(block_address))
-            for offset in range(block_count):
-                slot = self._read_exact(self._stream, PHYSICAL_SLOT_SIZE)
-                block_index = block_address + offset
-                try:
-                    result.extend(
-                        bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
-                            slot[NONCE_SIZE:],
-                            self._block_aad(
-                                self._volume_id,
-                                block_index,
-                                authenticated_context,
-                            ),
-                            slot[:NONCE_SIZE],
-                            bytes(self._volume_key),
-                        )
+            slots = self._read_exact(
+                self._stream,
+                block_count * PHYSICAL_SLOT_SIZE,
+            )
+            volume_key = bytes(self._volume_key)
+            volume_id = self._volume_id
+
+        # The backing file is needed only for the contiguous read above. Crypto
+        # can run outside the stream lock so independent WinSpd requests are not
+        # needlessly serialized by Python while every block is authenticated.
+        result = bytearray()
+        for offset in range(block_count):
+            slot_start = offset * PHYSICAL_SLOT_SIZE
+            slot = slots[slot_start : slot_start + PHYSICAL_SLOT_SIZE]
+            block_index = block_address + offset
+            try:
+                result.extend(
+                    bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
+                        slot[NONCE_SIZE:],
+                        self._block_aad(
+                            volume_id,
+                            block_index,
+                            authenticated_context,
+                        ),
+                        slot[:NONCE_SIZE],
+                        volume_key,
                     )
-                except exceptions.CryptoError as error:
-                    raise BlockIntegrityError(
-                        f"Нарушена целостность блока {block_index}."
-                    ) from error
+                )
+            except exceptions.CryptoError as error:
+                raise BlockIntegrityError(
+                    f"Нарушена целостность блока {block_index}."
+                ) from error
         return bytes(result)
 
     def write_blocks(
@@ -303,17 +315,29 @@ class EncryptedBlockVolume:
         block_count = len(payload) // LOGICAL_BLOCK_SIZE
         self._validate_range(block_address, block_count)
         authenticated_context = self._validate_context(context)
+        with self._lock:
+            self._ensure_open()
+            volume_key = bytes(self._volume_key)
+            volume_id = self._volume_id
+
         encrypted = bytearray()
+        nonces = utils.random(block_count * NONCE_SIZE)
         for offset in range(block_count):
             start = offset * LOGICAL_BLOCK_SIZE
             block_index = block_address + offset
+            nonce_start = offset * NONCE_SIZE
+            nonce = nonces[nonce_start : nonce_start + NONCE_SIZE]
+            encrypted.extend(nonce)
             encrypted.extend(
-                self._encrypt_block(
+                bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
                     payload[start : start + LOGICAL_BLOCK_SIZE],
-                    block_index,
-                    self._volume_id,
-                    bytes(self._volume_key),
-                    authenticated_context,
+                    self._block_aad(
+                        volume_id,
+                        block_index,
+                        authenticated_context,
+                    ),
+                    nonce,
+                    volume_key,
                 )
             )
         with self._lock:
@@ -425,6 +449,27 @@ class EncryptedBlockVolume:
             self._ensure_open()
             self._stream.flush()
             os.fsync(self._stream.fileno())
+
+    def enable_mapped_io(self) -> bool:
+        """Use mapped ciphertext I/O for a live WinSpd session when available."""
+
+        with self._lock:
+            self._ensure_open()
+            if isinstance(self._stream, MappedFileStream):
+                return True
+            try:
+                mapped = MappedFileStream(self.path)
+            except (OSError, ValueError, OverflowError):
+                return False
+            try:
+                self._stream.flush()
+                os.fsync(self._stream.fileno())
+                self._stream.close()
+            except Exception:
+                mapped.close()
+                raise
+            self._stream = mapped
+            return True
 
     def close(self) -> None:
         with self._lock:

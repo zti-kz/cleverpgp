@@ -16,12 +16,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Almas Oskenbay'),
           StringStruct('FileDescription', 'Clever PGP — криптографическая защита файлов и дисков'),
-          StringStruct('FileVersion', '0.9.1'),
+          StringStruct('FileVersion', '0.9.2'),
           StringStruct('InternalName', 'CleverPGP'),
           StringStruct('LegalCopyright', 'Copyright © 2026 Almas Oskenbay, Institute of Intellectual Technologies'),
           StringStruct('OriginalFilename', 'CleverPGP.exe'),
           StringStruct('ProductName', 'Clever PGP'),
-          StringStruct('ProductVersion', '0.9.1')
+          StringStruct('ProductVersion', '0.9.2')
         ]
       )
     ]),

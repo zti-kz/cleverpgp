@@ -126,6 +126,29 @@ def test_authenticated_header_opens_without_forwarding_password(
     reopened.close()
 
 
+def test_v4_session_supports_mapped_ciphertext_io(
+    tmp_path: Path,
+    header_store: OpaqueVolumeHeaderStore,
+) -> None:
+    session = create_outer(tmp_path, header_store)
+    path = session.path
+    payload = b"mapped-v4".ljust(8 * LOGICAL_BLOCK_SIZE, b"!")
+
+    assert session.enable_mapped_io()
+    session.write_blocks(32, payload)
+    session.flush()
+    assert session.read_blocks(32, 8) == payload
+    session.close()
+
+    reopened = OpaqueBlockVolume.open(
+        path,
+        OUTER_PASSWORD,
+        header_store=header_store,
+    )
+    assert reopened.read_blocks(32, 8) == payload
+    reopened.close()
+
+
 def test_hidden_password_opens_nested_authenticated_blocks(
     tmp_path: Path,
     header_store: OpaqueVolumeHeaderStore,

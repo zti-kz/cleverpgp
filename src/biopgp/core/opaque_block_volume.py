@@ -28,6 +28,7 @@ from biopgp.core.hidden_volume import (
     HiddenRegionProtectedVolume,
     HiddenVolumeDescriptor,
 )
+from biopgp.core.mapped_stream import MappedFileStream
 from biopgp.core.opaque_volume_header import (
     BANK_COUNT,
     OPAQUE_HEADER_RESERVED_SIZE,
@@ -88,30 +89,38 @@ class OpaqueCoverBlockVolume:
     ) -> bytes:
         self._validate_range(block_address, block_count)
         authenticated_context = self._validate_context(context)
-        result = bytearray()
         with self._lock:
             self._ensure_open()
             self._stream.seek(self._slot_offset(block_address))
-            for offset in range(block_count):
-                slot = self._read_exact(self._stream, PHYSICAL_SLOT_SIZE)
-                block_index = block_address + offset
-                try:
-                    result.extend(
-                        bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
-                            slot[NONCE_SIZE:],
-                            self._block_aad(
-                                self.volume_id,
-                                block_index,
-                                authenticated_context,
-                            ),
-                            slot[:NONCE_SIZE],
-                            bytes(self._volume_key),
-                        )
+            slots = self._read_exact(
+                self._stream,
+                block_count * PHYSICAL_SLOT_SIZE,
+            )
+            volume_key = bytes(self._volume_key)
+            volume_id = self._volume_id
+
+        result = bytearray()
+        for offset in range(block_count):
+            slot_start = offset * PHYSICAL_SLOT_SIZE
+            slot = slots[slot_start : slot_start + PHYSICAL_SLOT_SIZE]
+            block_index = block_address + offset
+            try:
+                result.extend(
+                    bindings.crypto_aead_xchacha20poly1305_ietf_decrypt(
+                        slot[NONCE_SIZE:],
+                        self._block_aad(
+                            volume_id,
+                            block_index,
+                            authenticated_context,
+                        ),
+                        slot[:NONCE_SIZE],
+                        volume_key,
                     )
-                except exceptions.CryptoError as error:
-                    raise BlockIntegrityError(
-                        f"Нарушена целостность блока {block_index}."
-                    ) from error
+                )
+            except exceptions.CryptoError as error:
+                raise BlockIntegrityError(
+                    f"Нарушена целостность блока {block_index}."
+                ) from error
         return bytes(result)
 
     def write_blocks(
@@ -129,17 +138,29 @@ class OpaqueCoverBlockVolume:
         block_count = len(payload) // LOGICAL_BLOCK_SIZE
         self._validate_range(block_address, block_count)
         authenticated_context = self._validate_context(context)
+        with self._lock:
+            self._ensure_open()
+            volume_key = bytes(self._volume_key)
+            volume_id = self._volume_id
+
         encrypted = bytearray()
+        nonces = utils.random(block_count * NONCE_SIZE)
         for offset in range(block_count):
             start = offset * LOGICAL_BLOCK_SIZE
             block_index = block_address + offset
+            nonce_start = offset * NONCE_SIZE
+            nonce = nonces[nonce_start : nonce_start + NONCE_SIZE]
+            encrypted.extend(nonce)
             encrypted.extend(
-                self._encrypt_block(
+                bindings.crypto_aead_xchacha20poly1305_ietf_encrypt(
                     payload[start : start + LOGICAL_BLOCK_SIZE],
-                    block_index,
-                    self.volume_id,
-                    bytes(self._volume_key),
-                    authenticated_context,
+                    self._block_aad(
+                        volume_id,
+                        block_index,
+                        authenticated_context,
+                    ),
+                    nonce,
+                    volume_key,
                 )
             )
         with self._lock:
@@ -152,6 +173,27 @@ class OpaqueCoverBlockVolume:
             self._ensure_open()
             self._stream.flush()
             os.fsync(self._stream.fileno())
+
+    def enable_mapped_io(self) -> bool:
+        """Use the OS page cache for small encrypted WinSpd block requests."""
+
+        with self._lock:
+            self._ensure_open()
+            if isinstance(self._stream, MappedFileStream):
+                return True
+            try:
+                mapped = MappedFileStream(self.path)
+            except (OSError, ValueError, OverflowError):
+                return False
+            try:
+                self._stream.flush()
+                os.fsync(self._stream.fileno())
+                self._stream.close()
+            except Exception:
+                mapped.close()
+                raise
+            self._stream = mapped
+            return True
 
     def resize(self, logical_capacity: int, **_: object) -> None:
         del logical_capacity
@@ -312,6 +354,10 @@ class OpaqueVolumeSession:
     def flush(self) -> None:
         self._ensure_open()
         self._selected.flush()
+
+    def enable_mapped_io(self) -> bool:
+        self._ensure_open()
+        return self._cover.enable_mapped_io()
 
     def resize(self, logical_capacity: int, **kwargs: object) -> None:
         self._ensure_open()
