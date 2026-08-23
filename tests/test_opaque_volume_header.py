@@ -186,3 +186,15 @@ def test_hidden_header_must_reference_the_authenticated_cover(
             HIDDEN_PASSWORD,
             invalid,
         )
+
+
+@pytest.mark.parametrize("header_factory", [outer_header, hidden_header])
+def test_unlocked_header_round_trips_only_inside_protected_transfer(
+    header_factory,
+) -> None:
+    header = header_factory()
+
+    payload = OpaqueVolumeHeaderStore.serialize_for_protected_transfer(header)
+    restored = OpaqueVolumeHeaderStore.deserialize_protected_transfer(payload)
+
+    assert restored == header

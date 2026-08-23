@@ -26,6 +26,7 @@ from biopgp.core.hidden_volume import (
     BlockVolume,
     HiddenBlockVolume,
     HiddenRegionProtectedVolume,
+    HiddenVolumeDescriptor,
 )
 from biopgp.core.opaque_volume_header import (
     BANK_COUNT,
@@ -458,14 +459,40 @@ class OpaqueBlockVolume:
         if not source.is_file():
             raise InvalidBlockVolumeError("Файл зашифрованного диска не найден.")
         store = header_store or OpaqueVolumeHeaderStore()
+        with source.open("rb") as header_stream:
+            header = store.unlock(header_stream, password, progress=progress)
+        return cls.open_with_header(source, header)
+
+    @classmethod
+    def open_with_header(
+        cls,
+        path: Path,
+        header: OpaqueVolumeHeader,
+        *,
+        protected_hidden_descriptor: HiddenVolumeDescriptor | None = None,
+    ) -> OpaqueVolumeSession:
+        """Open already-authenticated material without retaining its password."""
+
+        source = Path(path).expanduser().resolve()
+        if not source.is_file():
+            raise InvalidBlockVolumeError("Файл зашифрованного диска не найден.")
         stream = source.open("r+b")
         cover: OpaqueCoverBlockVolume | None = None
         try:
-            header = store.unlock(stream, password, progress=progress)
             cls._validate_physical_size(source, header.cover_block_count)
             cover = OpaqueCoverBlockVolume(source, stream, header)
             if header.role == "outer":
-                return OpaqueVolumeSession("outer", cover, cover)
+                selected: BlockVolume = cover
+                if protected_hidden_descriptor is not None:
+                    selected = HiddenRegionProtectedVolume(
+                        cover,
+                        protected_hidden_descriptor,
+                    )
+                return OpaqueVolumeSession("outer", cover, selected)
+            if protected_hidden_descriptor is not None:
+                raise ValidationError(
+                    "Защита скрытой области применяется только к внешнему диску."
+                )
             if header.hidden_key is None or header.hidden_descriptor is None:
                 raise InvalidBlockVolumeError("Скрытый заголовок диска повреждён.")
             hidden = HiddenBlockVolume.open(

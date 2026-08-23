@@ -16,9 +16,12 @@ from biopgp.core.disk_control import (
 )
 from biopgp.core.disk_host import WinSpdHostManager
 from biopgp.core.errors import MountUnavailableError
+from biopgp.core.opaque_volume_header import OpaqueVolumeHeaderStore
 from biopgp.core.winspd import (
+    HiddenWindowsVolumeHeaders,
     MIN_WINDOWS_DISK_CAPACITY,
     WinSpdLibrary,
+    create_hidden_windows_block_volume,
     create_windows_block_volume,
     open_windows_block_volume,
     resize_windows_block_volume,
@@ -713,6 +716,9 @@ class WindowsSystemDiskManager:
                 file_system=file_system,
                 label=label,
             )
+            self._verify_host_health(
+                "Системный диск остановился во время форматирования."
+            )
             if progress is not None:
                 progress(95, "Форматирование системного диска завершено")
         except Exception:
@@ -743,6 +749,180 @@ class WindowsSystemDiskManager:
         if progress is not None:
             progress(100, "Системный диск готов")
         return drive
+
+    def create_hidden_and_mount(
+        self,
+        container_path: Path,
+        outer_password: str,
+        hidden_password: str,
+        *,
+        outer_capacity: int,
+        hidden_capacity: int,
+        outer_label: str,
+        hidden_label: str,
+        file_system: str = "NTFS",
+        overwrite: bool = False,
+        context_menu_labels: tuple[str, ...] | None = None,
+        progress: Callable[[int, str], None] | None = None,
+        header_store: OpaqueVolumeHeaderStore | None = None,
+    ) -> str:
+        """Create, format, and leave the hidden v4 projection mounted."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый системный диск Clever PGP."
+            )
+        library = WinSpdLibrary()
+        if progress is not None:
+            progress(2, "Проверка параметров скрытого диска")
+        headers: HiddenWindowsVolumeHeaders = create_hidden_windows_block_volume(
+            container_path,
+            outer_password,
+            hidden_password,
+            outer_capacity=outer_capacity,
+            hidden_capacity=hidden_capacity,
+            library=library,
+            outer_label=outer_label,
+            hidden_label=hidden_label,
+            overwrite=overwrite,
+            header_store=header_store,
+            progress=(
+                None
+                if progress is None
+                else lambda completed, total: progress(
+                    3 + round(completed / total * 49),
+                    "Подготовка внешнего и скрытого дисков",
+                )
+            ),
+        )
+        target = Path(container_path).expanduser().resolve()
+        active_disk: WindowsDiskInfo | None = None
+        try:
+            outer_before = list_windows_disks()
+            self._process_manager.start(
+                target,
+                None,
+                device_name=None,
+                opaque_header=headers.outer,
+                protection_header=headers.hidden,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda value, message: progress(
+                        52 + round(value * 0.1),
+                        message,
+                    )
+                ),
+            )
+            active_disk = wait_for_new_cleverpgp_disk(
+                outer_before,
+                expected_size=outer_capacity,
+            )
+            endpoint = getattr(self._process_manager, "control_endpoint", None)
+            if endpoint is None:
+                raise MountUnavailableError(
+                    "Фоновый процесс не предоставил защищённый канал форматирования."
+                )
+            if progress is not None:
+                progress(64, "Форматирование внешнего диска с защитой")
+            from biopgp.core.windows_format import run_elevated_windows_format
+
+            run_elevated_windows_format(
+                endpoint,
+                active_disk,
+                file_system=file_system,
+                label=outer_label,
+            )
+            self._verify_host_health(
+                "Защита скрытой области остановила форматирование внешнего диска."
+            )
+            if progress is not None:
+                progress(74, "Отключение внешнего диска")
+            outer_disk_number = active_disk.number
+            self._process_manager.stop()
+            wait_for_disk_removal(outer_disk_number)
+            active_disk = None
+
+            hidden_before = list_windows_disks()
+            self._process_manager.start(
+                target,
+                None,
+                device_name=None,
+                opaque_header=headers.hidden,
+                protection_header=None,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda value, message: progress(
+                        76 + round(value * 0.1),
+                        message,
+                    )
+                ),
+            )
+            active_disk = wait_for_new_cleverpgp_disk(
+                hidden_before,
+                expected_size=hidden_capacity,
+            )
+            endpoint = getattr(self._process_manager, "control_endpoint", None)
+            if endpoint is None:
+                raise MountUnavailableError(
+                    "Фоновый процесс скрытого диска не предоставил канал форматирования."
+                )
+            if progress is not None:
+                progress(88, "Форматирование скрытого диска")
+            drive = run_elevated_windows_format(
+                endpoint,
+                active_disk,
+                file_system=file_system,
+                label=hidden_label,
+            )
+            self._verify_host_health(
+                "Скрытый диск остановился во время форматирования."
+            )
+            if progress is not None:
+                progress(97, "Публикация скрытого диска")
+            control_record = self._publish_control_record(
+                drive,
+                container_path=target,
+                context_menu_labels=context_menu_labels,
+            )
+        except Exception:
+            try:
+                self._process_manager.stop()
+                if active_disk is not None:
+                    wait_for_disk_removal(active_disk.number)
+            except Exception as cleanup_error:
+                raise MountUnavailableError(
+                    "Создание не завершено, но диск не удалось безопасно "
+                    "отключить. Образ сохранён для предотвращения потери данных."
+                ) from cleanup_error
+            try:
+                target.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise MountUnavailableError(
+                    "Создание не завершено, но незавершённый образ не удалось "
+                    "удалить. Закройте использующие его процессы."
+                ) from cleanup_error
+            raise
+
+        self._disk = active_disk
+        self._drive = drive
+        self._container_path = target
+        self._control_record = control_record
+        self._context_menu_labels = context_menu_labels
+        if progress is not None:
+            progress(100, "Скрытый системный диск готов")
+        return drive
+
+    def _verify_host_health(self, message: str) -> None:
+        verifier = getattr(self._process_manager, "verify_healthy", None)
+        try:
+            if callable(verifier):
+                verifier(timeout=1.0)
+            elif not self._process_manager.running:
+                raise MountUnavailableError(message)
+        except MountUnavailableError as error:
+            raise MountUnavailableError(message) from error
 
     def mount(
         self,

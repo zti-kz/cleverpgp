@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
 
@@ -375,6 +376,203 @@ def test_system_manager_removes_unformatted_image_after_uac_failure(
 
     assert process_manager.stopped
     assert not container_path.exists()
+
+
+def test_system_manager_formats_outer_with_protection_then_hidden(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "new-hidden-system.cpgv"
+    outer_size = 96 * 1024 * 1024
+    hidden_size = 32 * 1024 * 1024
+    outer_disk = disk(7, "CleverPGP", outer_size)
+    hidden_disk = disk(8, "CleverPGP", hidden_size)
+    endpoint = DiskControlEndpoint(b"v" * 16, 23456, b"t" * 32)
+
+    class HiddenProcessManager(FakeProcessManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.control_endpoint = endpoint
+            self.process_id = 4321
+            self.starts: list[dict[str, object]] = []
+
+        def start(
+            self,
+            container_path: Path,
+            master_key: bytes | None,
+            **kwargs: object,
+        ) -> None:
+            self.starts.append(
+                {
+                    "path": container_path,
+                    "master_key": master_key,
+                    **kwargs,
+                }
+            )
+            self.running = True
+
+    process_manager = HiddenProcessManager()
+    headers = SimpleNamespace(outer=object(), hidden=object())
+
+    def create_hidden(path: Path, *_args: object, **_kwargs: object):
+        path.write_bytes(b"new hidden encrypted disk")
+        return headers
+
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process_manager,
+        recover_existing=False,
+    )
+    with (
+        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch(
+            "biopgp.core.windows_storage.create_hidden_windows_block_volume",
+            side_effect=create_hidden,
+        ),
+        patch(
+            "biopgp.core.windows_storage.list_windows_disks",
+            side_effect=[[], []],
+        ),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            side_effect=[outer_disk, hidden_disk],
+        ),
+        patch("biopgp.core.windows_storage.wait_for_disk_removal") as removed,
+        patch(
+            "biopgp.core.windows_format.run_elevated_windows_format",
+            side_effect=["Y:", "Z:"],
+        ) as formatter,
+        patch.object(manager, "_publish_control_record", return_value=object()),
+    ):
+        drive = manager.create_hidden_and_mount(
+            container_path,
+            "outer correct horse battery staple",
+            "hidden correct horse battery staple",
+            outer_capacity=outer_size,
+            hidden_capacity=hidden_size,
+            outer_label="Outer",
+            hidden_label="Hidden",
+        )
+
+    assert drive == "Z:"
+    assert len(process_manager.starts) == 2
+    assert process_manager.starts[0]["master_key"] is None
+    assert process_manager.starts[0]["opaque_header"] is headers.outer
+    assert process_manager.starts[0]["protection_header"] is headers.hidden
+    assert process_manager.starts[1]["opaque_header"] is headers.hidden
+    assert process_manager.starts[1]["protection_header"] is None
+    assert formatter.call_count == 2
+    removed.assert_called_once_with(outer_disk.number)
+    assert manager.mounted_drive == "Z:"
+
+
+def test_hidden_system_creation_failure_removes_incomplete_image(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "failed-hidden-system.cpgv"
+    outer_size = 96 * 1024 * 1024
+    hidden_size = 32 * 1024 * 1024
+    outer_disk = disk(7, "CleverPGP", outer_size)
+    endpoint = DiskControlEndpoint(b"v" * 16, 23456, b"t" * 32)
+    process_manager = FakeProcessManager()
+    process_manager.control_endpoint = endpoint
+    headers = SimpleNamespace(outer=object(), hidden=object())
+
+    def create_hidden(path: Path, *_args: object, **_kwargs: object):
+        path.write_bytes(b"incomplete hidden encrypted disk")
+        return headers
+
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process_manager,
+        recover_existing=False,
+    )
+    with (
+        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch(
+            "biopgp.core.windows_storage.create_hidden_windows_block_volume",
+            side_effect=create_hidden,
+        ),
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=outer_disk,
+        ),
+        patch("biopgp.core.windows_storage.wait_for_disk_removal"),
+        patch(
+            "biopgp.core.windows_format.run_elevated_windows_format",
+            side_effect=MountUnavailableError("format failed"),
+        ),
+    ):
+        with pytest.raises(MountUnavailableError, match="format failed"):
+            manager.create_hidden_and_mount(
+                container_path,
+                "outer correct horse battery staple",
+                "hidden correct horse battery staple",
+                outer_capacity=outer_size,
+                hidden_capacity=hidden_size,
+                outer_label="Outer",
+                hidden_label="Hidden",
+            )
+
+    assert process_manager.stopped
+    assert not container_path.exists()
+
+
+def test_hidden_creation_preserves_image_if_safe_unmount_fails(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "still-mounted-hidden-system.cpgv"
+    outer_size = 96 * 1024 * 1024
+    hidden_size = 32 * 1024 * 1024
+    outer_disk = disk(7, "CleverPGP", outer_size)
+
+    class UnstoppableProcessManager(FakeProcessManager):
+        control_endpoint = DiskControlEndpoint(
+            b"v" * 16,
+            23456,
+            b"t" * 32,
+        )
+
+        def stop(self) -> None:
+            raise MountUnavailableError("still mounted")
+
+    process_manager = UnstoppableProcessManager()
+    headers = SimpleNamespace(outer=object(), hidden=object())
+
+    def create_hidden(path: Path, *_args: object, **_kwargs: object):
+        path.write_bytes(b"mounted incomplete image")
+        return headers
+
+    manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
+        process_manager,
+        recover_existing=False,
+    )
+    with (
+        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch(
+            "biopgp.core.windows_storage.create_hidden_windows_block_volume",
+            side_effect=create_hidden,
+        ),
+        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch(
+            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            return_value=outer_disk,
+        ),
+        patch(
+            "biopgp.core.windows_format.run_elevated_windows_format",
+            side_effect=MountUnavailableError("format failed"),
+        ),
+    ):
+        with pytest.raises(MountUnavailableError, match="Образ сохранён"):
+            manager.create_hidden_and_mount(
+                container_path,
+                "outer correct horse battery staple",
+                "hidden correct horse battery staple",
+                outer_capacity=outer_size,
+                hidden_capacity=hidden_size,
+                outer_label="Outer",
+                hidden_label="Hidden",
+            )
+
+    assert container_path.read_bytes() == b"mounted incomplete image"
 
 
 def test_unicode_volume_label_is_encoded_not_interpolated() -> None:

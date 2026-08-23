@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import os
 import secrets
+import struct
 import subprocess
 import sys
 import time
@@ -12,13 +14,22 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from biopgp.config import app_data_directory
+from biopgp.core.block_volume import BlockVolumeError
 from biopgp.core.disk_control import (
     DiskControlEndpoint,
     DiskControlServer,
     send_disk_control_command,
 )
-from biopgp.core.errors import MountUnavailableError
+from biopgp.core.errors import MountUnavailableError, ValidationError
+from biopgp.core.hidden_volume import HiddenVolumeDescriptor
+from biopgp.core.opaque_block_volume import OpaqueBlockVolume
+from biopgp.core.opaque_volume_header import (
+    PROTECTED_TRANSFER_SIZE,
+    OpaqueVolumeHeader,
+    OpaqueVolumeHeaderStore,
+)
 from biopgp.core.winspd import (
+    WINDOWS_BLOCK_STORAGE_FORMAT,
     WinSpdBlockDevice,
     WinSpdError,
     WinSpdLibrary,
@@ -26,9 +37,14 @@ from biopgp.core.winspd import (
 )
 from biopgp.core.windows_shell import application_command_prefix
 
-HOST_PROTOCOL_VERSION = 1
+HOST_PROTOCOL_VERSION = 2
+LEGACY_HOST_PROTOCOL_VERSION = 1
 _REQUEST_ENTROPY_PREFIX = b"Clever PGP detached disk host request v1\0"
 _RESPONSE_ENTROPY_PREFIX = b"Clever PGP detached disk host response v1\0"
+_OPAQUE_ACCESS_PREFIX = struct.Struct(">8sB")
+_OPAQUE_ACCESS_MAGIC = b"CPGPHST1"
+_ACCESS_MODE_LEGACY = "legacy_master_key"
+_ACCESS_MODE_OPAQUE = "opaque_header"
 
 
 class HostSecretProtector(Protocol):
@@ -52,6 +68,8 @@ class DecodedDiskHostRequest:
     master_key: bytes
     device_name: str | None
     dll_path: Path | None
+    opaque_header: OpaqueVolumeHeader | None = None
+    protection_header: OpaqueVolumeHeader | None = None
 
 
 class DiskHostExchange:
@@ -72,25 +90,41 @@ class DiskHostExchange:
     def create_request(
         self,
         container_path: Path,
-        master_key: bytes,
+        master_key: bytes | None,
         *,
         device_name: str | None,
         dll_path: Path | None,
+        opaque_header: OpaqueVolumeHeader | None = None,
+        protection_header: OpaqueVolumeHeader | None = None,
     ) -> DiskHostRequest:
-        if not master_key:
-            raise ValueError("Disk host master key must not be empty.")
+        if opaque_header is None:
+            if not master_key or protection_header is not None:
+                raise ValueError("Disk host master key must not be empty.")
+            access_mode = _ACCESS_MODE_LEGACY
+            access_material = bytes(master_key)
+        else:
+            if master_key not in (None, b""):
+                raise ValueError("Only one disk host access mode can be used.")
+            access_mode = _ACCESS_MODE_OPAQUE
+            access_material = _encode_opaque_access(
+                opaque_header,
+                protection_header,
+            )
         request_id = secrets.token_hex(16)
         request_path = self.directory / f"request-{request_id}.json"
         response_path = self.directory / f"response-{request_id}.json"
-        protected_key = self._secret_protector().protect(
-            master_key,
+        protected_access = self._secret_protector().protect(
+            access_material,
             _request_entropy(request_id),
         )
         payload = {
             "version": HOST_PROTOCOL_VERSION,
             "request_id": request_id,
             "container_path": str(Path(container_path).expanduser().resolve()),
-            "protected_master_key": base64.b64encode(protected_key).decode("ascii"),
+            "access_mode": access_mode,
+            "protected_access_material": base64.b64encode(
+                protected_access
+            ).decode("ascii"),
             "device_name": device_name,
             "dll_path": (
                 str(Path(dll_path).expanduser().resolve())
@@ -110,21 +144,35 @@ class DiskHostExchange:
             payload = json.loads(source.read_text(encoding="utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("Disk host request must be an object.")
-            if int(payload.get("version", -1)) != HOST_PROTOCOL_VERSION:
+            version = int(payload.get("version", -1))
+            if version not in (
+                LEGACY_HOST_PROTOCOL_VERSION,
+                HOST_PROTOCOL_VERSION,
+            ):
                 raise ValueError("Disk host request version is unsupported.")
             if str(payload.get("request_id")) != request_id:
                 raise ValueError("Disk host request identity does not match its path.")
             container_path = Path(str(payload["container_path"])).resolve()
-            protected_key = base64.b64decode(
-                str(payload["protected_master_key"]),
+            access_mode = (
+                _ACCESS_MODE_LEGACY
+                if version == LEGACY_HOST_PROTOCOL_VERSION
+                else str(payload.get("access_mode"))
+            )
+            protected_field = (
+                "protected_master_key"
+                if version == LEGACY_HOST_PROTOCOL_VERSION
+                else "protected_access_material"
+            )
+            protected_access = base64.b64decode(
+                str(payload[protected_field]),
                 validate=True,
             )
             device_value = payload.get("device_name")
             device_name = str(device_value) if device_value is not None else None
             dll_value = payload.get("dll_path")
             dll_path = Path(str(dll_value)).resolve() if dll_value else None
-            master_key = self._secret_protector().unprotect(
-                protected_key,
+            access_material = self._secret_protector().unprotect(
+                protected_access,
                 _request_entropy(request_id),
             )
         finally:
@@ -132,6 +180,19 @@ class DiskHostExchange:
                 source.unlink()
             except FileNotFoundError:
                 pass
+        if access_mode == _ACCESS_MODE_LEGACY:
+            if not access_material:
+                raise ValueError("Disk host master key is empty.")
+            master_key = access_material
+            opaque_header = None
+            protection_header = None
+        elif access_mode == _ACCESS_MODE_OPAQUE:
+            master_key = b""
+            opaque_header, protection_header = _decode_opaque_access(
+                access_material
+            )
+        else:
+            raise ValueError("Disk host access mode is unsupported.")
         return DecodedDiskHostRequest(
             request_id,
             response_path,
@@ -139,6 +200,8 @@ class DiskHostExchange:
             master_key,
             device_name,
             dll_path,
+            opaque_header,
+            protection_header,
         )
 
     def write_ready(
@@ -324,10 +387,12 @@ class WinSpdHostManager:
     def start(
         self,
         container_path: Path,
-        master_key: bytes,
+        master_key: bytes | None,
         *,
         device_name: str | None = None,
         dll_path: Path | None = None,
+        opaque_header: OpaqueVolumeHeader | None = None,
+        protection_header: OpaqueVolumeHeader | None = None,
         progress: Any = None,
         timeout: float = 20.0,
     ) -> str | None:
@@ -339,9 +404,11 @@ class WinSpdHostManager:
             progress(10, "Защита одноразового запроса диска")
         request = self._exchange.create_request(
             container_path,
-            bytes(master_key),
+            bytes(master_key) if master_key is not None else None,
             device_name=device_name,
             dll_path=dll_path,
+            opaque_header=opaque_header,
+            protection_header=protection_header,
         )
         command = [*self._command_prefix, "--winspd-host", str(request.request_path)]
         creation_flags = 0
@@ -411,6 +478,14 @@ class WinSpdHostManager:
             "Повторите попытку после завершения операций с файлами."
         )
 
+    def verify_healthy(self, *, timeout: float = 1.0) -> None:
+        endpoint = self._control_endpoint
+        if endpoint is None:
+            raise MountUnavailableError(
+                "Системный диск не предоставил канал проверки состояния."
+            )
+        send_disk_control_command(endpoint, "ping", timeout=timeout)
+
     def _clear_state(self) -> None:
         self._process = None
         self._control_endpoint = None
@@ -428,7 +503,24 @@ def run_disk_host(request_path: Path) -> int:
     server: DiskControlServer | None = None
     try:
         request = exchange.consume_request(request_path)
-        volume = open_windows_block_volume(request.container_path, request.master_key)
+        if request.opaque_header is None:
+            volume = open_windows_block_volume(
+                request.container_path,
+                request.master_key,
+            )
+        else:
+            protected_descriptor = _validated_protection_descriptor(request)
+            volume = OpaqueBlockVolume.open_with_header(
+                request.container_path,
+                request.opaque_header,
+                protected_hidden_descriptor=protected_descriptor,
+            )
+            if volume.storage_format != WINDOWS_BLOCK_STORAGE_FORMAT:
+                volume.close()
+                volume = None
+                raise WinSpdError(
+                    "Это не системный зашифрованный диск Clever PGP."
+                )
         server = DiskControlServer()
         device = WinSpdBlockDevice(
             volume,
@@ -447,12 +539,22 @@ def run_disk_host(request_path: Path) -> int:
             request.dll_path,
         )
         while True:
-            if server.poll(timeout=0.2) == "stop":
+            if server.poll(
+                timeout=0.2,
+                accept=lambda: device.last_error is None,
+            ) == "stop":
                 break
             if device.last_error is not None:
                 break
         return 0
-    except (OSError, ValueError, WinSpdError, MountUnavailableError) as error:
+    except (
+        OSError,
+        ValueError,
+        BlockVolumeError,
+        ValidationError,
+        WinSpdError,
+        MountUnavailableError,
+    ) as error:
         exchange.write_error(response_path, request_id, str(error))
         return 1
     finally:
@@ -491,3 +593,78 @@ def _request_entropy(request_id: str) -> bytes:
 
 def _response_entropy(request_id: str) -> bytes:
     return _RESPONSE_ENTROPY_PREFIX + bytes.fromhex(request_id)
+
+
+def _encode_opaque_access(
+    selected_header: OpaqueVolumeHeader,
+    protection_header: OpaqueVolumeHeader | None,
+) -> bytes:
+    if protection_header is not None:
+        _validate_opaque_protection_headers(selected_header, protection_header)
+    headers = [selected_header]
+    if protection_header is not None:
+        headers.append(protection_header)
+    return _OPAQUE_ACCESS_PREFIX.pack(_OPAQUE_ACCESS_MAGIC, len(headers)) + b"".join(
+        OpaqueVolumeHeaderStore.serialize_for_protected_transfer(header)
+        for header in headers
+    )
+
+
+def _decode_opaque_access(
+    payload: bytes,
+) -> tuple[OpaqueVolumeHeader, OpaqueVolumeHeader | None]:
+    if len(payload) < _OPAQUE_ACCESS_PREFIX.size:
+        raise ValueError("Opaque disk host material is truncated.")
+    magic, count = _OPAQUE_ACCESS_PREFIX.unpack(
+        payload[: _OPAQUE_ACCESS_PREFIX.size]
+    )
+    if magic != _OPAQUE_ACCESS_MAGIC or count not in (1, 2):
+        raise ValueError("Opaque disk host material is invalid.")
+    expected_size = _OPAQUE_ACCESS_PREFIX.size + count * PROTECTED_TRANSFER_SIZE
+    if len(payload) != expected_size:
+        raise ValueError("Opaque disk host material has an invalid length.")
+    headers: list[OpaqueVolumeHeader] = []
+    cursor = _OPAQUE_ACCESS_PREFIX.size
+    for _ in range(count):
+        headers.append(
+            OpaqueVolumeHeaderStore.deserialize_protected_transfer(
+                payload[cursor : cursor + PROTECTED_TRANSFER_SIZE]
+            )
+        )
+        cursor += PROTECTED_TRANSFER_SIZE
+    selected = headers[0]
+    protection = headers[1] if len(headers) == 2 else None
+    if protection is not None:
+        _validate_opaque_protection_headers(selected, protection)
+    return selected, protection
+
+
+def _validate_opaque_protection_headers(
+    selected_header: OpaqueVolumeHeader,
+    protection_header: OpaqueVolumeHeader,
+) -> None:
+    if (
+        selected_header.role != "outer"
+        or protection_header.role != "hidden"
+        or protection_header.hidden_descriptor is None
+        or selected_header.cover_volume_id != protection_header.cover_volume_id
+        or selected_header.cover_block_count != protection_header.cover_block_count
+        or not hmac.compare_digest(
+            selected_header.cover_key,
+            protection_header.cover_key,
+        )
+    ):
+        raise ValueError("Hidden protection material does not match the outer disk.")
+
+
+def _validated_protection_descriptor(
+    request: DecodedDiskHostRequest,
+) -> HiddenVolumeDescriptor | None:
+    protection = request.protection_header
+    if protection is None:
+        return None
+    selected = request.opaque_header
+    if selected is None:
+        raise ValueError("Opaque protection requires an opaque selected header.")
+    _validate_opaque_protection_headers(selected, protection)
+    return protection.hidden_descriptor

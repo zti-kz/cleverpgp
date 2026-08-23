@@ -68,6 +68,30 @@ def test_control_rejects_an_invalid_token() -> None:
     assert not thread.is_alive()
 
 
+def test_control_rejects_ping_after_disk_error_but_still_accepts_stop() -> None:
+    token = b"t" * 32
+    server = DiskControlServer(token=token)
+    endpoint = DiskControlEndpoint(b"v" * 16, server.port, token)
+    commands: list[str | None] = []
+
+    def serve() -> None:
+        commands.append(server.poll(timeout=1, accept=lambda: False))
+        commands.append(server.poll(timeout=1, accept=lambda: False))
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    try:
+        with pytest.raises(MountUnavailableError):
+            send_disk_control_command(endpoint, "ping")
+        send_disk_control_command(endpoint, "stop")
+        thread.join(3)
+    finally:
+        server.close()
+
+    assert not thread.is_alive()
+    assert commands == [None, "stop"]
+
+
 def test_control_store_protects_token_and_finds_drive(tmp_path: Path) -> None:
     token = b"s" * 32
     endpoint = DiskControlEndpoint(b"v" * 16, 23456, token)

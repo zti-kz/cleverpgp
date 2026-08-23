@@ -8,6 +8,7 @@ import pytest
 from nacl import pwhash, secret, utils
 
 from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
+from biopgp.core.errors import OutputExistsError
 from biopgp.core.opaque_block_volume import OpaqueBlockVolume
 from biopgp.core.opaque_volume_header import (
     HeaderKdfParameters,
@@ -23,6 +24,7 @@ from biopgp.core.winspd import (
     WinSpdBlockDevice,
     WinSpdError,
     WINDOWS_BLOCK_STORAGE_FORMAT,
+    create_hidden_windows_block_volume,
     initialize_windows_partition,
     open_windows_block_volume,
     resize_windows_block_volume,
@@ -248,3 +250,98 @@ def test_windows_backend_can_grow_closed_container(tmp_path: Path) -> None:
     with open_windows_block_volume(path, key) as reopened:
         assert reopened.logical_capacity == 40 * 1024 * 1024
         assert reopened.read_blocks(0, 1) == marker
+
+
+def test_hidden_windows_image_prepares_both_partition_views(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "hidden-windows.cpgv"
+    store = OpaqueVolumeHeaderStore(
+        HeaderKdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        )
+    )
+    library = PartitionLibrary()
+    progress: list[tuple[int, int]] = []
+
+    headers = create_hidden_windows_block_volume(
+        path,
+        "outer correct horse battery staple",
+        "hidden correct horse battery staple",
+        outer_capacity=66 * 1024 * 1024,
+        hidden_capacity=32 * 1024 * 1024,
+        library=library,  # type: ignore[arg-type]
+        header_store=store,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert headers.outer.role == "outer"
+    assert headers.hidden.role == "hidden"
+    assert progress[-1] == (100, 100)
+    with OpaqueBlockVolume.open_with_header(
+        path,
+        headers.outer,
+        protected_hidden_descriptor=headers.hidden.hidden_descriptor,
+    ) as outer:
+        assert outer.read_blocks(0, 1)[510:512] == b"\x55\xaa"
+        assert not outer.damage_prevented
+    with OpaqueBlockVolume.open_with_header(path, headers.hidden) as hidden:
+        assert hidden.read_blocks(0, 1)[510:512] == b"\x55\xaa"
+
+
+def test_hidden_windows_image_is_removed_when_partition_creation_fails(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "failed-hidden-windows.cpgv"
+    store = OpaqueVolumeHeaderStore(
+        HeaderKdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        )
+    )
+
+    class FailingPartitionLibrary(PartitionLibrary):
+        def define_partition_table(self, partitions: list[Partition]) -> bytes:
+            del partitions
+            raise RuntimeError("partition failure")
+
+    with pytest.raises(RuntimeError, match="partition failure"):
+        create_hidden_windows_block_volume(
+            path,
+            "outer correct horse battery staple",
+            "hidden correct horse battery staple",
+            outer_capacity=66 * 1024 * 1024,
+            hidden_capacity=32 * 1024 * 1024,
+            library=FailingPartitionLibrary(),  # type: ignore[arg-type]
+            header_store=store,
+        )
+
+    assert not path.exists()
+
+
+def test_hidden_windows_creation_never_deletes_existing_container(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "existing-hidden-windows.cpgv"
+    original = b"existing user container"
+    path.write_bytes(original)
+    store = OpaqueVolumeHeaderStore(
+        HeaderKdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        )
+    )
+
+    with pytest.raises(OutputExistsError):
+        create_hidden_windows_block_volume(
+            path,
+            "outer correct horse battery staple",
+            "hidden correct horse battery staple",
+            outer_capacity=66 * 1024 * 1024,
+            hidden_capacity=32 * 1024 * 1024,
+            library=PartitionLibrary(),  # type: ignore[arg-type]
+            header_store=store,
+        )
+
+    assert path.read_bytes() == original

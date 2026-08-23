@@ -27,6 +27,7 @@ SALT_SIZE = pwhash.argon2id.SALTBYTES
 NONCE_SIZE = bindings.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
 TAG_SIZE = bindings.crypto_aead_xchacha20poly1305_ietf_ABYTES
 BANK_PLAINTEXT_SIZE = BANK_SIZE - SALT_SIZE - NONCE_SIZE - TAG_SIZE
+PROTECTED_TRANSFER_SIZE = 1 + BANK_PLAINTEXT_SIZE
 PAYLOAD_PREFIX = struct.Struct(">8sBQI")
 MAXIMUM_PASSWORD_BYTES = 1024
 MINIMUM_PASSWORD_LENGTH = 12
@@ -231,6 +232,26 @@ class OpaqueVolumeHeaderStore:
         if progress is not None:
             progress(total, total)
         return result
+
+    @classmethod
+    def serialize_for_protected_transfer(
+        cls,
+        header: OpaqueVolumeHeader,
+    ) -> bytes:
+        """Serialize unlocked material only for an authenticated OS wrapper."""
+
+        role_index = 0 if header.role == "outer" else 1
+        return bytes([role_index]) + cls._encode_payload(header)
+
+    @classmethod
+    def deserialize_protected_transfer(
+        cls,
+        payload: bytes,
+    ) -> OpaqueVolumeHeader:
+        if len(payload) != PROTECTED_TRANSFER_SIZE or payload[0] not in (0, 1):
+            raise ValidationError("Некорректный материал запуска диска.")
+        role: VolumeRole = "outer" if payload[0] == 0 else "hidden"
+        return cls._decode_payload(payload[1:], expected_role=role)
 
     def _unlock_role(
         self,
@@ -555,6 +576,7 @@ __all__ = [
     "HeaderKdfParameters",
     "OPAQUE_FORMAT_VERSION",
     "OPAQUE_HEADER_RESERVED_SIZE",
+    "PROTECTED_TRANSFER_SIZE",
     "OpaqueVolumeHeader",
     "OpaqueVolumeHeaderStore",
     "ROLE_AREA_SIZE",

@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -19,6 +20,12 @@ from biopgp.core.block_volume import (
 )
 from biopgp.core.disk_control import DiskControlEndpoint, DiskControlServer
 from biopgp.core.errors import MountUnavailableError, ValidationError
+from biopgp.core.hidden_volume import HiddenBlockVolume
+from biopgp.core.opaque_block_volume import OpaqueBlockVolume
+from biopgp.core.opaque_volume_header import (
+    OpaqueVolumeHeader,
+    OpaqueVolumeHeaderStore,
+)
 
 ERROR_SUCCESS = 0
 SCSISTAT_GOOD = 0
@@ -61,6 +68,12 @@ class WinSpdVolume(Protocol):
 
 class WinSpdError(RuntimeError):
     """WinSpd could not expose or service the encrypted block device."""
+
+
+@dataclass(frozen=True, slots=True)
+class HiddenWindowsVolumeHeaders:
+    outer: OpaqueVolumeHeader
+    hidden: OpaqueVolumeHeader
 
 
 class StorageUnitParams(ctypes.Structure):
@@ -320,6 +333,125 @@ def create_windows_block_volume(
     except Exception:
         volume.close()
         Path(path).expanduser().resolve().unlink(missing_ok=True)
+        raise
+
+
+def create_hidden_windows_block_volume(
+    path: Path,
+    outer_password: str,
+    hidden_password: str,
+    *,
+    outer_capacity: int,
+    hidden_capacity: int,
+    library: WinSpdLibrary,
+    outer_label: str = "Clever PGP",
+    hidden_label: str = "Clever PGP Hidden",
+    overwrite: bool = False,
+    header_store: OpaqueVolumeHeaderStore | None = None,
+    progress: Callable[[int, int], None] | None = None,
+) -> HiddenWindowsVolumeHeaders:
+    """Prepare both v4 partition views before either filesystem is formatted."""
+
+    if outer_capacity < MIN_WINDOWS_DISK_CAPACITY:
+        raise ValidationError(
+            "Внешний системный диск должен быть не меньше 32 МБ."
+        )
+    if hidden_capacity < MIN_WINDOWS_DISK_CAPACITY:
+        raise ValidationError(
+            "Скрытый системный диск должен быть не меньше 32 МБ."
+        )
+    store = header_store or OpaqueVolumeHeaderStore()
+    target = Path(path).expanduser().resolve()
+    outer = None
+    created = False
+    try:
+        outer = OpaqueBlockVolume.create_outer(
+            target,
+            outer_password,
+            logical_capacity=outer_capacity,
+            label=outer_label,
+            storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+            overwrite=overwrite,
+            header_store=store,
+            progress=(
+                None
+                if progress is None
+                else lambda completed, total: progress(
+                    round(completed / total * 45),
+                    100,
+                )
+            ),
+        )
+        created = True
+        cover_blocks = outer.block_count
+        outer.close()
+        outer = None
+        region_blocks = HiddenBlockVolume.required_region_blocks(hidden_capacity)
+        region_start = cover_blocks - region_blocks
+        minimum_outer_blocks = MIN_WINDOWS_DISK_CAPACITY // LOGICAL_BLOCK_SIZE
+        if region_start < minimum_outer_blocks:
+            raise ValidationError(
+                "После размещения скрытого диска внешнему диску должно оставаться "
+                "не менее 32 МБ."
+            )
+
+        OpaqueBlockVolume.add_hidden_in_verified_free_region(
+            target,
+            outer_password,
+            hidden_password,
+            logical_capacity=hidden_capacity,
+            region_start_block=region_start,
+            label=hidden_label,
+            storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+            header_store=store,
+            progress=(
+                None
+                if progress is None
+                else lambda completed, total: progress(
+                    45 + round(completed / total * 35),
+                    100,
+                )
+            ),
+        )
+        with target.open("rb") as stream:
+            outer_header = store.unlock(stream, outer_password)
+            hidden_header = store.unlock(stream, hidden_password)
+        if (
+            outer_header.role != "outer"
+            or hidden_header.role != "hidden"
+            or hidden_header.hidden_descriptor is None
+        ):
+            raise BlockVolumeError(
+                "Не удалось подтвердить внешний и скрытый заголовки диска."
+            )
+        if progress is not None:
+            progress(84, 100)
+
+        with OpaqueBlockVolume.open_with_header(
+            target,
+            outer_header,
+            protected_hidden_descriptor=hidden_header.hidden_descriptor,
+        ) as protected_outer:
+            initialize_windows_partition(protected_outer, library)
+            if protected_outer.damage_prevented:
+                raise BlockVolumeError(
+                    "Таблица разделов попыталась затронуть скрытый диск."
+                )
+        if progress is not None:
+            progress(92, 100)
+        with OpaqueBlockVolume.open_with_header(
+            target,
+            hidden_header,
+        ) as hidden:
+            initialize_windows_partition(hidden, library)
+        if progress is not None:
+            progress(100, 100)
+        return HiddenWindowsVolumeHeaders(outer_header, hidden_header)
+    except Exception:
+        if outer is not None:
+            outer.close()
+        if created:
+            target.unlink(missing_ok=True)
         raise
 
 

@@ -8,7 +8,7 @@ import socket
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from biopgp.config import app_data_directory
 from biopgp.core.errors import BioPGPError, MountUnavailableError
@@ -73,7 +73,12 @@ class DiskControlServer:
         self.token = bytes(selected_token)
         self.port = int(server.getsockname()[1])
 
-    def poll(self, *, timeout: float = 0.2) -> str | None:
+    def poll(
+        self,
+        *,
+        timeout: float = 0.2,
+        accept: Callable[[], bool] | None = None,
+    ) -> str | None:
         self._server.settimeout(max(0.0, timeout))
         try:
             connection, _address = self._server.accept()
@@ -104,6 +109,11 @@ class DiskControlServer:
                     self.token,
                 )
                 and command is not None
+                and (
+                    command == "stop"
+                    or accept is None
+                    or bool(accept())
+                )
             )
             try:
                 connection.sendall(_CONTROL_RESPONSES[accepted])

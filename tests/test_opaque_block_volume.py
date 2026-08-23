@@ -108,6 +108,24 @@ def test_v4_wrong_password_is_rejected(
         )
 
 
+def test_authenticated_header_opens_without_forwarding_password(
+    tmp_path: Path,
+    header_store: OpaqueVolumeHeaderStore,
+) -> None:
+    session = create_outer(tmp_path, header_store)
+    path = session.path
+    session.close()
+    with path.open("rb") as stream:
+        header = header_store.unlock(stream, OUTER_PASSWORD)
+
+    reopened = OpaqueBlockVolume.open_with_header(path, header)
+
+    assert reopened.role == "outer"
+    reopened.write_blocks(3, b"direct" + bytes(LOGICAL_BLOCK_SIZE - 6))
+    assert reopened.read_blocks(3, 1).startswith(b"direct")
+    reopened.close()
+
+
 def test_hidden_password_opens_nested_authenticated_blocks(
     tmp_path: Path,
     header_store: OpaqueVolumeHeaderStore,
