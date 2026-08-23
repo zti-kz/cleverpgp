@@ -3,6 +3,8 @@ from __future__ import annotations
 import ctypes
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from nacl import pwhash, secret, utils
@@ -15,6 +17,8 @@ from biopgp.core.opaque_volume_header import (
     OpaqueVolumeHeaderStore,
 )
 from biopgp.core.winspd import (
+    DEFAULT_DISPATCHER_THREADS,
+    DEFAULT_MAX_TRANSFER_LENGTH,
     SCSISTAT_GOOD,
     Partition,
     StorageUnitInterface,
@@ -23,6 +27,7 @@ from biopgp.core.winspd import (
     UnmapDescriptor,
     WinSpdBlockDevice,
     WinSpdError,
+    WinSpdLibrary,
     WINDOWS_BLOCK_STORAGE_FORMAT,
     convert_windows_block_volume_algorithm,
     create_hidden_windows_block_volume,
@@ -87,6 +92,33 @@ def test_winspd_structures_match_official_abi() -> None:
     assert ctypes.sizeof(UnmapDescriptor) == 16
     assert ctypes.sizeof(Partition) == 24
     assert ctypes.sizeof(StorageUnitInterface) == ctypes.sizeof(ctypes.c_void_p) * 16
+
+
+def test_winspd_dispatcher_uses_bounded_threads_for_python_provider() -> None:
+    start_dispatcher = Mock(return_value=0)
+    library = WinSpdLibrary.__new__(WinSpdLibrary)
+    library._dll = SimpleNamespace(
+        SpdStorageUnitStartDispatcher=start_dispatcher,
+    )
+    storage_unit = ctypes.c_void_p(123)
+
+    library.start(storage_unit)
+
+    start_dispatcher.assert_called_once_with(
+        storage_unit,
+        DEFAULT_DISPATCHER_THREADS,
+    )
+
+
+def test_winspd_uses_bounded_transfer_buffers_for_python_provider(
+    tmp_path: Path,
+) -> None:
+    volume, device = make_device(tmp_path)
+    try:
+        assert DEFAULT_MAX_TRANSFER_LENGTH == 64 * 1024
+        assert device._params.MaxTransferLength == DEFAULT_MAX_TRANSFER_LENGTH
+    finally:
+        volume.close()
 
 
 def test_windows_partition_is_initialized_inside_encrypted_blocks() -> None:

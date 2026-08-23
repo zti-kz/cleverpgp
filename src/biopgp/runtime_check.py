@@ -189,11 +189,14 @@ def run_virtual_disk(marker: Path) -> int:
 def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
     from nacl import secret, utils
 
+    from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE
     from biopgp.core.disk_crypto import available_disk_ciphers
     from biopgp.core.disk_control import DiskControlStore, send_disk_control_command
     from biopgp.core.disk_host import WinSpdHostManager
     from biopgp.core.errors import MountUnavailableError
     from biopgp.core.winspd import (
+        DEFAULT_DISPATCHER_THREADS,
+        DEFAULT_MAX_TRANSFER_LENGTH,
         WinSpdLibrary,
         convert_windows_block_volume_algorithm,
         create_windows_block_volume,
@@ -266,6 +269,9 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             master_key,
             device_name=pipe_name,
         )
+        fixed_block_count = (
+            DEFAULT_MAX_TRANSFER_LENGTH * 3 // LOGICAL_BLOCK_SIZE
+        )
         started = perf_counter()
         try:
             result = subprocess.run(
@@ -275,13 +281,14 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                     "2000",
                     "WRFU",
                     "*",
-                    "*",
+                    str(fixed_block_count),
                 ],
                 check=False,
                 capture_output=True,
                 text=True,
                 timeout=120,
             )
+            stgtest_seconds = perf_counter() - started
             if result.returncode:
                 raise RuntimeError(
                     result.stderr.strip()
@@ -338,7 +345,20 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             {
                 "status": "ok",
                 "operations": 2000,
+                "blocks_per_operation": fixed_block_count,
+                "block_size_bytes": LOGICAL_BLOCK_SIZE,
+                "verified_payload_mib": (
+                    2000
+                    // 4
+                    * 3
+                    * fixed_block_count
+                    * LOGICAL_BLOCK_SIZE
+                    / (1024 * 1024)
+                ),
+                "stgtest_seconds": stgtest_seconds,
                 "elapsed_seconds": elapsed,
+                "max_transfer_kib": DEFAULT_MAX_TRANSFER_LENGTH // 1024,
+                "dispatcher_threads": DEFAULT_DISPATCHER_THREADS,
                 "provider_process": "detached-host",
                 "key_transport": "dpapi-one-time-request",
                 "external_control": "authenticated-loopback",

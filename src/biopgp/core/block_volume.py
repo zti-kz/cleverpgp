@@ -32,6 +32,7 @@ FORMAT_VERSION = 3
 HEADER_PREFIX = struct.Struct(">8sBI")
 HEADER_AREA_SIZE = 64 * 1024
 HEADER_JSON_LENGTH = struct.Struct(">I")
+BLOCK_INDEX = struct.Struct(">Q")
 HEADER_SLOT_COUNT = 3
 HEADER_SLOT_SIZE = HEADER_AREA_SIZE // HEADER_SLOT_COUNT
 HEADER_UNUSED_SIZE = HEADER_AREA_SIZE - HEADER_SLOT_COUNT * HEADER_SLOT_SIZE
@@ -486,20 +487,23 @@ class EncryptedBlockVolume:
         # can run outside the stream lock so independent WinSpd requests are not
         # needlessly serialized by Python while every block is authenticated.
         result = bytearray()
+        append_plaintext = result.extend
+        decrypt_block = self._cipher.decrypt
+        encode_block_index = BLOCK_INDEX.pack
+        aad_prefix = MAGIC + volume_id
         for offset in range(block_count):
             slot_start = offset * PHYSICAL_SLOT_SIZE
-            slot = slots[slot_start : slot_start + PHYSICAL_SLOT_SIZE]
+            nonce_end = slot_start + NONCE_SIZE
+            slot_end = slot_start + PHYSICAL_SLOT_SIZE
             block_index = block_address + offset
             try:
-                result.extend(
-                    self._cipher.decrypt(
-                        slot[NONCE_SIZE:],
-                        self._block_aad(
-                            volume_id,
-                            block_index,
-                            authenticated_context,
-                        ),
-                        slot[:NONCE_SIZE],
+                append_plaintext(
+                    decrypt_block(
+                        slots[nonce_end:slot_end],
+                        aad_prefix
+                        + encode_block_index(block_index)
+                        + authenticated_context,
+                        slots[slot_start:nonce_end],
                         volume_key,
                     )
                 )
@@ -530,21 +534,23 @@ class EncryptedBlockVolume:
             volume_id = self._volume_id
 
         encrypted = bytearray()
+        append_encrypted = encrypted.extend
+        encrypt_block = self._cipher.encrypt
+        encode_block_index = BLOCK_INDEX.pack
+        aad_prefix = MAGIC + volume_id
         nonces = random_nonce_fields(block_count)
         for offset in range(block_count):
             start = offset * LOGICAL_BLOCK_SIZE
             block_index = block_address + offset
             nonce_start = offset * NONCE_SIZE
             nonce = nonces[nonce_start : nonce_start + NONCE_SIZE]
-            encrypted.extend(nonce)
-            encrypted.extend(
-                self._cipher.encrypt(
+            append_encrypted(nonce)
+            append_encrypted(
+                encrypt_block(
                     payload[start : start + LOGICAL_BLOCK_SIZE],
-                    self._block_aad(
-                        volume_id,
-                        block_index,
-                        authenticated_context,
-                    ),
+                    aad_prefix
+                    + encode_block_index(block_index)
+                    + authenticated_context,
                     nonce,
                     volume_key,
                 )
@@ -749,7 +755,7 @@ class EncryptedBlockVolume:
     def _block_aad(
         volume_id: bytes, block_index: int, context: bytes = b""
     ) -> bytes:
-        return MAGIC + volume_id + struct.pack(">Q", block_index) + context
+        return MAGIC + volume_id + BLOCK_INDEX.pack(block_index) + context
 
     @classmethod
     def _encrypt_block(

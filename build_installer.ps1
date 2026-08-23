@@ -42,7 +42,7 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.11.0"
+$AppVersion = "0.12.0"
 $SignToolPath = $env:BIOPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:BIOPGP_SIGN_CERT_SHA1
 $ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_SIGN_EXPECTED_NAME)) {
@@ -51,7 +51,7 @@ $ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_SIGN_EXP
     $env:BIOPGP_SIGN_EXPECTED_NAME.Trim()
 }
 $TimestampUrl = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_TIMESTAMP_URL)) {
-    "http://timestamp.sectigo.com/rfc3161"
+    "http://time.certum.pl"
 } else {
     $env:BIOPGP_TIMESTAMP_URL.Trim()
 }
@@ -199,7 +199,10 @@ function Initialize-CodeSigning {
         throw "Сертификат издателя ещё не действует или уже истёк."
     }
     if (-not $SelectedCertificate.HasPrivateKey) {
-        throw "Для сертификата издателя недоступен закрытый ключ или аппаратный токен."
+        throw (
+            "Для сертификата издателя недоступен закрытый ключ, аппаратный токен " +
+            "или подключённое облачное хранилище."
+        )
     }
     if (-not (Test-CodeSigningEku $SelectedCertificate)) {
         throw "Выбранный сертификат не предназначен для подписи программ."

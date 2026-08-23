@@ -45,6 +45,19 @@ def test_windows_installer_verifies_timestamped_output_and_writes_checksum() -> 
     script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
 
     assert "verify /pa /all /v" in script
+    assert '"http://time.certum.pl"' in script
     assert "$Signature.TimeStamperCertificate" in script
     assert '"$SetupExecutable.sha256"' in script
     assert "Set-Content -LiteralPath $SetupChecksum -Encoding ascii" in script
+
+
+def test_elevated_winspd_check_preserves_diagnostic_details() -> None:
+    script = (PROJECT_ROOT / "scripts" / "run_winspd_windows_check.ps1").read_text(
+        encoding="utf-8-sig"
+    )
+
+    assert "if ($Elevated)" in script
+    assert "trap {" in script
+    assert 'status = "error"' in script
+    assert "Set-Content -LiteralPath $Marker -Encoding utf8" in script
+    assert "Подробный отчёт не создан." in script

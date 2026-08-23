@@ -42,7 +42,8 @@ SCSI_ADSENSE_INTERNAL_TARGET_FAILURE = 0x44
 
 FLAG_CACHE_SUPPORTED = 0x00000002
 FLAG_UNMAP_SUPPORTED = 0x00000004
-DEFAULT_MAX_TRANSFER_LENGTH = 1024 * 1024
+DEFAULT_MAX_TRANSFER_LENGTH = 64 * 1024
+DEFAULT_DISPATCHER_THREADS = 2
 MIN_WINDOWS_DISK_CAPACITY = 32 * 1024 * 1024
 MIN_HIDDEN_WINDOWS_COVER_CAPACITY = (
     MIN_WINDOWS_DISK_CAPACITY
@@ -257,7 +258,16 @@ class WinSpdLibrary:
         return storage_unit
 
     def start(self, storage_unit: ctypes.c_void_p) -> None:
-        error = self._dll.SpdStorageUnitStartDispatcher(storage_unit, 0)
+        # WinSpd interprets zero as one dispatcher per logical processor. That
+        # is appropriate for a native provider, but it creates dozens of
+        # contending callbacks on large Windows systems when the provider is
+        # implemented in Python. The official WinSpd raw-disk example uses two
+        # dispatcher threads; this keeps read/write pipelining without causing
+        # interpreter and mapped-stream contention.
+        error = self._dll.SpdStorageUnitStartDispatcher(
+            storage_unit,
+            DEFAULT_DISPATCHER_THREADS,
+        )
         if error != ERROR_SUCCESS:
             raise WinSpdError(f"WinSpd не запустил виртуальный диск (код {error}).")
 

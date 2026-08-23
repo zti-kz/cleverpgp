@@ -11,6 +11,19 @@ $WinSpdInstaller = Join-Path $VendorDirectory "winspd-1.0.20357.msi"
 $WinSpdUrl = "https://github.com/winfsp/winspd/releases/download/v1.0B1/winspd-1.0.20357.msi"
 $WinSpdSha256 = "F1157EEF805DCBEC78A477F2B4EE5ABC0049C8A9329444E5D18CAB01D3604265"
 
+if ($Elevated) {
+    trap {
+        [pscustomobject]@{
+            status = "error"
+            message = $_.Exception.Message
+            details = ($_ | Out-String).Trim()
+        } |
+            ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath $Marker -Encoding utf8
+        exit 1
+    }
+}
+
 if (-not (Test-Path -LiteralPath $PythonExecutable -PathType Leaf)) {
     throw "Среда разработки Clever PGP не найдена."
 }
@@ -32,7 +45,15 @@ if (-not $Elevated) {
         -Wait `
         -PassThru
     if ($ElevatedProcess.ExitCode -ne 0) {
-        throw "Системная проверка WinSpd завершилась с кодом $($ElevatedProcess.ExitCode)."
+        $Details = if (Test-Path -LiteralPath $Marker -PathType Leaf) {
+            Get-Content -LiteralPath $Marker -Raw
+        } else {
+            "Подробный отчёт не создан."
+        }
+        throw (
+            "Системная проверка WinSpd завершилась с кодом " +
+            "$($ElevatedProcess.ExitCode): $Details"
+        )
     }
     if (-not (Test-Path -LiteralPath $Marker -PathType Leaf)) {
         throw "Проверка не создала итоговый отчёт."
