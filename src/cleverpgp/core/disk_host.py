@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import hmac
 import json
 import os
@@ -52,6 +53,16 @@ class HostSecretProtector(Protocol):
     def protect(self, plaintext: bytes, entropy: bytes) -> bytes: ...
 
     def unprotect(self, protected: bytes, entropy: bytes) -> bytes: ...
+
+
+class HostProcess(Protocol):
+    def poll(self) -> int | None: ...
+
+    def terminate(self) -> None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+    def kill(self) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,7 +254,7 @@ class DiskHostExchange:
         request: DiskHostRequest,
         *,
         timeout: float,
-        process: subprocess.Popen[Any],
+        process: HostProcess,
     ) -> tuple[DiskControlEndpoint, int]:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -353,7 +364,7 @@ class WinSpdHostManager:
     ) -> None:
         self._exchange = exchange or DiskHostExchange()
         self._command_prefix = command_prefix or application_command_prefix()
-        self._process: subprocess.Popen[Any] | None = None
+        self._process: HostProcess | None = None
         self._control_endpoint: DiskControlEndpoint | None = None
         self._process_id: int | None = None
         self._device_name: str | None = None
@@ -412,23 +423,16 @@ class WinSpdHostManager:
             protection_header=protection_header,
         )
         command = [*self._command_prefix, "--winspd-host", str(request.request_path)]
-        creation_flags = 0
-        if sys.platform == "win32":
-            creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
-                subprocess,
-                "CREATE_NO_WINDOW",
-                0,
-            )
         try:
-            process = subprocess.Popen(
+            process = _launch_host_process(
                 command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-                creationflags=creation_flags,
+                elevate=(
+                    sys.platform == "win32"
+                    and device_name is None
+                    and not _is_user_admin()
+                ),
             )
-        except OSError:
+        except Exception:
             self._exchange.cleanup(request)
             raise
         if progress is not None:
@@ -447,6 +451,9 @@ class WinSpdHostManager:
                     process.wait(3)
                 except subprocess.TimeoutExpired:
                     process.kill()
+            close_process = getattr(process, "close", None)
+            if callable(close_process):
+                close_process()
             self._exchange.cleanup(request)
             raise
         self._process = process
@@ -488,10 +495,177 @@ class WinSpdHostManager:
         send_disk_control_command(endpoint, "ping", timeout=timeout)
 
     def _clear_state(self) -> None:
+        process = self._process
+        close_process = getattr(process, "close", None)
+        if callable(close_process):
+            close_process()
         self._process = None
         self._control_endpoint = None
         self._process_id = None
         self._device_name = None
+
+
+def _is_user_admin() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def _launch_host_process(
+    command: list[str],
+    *,
+    elevate: bool,
+) -> HostProcess:
+    if elevate:
+        return _launch_elevated_windows_process(command)
+    creation_flags = 0
+    if sys.platform == "win32":
+        creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            subprocess,
+            "CREATE_NO_WINDOW",
+            0,
+        )
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        creationflags=creation_flags,
+    )
+
+
+class _ElevatedWindowsProcess:
+    """Small Popen-compatible owner for a ShellExecuteEx process handle."""
+
+    def __init__(self, handle: int, process_id: int) -> None:
+        self._handle = handle
+        self.pid = process_id
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        if not self._handle:
+            return self.returncode
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if kernel32.WaitForSingleObject(ctypes.c_void_p(self._handle), 0) == 258:
+            return None
+        exit_code = ctypes.c_uint32()
+        if not kernel32.GetExitCodeProcess(
+            ctypes.c_void_p(self._handle),
+            ctypes.byref(exit_code),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        self.returncode = int(exit_code.value)
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if not self._handle:
+            return int(self.returncode or 0)
+        milliseconds = (
+            0xFFFFFFFF
+            if timeout is None
+            else max(0, round(timeout * 1000))
+        )
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        result = kernel32.WaitForSingleObject(
+            ctypes.c_void_p(self._handle),
+            milliseconds,
+        )
+        if result == 258:
+            raise subprocess.TimeoutExpired(
+                "elevated Clever PGP disk host",
+                timeout,
+            )
+        if result == 0xFFFFFFFF:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return int(self.poll() or 0)
+
+    def terminate(self) -> None:
+        if not self._handle or self.poll() is not None:
+            return
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not kernel32.TerminateProcess(ctypes.c_void_p(self._handle), 1):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def kill(self) -> None:
+        self.terminate()
+
+    def close(self) -> None:
+        if not self._handle:
+            return
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(
+            ctypes.c_void_p(self._handle)
+        )
+        self._handle = 0
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def _launch_elevated_windows_process(command: list[str]) -> HostProcess:
+    if sys.platform != "win32" or not command:
+        raise MountUnavailableError(
+            "Повышенный запуск виртуального диска доступен только в Windows."
+        )
+    from ctypes import wintypes
+
+    class ShellExecuteInfo(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", wintypes.ULONG),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", wintypes.LPVOID),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIcon", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(ShellExecuteInfo)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    info = ShellExecuteInfo()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "runas"
+    info.lpFile = command[0]
+    info.lpParameters = subprocess.list2cmdline(command[1:])
+    info.lpDirectory = str(Path(command[0]).resolve().parent)
+    info.nShow = 0
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        error_code = ctypes.get_last_error()
+        if error_code == 1223:
+            raise MountUnavailableError(
+                "Подключение диска отменено: Windows не получила разрешение."
+            )
+        raise MountUnavailableError(
+            f"Windows не запустила компонент виртуального диска (код {error_code})."
+        )
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
+    kernel32.GetProcessId.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    process_id = int(kernel32.GetProcessId(info.hProcess))
+    if process_id <= 0:
+        kernel32.CloseHandle(info.hProcess)
+        raise MountUnavailableError(
+            "Windows не подтвердила запуск компонента виртуального диска."
+        )
+    return _ElevatedWindowsProcess(int(info.hProcess), process_id)
 
 
 def run_disk_host(request_path: Path) -> int:

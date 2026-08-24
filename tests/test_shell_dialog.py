@@ -53,6 +53,8 @@ def test_shell_encrypt_dialog_can_be_created(tmp_path: Path) -> None:
 
     assert dialog.target == tmp_path / "report.txt.cpgp"
     assert dialog.windowTitle().startswith("Шифрование")
+    assert dialog.width() >= 760
+    assert dialog.height() >= 560
     dialog.close()
     application.processEvents()
 

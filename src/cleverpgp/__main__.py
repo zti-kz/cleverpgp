@@ -46,6 +46,17 @@ def main(argv: list[str] | None = None) -> int:
         from cleverpgp.core.uninstall_launcher import launch_uninstaller
 
         return launch_uninstaller()
+    if arguments[:1] == ["--set-language"] and len(arguments) == 2:
+        language_code = arguments[1].casefold()
+        if language_code not in {"ru", "kk", "en"}:
+            return 2
+        from cleverpgp.config import database_path
+        from cleverpgp.core.storage import ProfileRepository
+
+        repository = ProfileRepository(database_path())
+        repository.initialize()
+        repository.set_setting("language", language_code)
+        return 0
     if arguments[:1] == ["--runtime-check"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:
@@ -109,6 +120,13 @@ def main(argv: list[str] | None = None) -> int:
         from cleverpgp.shell import main as shell_main
 
         return shell_main(arguments[1:])
+    if (
+        len(arguments) == 1
+        and Path(arguments[0]).suffix.lower() == ".cpgp"
+    ):
+        from cleverpgp.shell import main as shell_main
+
+        return shell_main(["decrypt", arguments[0]])
     if arguments[:1] == ["--unmount"] and len(arguments) == 2:
         from cleverpgp.core.mount import unmount_drive
 

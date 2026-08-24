@@ -1,3 +1,3 @@
 """Clever PGP application package."""
 
-__version__ = "0.13.6"
+__version__ = "0.13.7"

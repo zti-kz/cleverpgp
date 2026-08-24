@@ -13,7 +13,7 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
 
     assert "Clever PGP" in text
-    assert "Версия 0.13.6" in text
+    assert "Версия 0.13.7" in text
     assert ".cpgp" in text
     assert ".cpgv" in text
     assert "Алмас Оскенбаев" in text

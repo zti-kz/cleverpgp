@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.13.6"
+  #define AppVersion "0.13.7"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -127,11 +127,53 @@ Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount\c
 [Run]
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winfsp-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinFspInstalled
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winspd-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinSpdInstalled
+Filename: "{app}\{#AppExecutable}"; Parameters: "--set-language {code:SelectedAppLanguage}"; StatusMsg: "Сохраняется язык Clever PGP..."; Flags: runhidden waituntilterminated runasoriginaluser
 Filename: "{app}\{#AppExecutable}"; Description: "Запустить Clever PGP"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
 var
   RemoveLocalProfile: Boolean;
+  AppLanguagePage: TInputOptionWizardPage;
+
+procedure InitializeWizard;
+begin
+  AppLanguagePage := CreateInputOptionPage(
+    wpSelectTasks,
+    'Язык Clever PGP',
+    'Выберите язык интерфейса программы',
+    'Русский язык выбран по умолчанию. Язык можно изменить позже в настройках Clever PGP.',
+    True,
+    True
+  );
+  AppLanguagePage.Add('Русский');
+  AppLanguagePage.Add('Қазақша');
+  AppLanguagePage.Add('English');
+  case GetPreviousData('AppLanguage', '') of
+    'kk': AppLanguagePage.SelectedValueIndex := 1;
+    'en': AppLanguagePage.SelectedValueIndex := 2;
+  else
+    AppLanguagePage.SelectedValueIndex := 0;
+  end;
+end;
+
+function SelectedAppLanguage(Param: String): String;
+begin
+  case AppLanguagePage.SelectedValueIndex of
+    1: Result := 'kk';
+    2: Result := 'en';
+  else
+    Result := 'ru';
+  end;
+end;
+
+procedure RegisterPreviousData(PreviousDataKey: Integer);
+begin
+  SetPreviousData(
+    PreviousDataKey,
+    'AppLanguage',
+    SelectedAppLanguage('')
+  );
+end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var

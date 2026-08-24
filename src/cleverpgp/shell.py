@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
 
     repository = ProfileRepository(database_path())
     repository.initialize()
-    set_language(repository.get_setting("language"))
+    set_language(repository.get_setting("language") or "ru")
     if not repository.has_profile():
         QMessageBox.critical(
             None,

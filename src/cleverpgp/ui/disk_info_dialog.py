@@ -183,7 +183,7 @@ def run_disk_info_dialog(drive: str) -> int:
     try:
         repository = ProfileRepository(database_path())
         repository.initialize()
-        set_language(repository.get_setting("language"))
+        set_language(repository.get_setting("language") or "ru")
         info = inspect_mounted_cleverpgp_disk(drive)
     except (BioPGPError, OSError, TypeError, ValueError) as error:
         DiskInfoErrorDialog(str(error)).exec()

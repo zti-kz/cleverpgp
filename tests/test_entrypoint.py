@@ -14,6 +14,30 @@ def test_shell_mode_is_dispatched_to_shell_entrypoint() -> None:
     shell_main.assert_called_once_with(["encrypt", "report.txt"])
 
 
+def test_direct_encrypted_file_is_dispatched_to_decryption(tmp_path: Path) -> None:
+    encrypted = tmp_path / "report with spaces.txt.cpgp"
+    with patch("cleverpgp.shell.main", return_value=0) as shell_main:
+        result = main([str(encrypted)])
+
+    assert result == 0
+    shell_main.assert_called_once_with(["decrypt", str(encrypted)])
+
+
+def test_installer_language_mode_persists_selection(tmp_path: Path) -> None:
+    database = tmp_path / "profile.sqlite3"
+    with patch("cleverpgp.config.database_path", return_value=database):
+        result = main(["--set-language", "EN"])
+
+    from cleverpgp.core.storage import ProfileRepository
+
+    assert result == 0
+    assert ProfileRepository(database).get_setting("language") == "en"
+
+
+def test_installer_language_mode_rejects_unknown_code() -> None:
+    assert main(["--set-language", "de"]) == 2
+
+
 def test_windows_resize_helper_is_dispatched_without_gui() -> None:
     with patch(
         "cleverpgp.core.windows_resize.run_windows_resize_helper",

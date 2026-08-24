@@ -69,7 +69,10 @@ def main(
 
     repository = ProfileRepository(database_path())
     repository.initialize()
-    selected_language = set_language(repository.get_setting("language"))
+    # The installer normally writes this setting before the first launch.  A
+    # defensive Russian default keeps a direct/portable launch predictable and
+    # avoids silently following the Windows locale.
+    selected_language = set_language(repository.get_setting("language") or "ru")
     repository.set_setting("language", selected_language)
     if public_key_path is not None:
         dialog = PublicKeyImportDialog(repository, public_key_path)

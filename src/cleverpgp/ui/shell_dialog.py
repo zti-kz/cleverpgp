@@ -139,7 +139,8 @@ class ShellOperationDialog(QDialog):
 
         action_name = tr("Шифрование" if operation == "encrypt" else "Расшифрование")
         self.setWindowTitle(f"{action_name} — Clever PGP")
-        self.setMinimumWidth(420)
+        self.setMinimumSize(560, 440)
+        self.resize(760, 560)
         self.setStyleSheet(SHELL_STYLESHEET)
         self._build_ui()
         localize_widget_tree(self)

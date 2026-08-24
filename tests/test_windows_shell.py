@@ -257,3 +257,18 @@ def test_uninstaller_offers_to_keep_or_remove_only_local_profile() -> None:
     assert 'Name: "{localappdata}\\CleverPGP"' not in installer
     assert 'Name: "*.cpgv"' not in installer
     assert 'Name: "*.cpgp"' not in installer
+
+
+def test_installer_selects_application_language_before_first_launch() -> None:
+    project = Path(__file__).resolve().parents[1]
+    installer = (project / "packaging" / "cleverpgp.iss").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CreateInputOptionPage" in installer
+    assert "AppLanguagePage.Add('Русский')" in installer
+    assert "AppLanguagePage.Add('Қазақша')" in installer
+    assert "AppLanguagePage.Add('English')" in installer
+    assert "AppLanguagePage.SelectedValueIndex := 0" in installer
+    assert "--set-language {code:SelectedAppLanguage}" in installer
+    assert "runasoriginaluser" in installer

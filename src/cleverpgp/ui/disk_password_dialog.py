@@ -290,7 +290,7 @@ def run_disk_password_change_dialog(drive: str) -> int:
     install_screen_bounds(application)
     repository = ProfileRepository(database_path())
     repository.initialize()
-    set_language(repository.get_setting("language"))
+    set_language(repository.get_setting("language") or "ru")
 
     try:
         from cleverpgp.core.windows_storage import WindowsSystemDiskManager

@@ -220,13 +220,16 @@ def test_host_manager_passes_only_request_path_to_detached_process(
         command_prefix=("CleverPGP.exe",),
     )
     with (
-        patch("cleverpgp.core.disk_host.subprocess.Popen", side_effect=FakePopen) as popen,
+        patch(
+            "cleverpgp.core.disk_host._launch_host_process",
+            side_effect=lambda command, **_options: FakePopen(command),
+        ) as launcher,
         patch("cleverpgp.core.disk_host.send_disk_control_command", side_effect=control),
     ):
         manager.start(tmp_path / "private.cpgv", b"k" * 32)
         manager.stop()
 
-    launched_command = popen.call_args.args[0]
+    launched_command = launcher.call_args.args[0]
     assert launched_command == [
         "CleverPGP.exe",
         "--winspd-host",
@@ -235,6 +238,44 @@ def test_host_manager_passes_only_request_path_to_detached_process(
     assert "k" * 32 not in " ".join(launched_command)
     assert FakeExchange.received_key == b"k" * 32
     assert commands == ["ping", "stop", "ping"]
+
+
+def test_real_disk_host_requests_elevation_for_standard_user(tmp_path: Path) -> None:
+    request = DiskHostRequest(
+        "a" * 32,
+        tmp_path / ("request-" + "a" * 32 + ".json"),
+        tmp_path / ("response-" + "a" * 32 + ".json"),
+    )
+    endpoint = DiskControlEndpoint(b"v" * 16, 23456, b"t" * 32)
+
+    class FakeExchange:
+        @staticmethod
+        def create_request(*_args: object, **_options: object) -> DiskHostRequest:
+            return request
+
+        @staticmethod
+        def wait_response(*_args: object, **_options: object) -> tuple[DiskControlEndpoint, int]:
+            return endpoint, 6789
+
+        @staticmethod
+        def cleanup(_request: DiskHostRequest) -> None:
+            return None
+
+    manager = WinSpdHostManager(
+        FakeExchange(),  # type: ignore[arg-type]
+        command_prefix=("CleverPGP.exe",),
+    )
+    with (
+        patch("cleverpgp.core.disk_host._is_user_admin", return_value=False),
+        patch(
+            "cleverpgp.core.disk_host._launch_host_process",
+            return_value=FakePopen(["CleverPGP.exe"]),
+        ) as launcher,
+        patch("cleverpgp.core.disk_host.send_disk_control_command"),
+    ):
+        manager.start(tmp_path / "private.cpgv", b"k" * 32, device_name=None)
+
+    assert launcher.call_args.kwargs["elevate"] is True
 
 
 def test_host_manager_does_not_force_kill_unconfirmed_disk() -> None:
