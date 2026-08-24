@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.13.5"
+  #define AppVersion "0.13.6"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -71,9 +71,6 @@ Type: files; Name: "{autoprograms}\BioPGP.lnk"
 Type: files; Name: "{autodesktop}\BioPGP.lnk"
 Type: files; Name: "{autoprograms}\Clever PGP.lnk"
 Type: filesandordirs; Name: "{app}\Source"
-
-[UninstallRun]
-Filename: "{app}\{#AppExecutable}"; Parameters: "--purge-local-profile ""{code:ProfilePathForUninstall}"""; StatusMsg: "Удаляется локальный профиль Clever PGP..."; Flags: runhidden waituntilterminated; RunOnceId: "PurgeCleverPGPProfile"; Check: DeleteLocalProfile
 
 [Icons]
 Name: "{group}\Clever PGP"; Filename: "{app}\{#AppExecutable}"; WorkingDir: "{app}"
@@ -150,10 +147,19 @@ begin
   RegWriteStringValue(HKLM64, UninstallKey, 'UninstallString', LauncherCommand);
 end;
 
+function ProfilePathForUninstall(Param: String): String;
+begin
+  Result := ExpandConstant('{param:PROFILEPATH|}');
+  if Result = '' then
+    Result := ExpandConstant('{localappdata}\CleverPGP');
+end;
+
 function InitializeUninstall(): Boolean;
 var
   Choice: Integer;
   ShutdownResult: Integer;
+  PurgeResult: Integer;
+  ProfilePath: String;
 begin
   if FileExists(ExpandConstant('{app}\{#AppExecutable}')) then
   begin
@@ -193,34 +199,33 @@ begin
     exit;
   end;
   RemoveLocalProfile := Choice = IDYES;
+  if RemoveLocalProfile then
+  begin
+    ProfilePath := ProfilePathForUninstall('');
+    if
+      (not Exec(
+        ExpandConstant('{app}\{#AppExecutable}'),
+        '--purge-local-profile "' + ProfilePath + '"',
+        ExpandConstant('{app}'),
+        SW_HIDE,
+        ewWaitUntilTerminated,
+        PurgeResult
+      )) or
+      (PurgeResult <> 0) or
+      DirExists(ProfilePath)
+    then
+    begin
+      MsgBox(
+        'Локальный профиль не удалось удалить. ' +
+        'Удаление программы остановлено, чтобы вы могли повторить операцию.',
+        mbError,
+        MB_OK
+      );
+      Result := False;
+      exit;
+    end;
+  end;
   Result := True;
-end;
-
-function DeleteLocalProfile(): Boolean;
-begin
-  Result := RemoveLocalProfile;
-end;
-
-function ProfilePathForUninstall(Param: String): String;
-begin
-  Result := ExpandConstant('{param:PROFILEPATH|}');
-  if Result = '' then
-    Result := ExpandConstant('{localappdata}\CleverPGP');
-end;
-
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-begin
-  if
-    (CurUninstallStep = usPostUninstall) and
-    RemoveLocalProfile and
-    DirExists(ProfilePathForUninstall(''))
-  then
-    MsgBox(
-      'Локальный профиль не удалось удалить полностью. ' +
-      'Закройте все процессы Clever PGP и повторите удаление.',
-      mbError,
-      MB_OK
-    );
 end;
 
 function IsWinFspInstalled: Boolean;

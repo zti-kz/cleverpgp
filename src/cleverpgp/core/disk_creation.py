@@ -23,6 +23,8 @@ _RESPONSE_TOKEN_BYTES = 32
 _REQUEST_ENTROPY_PREFIX = b"Clever PGP disk creation request v1\0"
 _ORDINARY = "ordinary"
 _HIDDEN = "hidden"
+_FILE_RETRY_TIMEOUT_SECONDS = 2.0
+_FILE_RETRY_INTERVAL_SECONDS = 0.01
 
 
 class CreationSecretProtector(Protocol):
@@ -378,7 +380,12 @@ class DiskCreationExchange:
     ) -> tuple[int, str] | None:
         if not paths.progress_path.is_file():
             return None
-        payload = self._read_authenticated(paths.progress_path, paths)
+        try:
+            payload = self._read_authenticated(paths.progress_path, paths)
+        except FileNotFoundError:
+            # The helper may finish and clean up between ``is_file`` and the
+            # read. Missing transient progress is harmless.
+            return None
         value = int(payload["value"])
         if not 0 <= value <= 100:
             raise ValueError("invalid progress")
@@ -456,7 +463,9 @@ class DiskCreationExchange:
         ):
             try:
                 path.unlink()
-            except FileNotFoundError:
+            except OSError:
+                # IPC cleanup is best effort. A virus scanner can retain a
+                # short-lived handle after the operation has already ended.
                 pass
         try:
             self.directory.rmdir()
@@ -468,7 +477,7 @@ class DiskCreationExchange:
         source: Path,
         paths: DiskCreationPaths,
     ) -> dict[str, object]:
-        payload = json.loads(source.read_text(encoding="utf-8"))
+        payload = json.loads(self._read_text_with_retry(source))
         if not isinstance(payload, dict):
             raise TypeError("invalid response")
         mac = str(payload.pop("mac", ""))
@@ -514,12 +523,39 @@ class DiskCreationExchange:
                 temporary.chmod(0o600)
             except OSError:
                 pass
-            os.replace(temporary, destination)
+            DiskCreationExchange._replace_with_retry(temporary, destination)
         finally:
             try:
                 temporary.unlink()
-            except FileNotFoundError:
+            except OSError:
                 pass
+
+    @staticmethod
+    def _replace_with_retry(source: Path, destination: Path) -> None:
+        """Replace a small IPC file despite a brief Windows sharing lock."""
+
+        deadline = time.monotonic() + _FILE_RETRY_TIMEOUT_SECONDS
+        while True:
+            try:
+                os.replace(source, destination)
+                return
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(_FILE_RETRY_INTERVAL_SECONDS)
+
+    @staticmethod
+    def _read_text_with_retry(source: Path) -> str:
+        """Read IPC data after a scanner or writer releases its file handle."""
+
+        deadline = time.monotonic() + _FILE_RETRY_TIMEOUT_SECONDS
+        while True:
+            try:
+                return source.read_text(encoding="utf-8")
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(_FILE_RETRY_INTERVAL_SECONDS)
 
     def _secret_protector(self) -> CreationSecretProtector:
         if self._protector is None:
@@ -731,7 +767,13 @@ def run_windows_create_helper(
         manager = manager_factory(recover_existing=False)
 
         def report(value: int, message: str) -> None:
-            selected.write_progress(request, value, message)
+            try:
+                selected.write_progress(request, value, message)
+            except OSError:
+                # Progress is informational and must never cancel creation of
+                # the encrypted disk. The final authenticated response remains
+                # authoritative.
+                pass
 
         report(4, "Подготовка криптографической защиты диска")
         prepare = getattr(manager, "prepare_backend", None)

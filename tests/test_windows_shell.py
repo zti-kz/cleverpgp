@@ -250,9 +250,10 @@ def test_uninstaller_offers_to_keep_or_remove_only_local_profile() -> None:
     assert "MB_YESNOCANCEL" in installer
     assert "--shutdown-for-uninstall" in installer
     assert "ShutdownResult <> 0" in installer
-    assert "[UninstallRun]" in installer
-    assert '--purge-local-profile ""{code:ProfilePathForUninstall}""' in installer
-    assert 'Check: DeleteLocalProfile' in installer
+    assert "--purge-local-profile" in installer
+    assert "PurgeResult <> 0" in installer
+    assert "DirExists(ProfilePath)" in installer
+    assert "Удаление программы остановлено" in installer
     assert 'Name: "{localappdata}\\CleverPGP"' not in installer
     assert 'Name: "*.cpgv"' not in installer
     assert 'Name: "*.cpgp"' not in installer

@@ -244,6 +244,7 @@ def run_block_create_child(marker: Path) -> int:
 
     from nacl import secret, utils
 
+    from cleverpgp.core.disk_creation import DiskCreationExchange
     from cleverpgp.core.winspd import WinSpdLibrary, create_windows_block_volume
 
     target = marker.with_suffix(".cpgv")
@@ -254,7 +255,7 @@ def run_block_create_child(marker: Path) -> int:
             json.dumps(payload, ensure_ascii=False),
             encoding="utf-8",
         )
-        temporary.replace(marker)
+        DiskCreationExchange._replace_with_retry(temporary, marker)
 
     try:
         write_state(

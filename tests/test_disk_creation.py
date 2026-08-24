@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from cleverpgp.core.disk_creation import (
@@ -118,6 +119,53 @@ def test_creation_helper_runs_manager_in_current_process(tmp_path: Path) -> None
     selected.cleanup(paths)
 
 
+def test_creation_helper_continues_when_progress_file_is_temporarily_locked(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    selected = exchange(tmp_path)
+    paths = selected.create_ordinary(
+        tmp_path / "created.cpgv",
+        b"m" * 32,
+        logical_capacity=32 * 1024 * 1024,
+        label="Created",
+        algorithm="XCHACHA20-POLY1305",
+        password=None,
+        file_system="NTFS",
+        overwrite=False,
+        context_menu_labels=None,
+    )
+
+    class Manager:
+        def __init__(self, *, recover_existing: bool) -> None:
+            assert not recover_existing
+
+        def create_and_mount(self, *_args: object, **options: object) -> str:
+            report = options["progress"]
+            assert callable(report)
+            report(55, "Preparing encrypted blocks")
+            return "W:"
+
+    monkeypatch.setattr(
+        selected,
+        "write_progress",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PermissionError(13, "Access is denied")
+        ),
+    )
+
+    assert (
+        run_windows_create_helper(
+            paths.request_path,
+            exchange=selected,
+            manager_factory=Manager,
+        )
+        == 0
+    )
+    assert selected.consume_response(paths) == "W:"
+    selected.cleanup(paths)
+
+
 def test_isolated_launcher_reports_child_progress_and_removes_ipc(
     monkeypatch,
     tmp_path: Path,
@@ -190,3 +238,74 @@ def test_tampered_creation_progress_is_rejected(tmp_path: Path) -> None:
         raise AssertionError("Tampered progress was accepted")
     finally:
         selected.cleanup(paths)
+
+
+def test_atomic_progress_write_retries_windows_sharing_violation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    selected = exchange(tmp_path)
+    destination = selected.directory / "progress.json"
+    real_replace = os.replace
+    attempts = 0
+
+    def temporarily_locked(source: Path, target: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 4:
+            raise PermissionError(13, "Access is denied", str(target))
+        real_replace(source, target)
+
+    monkeypatch.setattr(
+        "cleverpgp.core.disk_creation.os.replace",
+        temporarily_locked,
+    )
+    monkeypatch.setattr(
+        "cleverpgp.core.disk_creation.time.sleep",
+        lambda _seconds: None,
+    )
+
+    selected._write_json_atomic(destination, {"value": 12})
+
+    assert attempts == 4
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"value": 12}
+
+
+def test_authenticated_progress_read_retries_windows_sharing_violation(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    selected = exchange(tmp_path)
+    paths = selected.create_ordinary(
+        tmp_path / "private.cpgv",
+        b"a" * 32,
+        logical_capacity=32 * 1024 * 1024,
+        label="Private",
+        algorithm="XCHACHA20-POLY1305",
+        password=None,
+        file_system="NTFS",
+        overwrite=False,
+        context_menu_labels=None,
+    )
+    request = selected.consume_request(paths.request_path)
+    selected.write_progress(request, 18, "Preparing")
+    real_read_text = Path.read_text
+    attempts = 0
+
+    def temporarily_locked(source: Path, *args: object, **kwargs: object) -> str:
+        nonlocal attempts
+        if source == paths.progress_path:
+            attempts += 1
+            if attempts < 3:
+                raise PermissionError(13, "Access is denied", str(source))
+        return real_read_text(source, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", temporarily_locked)
+    monkeypatch.setattr(
+        "cleverpgp.core.disk_creation.time.sleep",
+        lambda _seconds: None,
+    )
+
+    assert selected.read_progress(paths) == (18, "Preparing")
+    assert attempts == 3
+    selected.cleanup(paths)
