@@ -110,14 +110,16 @@ _SYMBOLS = "!@#$%&*?"
 
 
 def generate_memorable_password() -> str:
-    """Return a roughly 60-bit structured passphrase made for memorisation."""
+    """Return two readable words, a symbol and four random digits."""
 
-    compounds = [
-        secrets.choice(_ADJECTIVES) + secrets.choice(_NOUNS)
-        for _ in range(4)
-    ]
+    words = secrets.choice(_ADJECTIVES) + secrets.choice(_NOUNS)
     number = 1000 + secrets.randbelow(9000)
-    return "-".join(compounds) + secrets.choice(_SYMBOLS) + str(number)
+    password = words + secrets.choice(_SYMBOLS) + str(number)
+    # Even the shortest available pair reaches the application's 12-character
+    # minimum; keep this invariant explicit if the vocabulary changes later.
+    if len(password) < 12:
+        password += secrets.choice(string.ascii_uppercase)
+    return password
 
 
 def generate_random_password(length: int = 24) -> str:

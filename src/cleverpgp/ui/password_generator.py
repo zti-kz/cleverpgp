@@ -1,35 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QLineEdit
 
-from PySide6.QtWidgets import QLineEdit, QMenu, QPushButton, QWidget
-
-from cleverpgp.core.password_generator import (
-    generate_memorable_password,
-    generate_random_password,
-)
+from cleverpgp.core.password_generator import generate_memorable_password
 from cleverpgp.localization import tr
 from cleverpgp.ui.icons import line_icon
 
 
-def create_password_generator_button(
+def add_password_generator_action(
     password_input: QLineEdit,
     repeat_input: QLineEdit,
-    parent: QWidget | None = None,
-    *,
-    text: str = "Сгенерировать пароль",
-) -> QPushButton:
-    button = QPushButton(tr(text), parent)
-    button.setIcon(line_icon("key"))
-    button.setToolTip(
-        tr("Созданный пароль будет показан до закрытия текущего окна.")
-    )
-    menu = QMenu(button)
-    memorable = menu.addAction(tr("Запоминаемый пароль из слов"))
-    random_combination = menu.addAction(tr("Случайная комбинация"))
+) -> QAction:
+    """Add one compact, direct generator button inside a password field."""
 
-    def fill(generator: Callable[[], str]) -> None:
-        password = generator()
+    action = password_input.addAction(
+        line_icon("key"),
+        QLineEdit.ActionPosition.TrailingPosition,
+    )
+    action.setObjectName("passwordGeneratorAction")
+    action.setToolTip(tr("Создать запоминаемый пароль"))
+
+    def fill() -> None:
+        password = generate_memorable_password()
         password_input.setText(password)
         repeat_input.setText(password)
         password_input.setEchoMode(QLineEdit.EchoMode.Normal)
@@ -37,11 +30,5 @@ def create_password_generator_button(
         password_input.setFocus()
         password_input.selectAll()
 
-    memorable.triggered.connect(
-        lambda _checked=False: fill(generate_memorable_password)
-    )
-    random_combination.triggered.connect(
-        lambda _checked=False: fill(generate_random_password)
-    )
-    button.setMenu(menu)
-    return button
+    action.triggered.connect(lambda _checked=False: fill())
+    return action

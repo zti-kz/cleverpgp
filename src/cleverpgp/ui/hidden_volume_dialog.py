@@ -28,7 +28,7 @@ from cleverpgp.localization import localize_widget_tree, tr
 from cleverpgp.ui.adaptive import scrollable_dialog_layout
 from cleverpgp.ui.container_dialog import ContainerCreationDialog
 from cleverpgp.ui.icons import line_icon
-from cleverpgp.ui.password_generator import create_password_generator_button
+from cleverpgp.ui.password_generator import add_password_generator_action
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,23 +161,15 @@ class HiddenVolumeCreationDialog(QDialog):
         )
         layout.addWidget(self.outer_password)
         layout.addWidget(self.outer_password_repeat)
-        layout.addWidget(
-            create_password_generator_button(
-                self.outer_password,
-                self.outer_password_repeat,
-                self,
-                text="Сгенерировать пароль внешнего диска",
-            )
+        add_password_generator_action(
+            self.outer_password,
+            self.outer_password_repeat,
         )
         layout.addWidget(self.hidden_password)
         layout.addWidget(self.hidden_password_repeat)
-        layout.addWidget(
-            create_password_generator_button(
-                self.hidden_password,
-                self.hidden_password_repeat,
-                self,
-                text="Сгенерировать пароль скрытого диска",
-            )
+        add_password_generator_action(
+            self.hidden_password,
+            self.hidden_password_repeat,
         )
 
         self.hidden_label = QLineEdit("Clever PGP Hidden")

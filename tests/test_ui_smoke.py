@@ -243,11 +243,14 @@ def test_background_task_shows_progress_and_blocks_closing(tmp_path: Path) -> No
     window._start_task(lambda: (time.sleep(0.1), "done")[1], results.append)
     assert window._busy
     assert window.dashboard_progress.isVisible()
-    assert not window.windowFlags() & Qt.WindowType.WindowCloseButtonHint
+    assert window.windowFlags() & Qt.WindowType.WindowCloseButtonHint
     assert all(
         not button.isEnabled()
         for button in window.centralWidget().findChildren(QPushButton)
     )
+    window.close()
+    application.processEvents()
+    assert window.isVisible()
 
     deadline = time.monotonic() + 5
     while window._busy and time.monotonic() < deadline:
@@ -258,6 +261,48 @@ def test_background_task_shows_progress_and_blocks_closing(tmp_path: Path) -> No
     assert not window.dashboard_progress.isVisible()
     assert window.windowFlags() & Qt.WindowType.WindowCloseButtonHint
     assert results == ["done"]
+    window.close()
+    application.processEvents()
+
+
+def test_deleted_unlock_progress_does_not_block_task_start(tmp_path: Path) -> None:
+    """A replaced unlock page must not stop the disk operation at one percent."""
+
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    window = MainWindow(repository, profile_service, FileCryptoService())
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+    window.show()
+    application.processEvents()
+
+    class DeletedProgress:
+        def setRange(self, _minimum: int, _maximum: int) -> None:  # noqa: N802
+            raise RuntimeError("Internal C++ object already deleted")
+
+    # This reproduces the stale Python wrapper left by the former unlock page.
+    window.auth_progress = DeletedProgress()  # type: ignore[assignment]
+    results: list[object] = []
+    window._start_task(lambda: "started", results.append)
+
+    deadline = time.monotonic() + 5
+    while window._busy and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert not window._busy
+    assert window.auth_progress is None
+    assert results == ["started"]
     window.close()
     application.processEvents()
 

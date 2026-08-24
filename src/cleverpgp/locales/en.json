@@ -25,6 +25,7 @@
     "Сгенерировать пароль скрытого диска": "Generate hidden disk password",
     "Запоминаемый пароль из слов": "Memorable word password",
     "Случайная комбинация": "Random combination",
+    "Создать запоминаемый пароль": "Create a memorable password",
     "Созданный пароль будет показан до закрытия текущего окна.": "The generated password will remain visible until this window is closed.",
     "Режим разблокировки": "Unlock mode",
     "Биометрия управляет доступом: лицо не используется как криптографический ключ. Отдельный файл восстановления не создаётся.": "Biometrics controls access: the face is not used as a cryptographic key. No separate recovery file is created.",

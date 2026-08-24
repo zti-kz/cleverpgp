@@ -8,16 +8,18 @@ from cleverpgp.core.password_generator import (
     generate_memorable_password,
     generate_random_password,
 )
-from cleverpgp.ui.password_generator import create_password_generator_button
+from cleverpgp.ui.password_generator import add_password_generator_action
 
 
 def test_memorable_password_has_words_symbol_and_random_number() -> None:
     generated = generate_memorable_password()
 
-    words, suffix = generated.rsplit("-", 1)
-    assert words.count("-") == 2
-    assert any(symbol in suffix for symbol in "!@#$%&*?")
-    assert len(generated) >= 24
+    assert generated[0].isupper()
+    assert sum(character.isupper() for character in generated) >= 2
+    assert any(symbol in generated for symbol in "!@#$%&*?")
+    assert generated[-4:].isdigit()
+    assert len(generated) >= 12
+    assert "-" not in generated
 
 
 def test_random_password_contains_all_character_classes() -> None:
@@ -30,15 +32,15 @@ def test_random_password_contains_all_character_classes() -> None:
     assert any(character in "!@#$%&*?" for character in generated)
 
 
-def test_generator_button_fills_password_and_confirmation() -> None:
+def test_generator_action_fills_password_and_confirmation() -> None:
     QApplication.instance() or QApplication([])
     password = QLineEdit()
     confirmation = QLineEdit()
-    button = create_password_generator_button(password, confirmation)
+    action = add_password_generator_action(password, confirmation)
 
-    actions = button.menu().actions()
-    assert len(actions) == 2
-    actions[0].trigger()
+    assert action in password.actions()
+    assert action.objectName() == "passwordGeneratorAction"
+    action.trigger()
 
     assert password.text()
     assert password.text() == confirmation.text()

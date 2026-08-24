@@ -80,7 +80,7 @@ from cleverpgp.ui.hidden_volume_dialog import (
 )
 from cleverpgp.ui.icons import line_icon
 from cleverpgp.ui.key_dialogs import ContactsDialog, RecipientSelectionDialog
-from cleverpgp.ui.password_generator import create_password_generator_button
+from cleverpgp.ui.password_generator import add_password_generator_action
 from cleverpgp.ui.resize_dialog import ContainerResizeDialog
 from cleverpgp.ui.settings_dialog import AccessSettingsDialog
 
@@ -241,12 +241,9 @@ class MainWindow(QMainWindow):
         form.addRow("Повторите пароль", self.password_repeat_input)
         form.addRow("Режим разблокировки", self.mode_input)
         content.addLayout(form)
-        content.addWidget(
-            create_password_generator_button(
-                self.password_input,
-                self.password_repeat_input,
-                page,
-            )
+        add_password_generator_action(
+            self.password_input,
+            self.password_repeat_input,
         )
 
         note = QLabel(
@@ -1856,9 +1853,16 @@ class MainWindow(QMainWindow):
         for name in ("dashboard_progress", "auth_progress"):
             progress = getattr(self, name, None)
             if progress is not None:
-                progress.setRange(0, 100)
-                progress.setValue(value)
-                progress.setFormat(formatted)
+                try:
+                    progress.setRange(0, 100)
+                    progress.setValue(value)
+                    progress.setFormat(formatted)
+                except RuntimeError:
+                    # A central-page replacement destroys its Qt widgets while
+                    # the Python attribute can still reference the wrapper.
+                    # Ignore only that deleted page and keep updating the live
+                    # progress bar for the current page.
+                    setattr(self, name, None)
 
     @Slot()
     def _task_finished(self) -> None:
@@ -1890,22 +1894,28 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool, *, determinate: bool = False) -> None:
         self._busy = busy
-        restore_window = self.isVisible()
         for name in ("dashboard_progress", "auth_progress"):
             progress = getattr(self, name, None)
             if progress is None:
                 continue
-            if busy:
-                if determinate:
-                    progress.setRange(0, 100)
-                    progress.setValue(1)
-                    progress.setFormat(tr("1% — Запуск операции"))
-                else:
-                    progress.setRange(0, 0)
-                    progress.setFormat("")
-            progress.setVisible(busy)
-        if hasattr(self, "dashboard_status") and busy:
-            self.dashboard_status.hide()
+            try:
+                if busy:
+                    if determinate:
+                        progress.setRange(0, 100)
+                        progress.setValue(1)
+                        progress.setFormat(tr("1% — Запуск операции"))
+                    else:
+                        progress.setRange(0, 0)
+                        progress.setFormat("")
+                progress.setVisible(busy)
+            except RuntimeError:
+                setattr(self, name, None)
+        dashboard_status = getattr(self, "dashboard_status", None)
+        if dashboard_status is not None and busy:
+            try:
+                dashboard_status.hide()
+            except RuntimeError:
+                self.dashboard_status = None
         central = self.centralWidget()
         if busy:
             self._busy_widget_states.clear()
@@ -1940,9 +1950,11 @@ class MainWindow(QMainWindow):
         else:
             self._tray_show_action.setEnabled(True)
             self._sync_tray_state()
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, not busy)
-        if restore_window:
-            self.show()
+        # Do not change native window flags while a visible maximized window
+        # is returning from a modal dialog. On Windows, Qt may synchronously
+        # recreate the native window here and never return to the code that
+        # starts the isolated disk helper. ``closeEvent`` already rejects
+        # closing while ``_busy`` is true, so no title-bar mutation is needed.
 
     def _lock(self) -> None:
         if self._busy:
