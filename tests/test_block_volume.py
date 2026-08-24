@@ -116,6 +116,34 @@ def test_portable_password_can_be_changed_without_reencrypting_data(
         assert local_profile.read_blocks(9, 1) == payload
 
 
+def test_portable_password_can_link_multiple_local_biometric_profiles(
+    tmp_path: Path,
+) -> None:
+    first_profile = master_key()
+    second_profile = master_key()
+    password = "correct portable disk password"
+    path = tmp_path / "linked-profiles.cpgv"
+    payload = b"multi profile".ljust(LOGICAL_BLOCK_SIZE, b".")
+    with EncryptedBlockVolume.create(
+        path,
+        first_profile,
+        logical_capacity=1024 * 1024,
+        password=password,
+    ) as volume:
+        volume.write_blocks(11, payload)
+
+    EncryptedBlockVolume.add_profile_access(path, password, second_profile)
+    # Re-linking the same profile is idempotent and does not consume a slot.
+    EncryptedBlockVolume.add_profile_access(path, password, second_profile)
+
+    with EncryptedBlockVolume.open(path, first_profile) as original:
+        assert original.read_blocks(11, 1) == payload
+    with EncryptedBlockVolume.open(path, second_profile) as linked:
+        assert linked.read_blocks(11, 1) == payload
+    with EncryptedBlockVolume.open_with_password(path, password) as portable:
+        assert portable.read_blocks(11, 1) == payload
+
+
 @pytest.mark.skipif(
     not disk_cipher_available(AES256_GCM),
     reason="AES-256-GCM is not available on this processor",

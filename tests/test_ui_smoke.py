@@ -17,7 +17,10 @@ from PySide6.QtWidgets import (  # noqa: E402
 )
 
 from biopgp.core.container import MIN_DATA_CAPACITY  # noqa: E402
-from biopgp.core.block_volume import InvalidBlockVolumeError  # noqa: E402
+from biopgp.core.block_volume import (  # noqa: E402
+    EncryptedBlockVolume,
+    InvalidBlockVolumeError,
+)
 from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
 from biopgp.core.models import BiometricProfile, UnlockMode  # noqa: E402
 from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
@@ -125,6 +128,88 @@ def test_portable_disk_can_open_by_password_without_local_profile(
 
     assert manager.mounted_drive == "P:"
     assert not repository.has_profile()
+    manager.mounted_drive = None
+    window.close()
+    application.processEvents()
+
+
+def test_portable_password_links_current_profile_for_future_face_unlock(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "portable-linked.cpgv"
+    original_profile_key = os.urandom(32)
+    disk_password = "correct portable disk password"
+    with EncryptedBlockVolume.create(
+        source,
+        original_profile_key,
+        logical_capacity=1024 * 1024,
+        password=disk_password,
+    ):
+        pass
+
+    class UnlockDialog:
+        request = OpaqueVolumeUnlockRequest(
+            password=disk_password,
+            hidden_protection_password=None,
+        )
+
+        def __init__(self, selected: Path, parent: object = None) -> None:
+            assert selected == source.resolve()
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class PortableManager:
+        mounted_drive: str | None = None
+
+        def mount_opaque(
+            self,
+            selected: Path,
+            password: str,
+            **options: object,
+        ) -> str:
+            assert selected == source.resolve()
+            assert password == disk_password
+            self.mounted_drive = "P:"
+            return self.mounted_drive
+
+    monkeypatch.setattr(
+        main_window_module,
+        "OpaqueVolumeUnlockDialog",
+        UnlockDialog,
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "new-computer.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    profile_password = "correct local profile password"
+    profile_service.create_profile("New computer", profile_password)
+    session = profile_service.unlock_with_password(profile_password)
+    local_profile_key = session.master_key_copy()
+    manager = PortableManager()
+    window = MainWindow(
+        repository,
+        profile_service,
+        FileCryptoService(),
+        mount_manager=manager,  # type: ignore[arg-type]
+    )
+    window.session = session
+    window._prompt_opaque_volume_password(source.resolve())
+    deadline = time.monotonic() + 5
+    while manager.mounted_drive is None and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert manager.mounted_drive == "P:"
+    with EncryptedBlockVolume.open(source, local_profile_key):
+        pass
     manager.mounted_drive = None
     window.close()
     application.processEvents()

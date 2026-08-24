@@ -53,6 +53,8 @@ PASSWORD_WRAP_FIELD = "password_wrapped_volume_key"
 PASSWORD_SALT_FIELD = "password_kdf_salt"
 PASSWORD_OPSLIMIT_FIELD = "password_kdf_opslimit"
 PASSWORD_MEMLIMIT_FIELD = "password_kdf_memlimit"
+PROFILE_WRAP_LIST_FIELD = "profile_wrapped_volume_keys"
+MAXIMUM_ADDITIONAL_PROFILE_SLOTS = 8
 MINIMUM_PASSWORD_LENGTH = 12
 MAXIMUM_PASSWORD_BYTES = 1024
 MAXIMUM_KDF_MEMORY = pwhash.argon2id.MEMLIMIT_SENSITIVE
@@ -445,6 +447,71 @@ class EncryptedBlockVolume:
             volume._header_generation = int(authenticated["header_generation"])
             if progress is not None:
                 progress(5, 5)
+        finally:
+            volume.close()
+        return target
+
+    @classmethod
+    def add_profile_access(
+        cls,
+        path: Path,
+        password: str,
+        profile_master_key: bytes,
+    ) -> Path:
+        """Add a local profile slot after the portable password succeeds."""
+
+        cls._validate_master_key(profile_master_key)
+        target = Path(path).expanduser().resolve()
+        try:
+            already_linked = cls.open(target, profile_master_key)
+        except InvalidBlockVolumeError:
+            pass
+        else:
+            already_linked.close()
+            return target
+
+        portable_key = cls.password_access_key(target, password)
+        try:
+            volume = cls.open(target, portable_key)
+        finally:
+            del portable_key
+        try:
+            profile_slots = list(
+                volume._metadata.get(PROFILE_WRAP_LIST_FIELD, [])
+            )
+            if len(profile_slots) >= MAXIMUM_ADDITIONAL_PROFILE_SLOTS:
+                raise ValidationError(
+                    "Достигнут предел локальных профилей для этого диска."
+                )
+            profile_slots.append(
+                base64.b64encode(
+                    bytes(
+                        secret.SecretBox(profile_master_key).encrypt(
+                            bytes(volume._volume_key)
+                        )
+                    )
+                ).decode("ascii")
+            )
+            metadata = dict(volume._metadata)
+            metadata.pop("header_auth", None)
+            metadata.update(
+                {
+                    "header_generation": volume._header_generation + 1,
+                    PROFILE_WRAP_LIST_FIELD: profile_slots,
+                }
+            )
+            authenticated = cls._authenticated_metadata(
+                metadata,
+                bytes(volume._volume_key),
+            )
+            new_slot = (volume._active_header_slot + 1) % HEADER_SLOT_COUNT
+            volume._write_verified_header_slot(new_slot, authenticated)
+            for slot in range(HEADER_SLOT_COUNT):
+                if slot != new_slot:
+                    volume._invalidate_header_slot(slot)
+            volume._metadata = authenticated
+            volume._active_header_slot = new_slot
+            volume._header_generation = int(authenticated["header_generation"])
         finally:
             volume.close()
         return target
@@ -1057,12 +1124,17 @@ class EncryptedBlockVolume:
                 )
                 cls._validate_metadata(metadata)
                 volume_key: bytes | None = None
-                for wrap_field in ("wrapped_volume_key", PASSWORD_WRAP_FIELD):
-                    if wrap_field not in metadata:
-                        continue
+                wrapped_values = [str(metadata["wrapped_volume_key"])]
+                wrapped_values.extend(
+                    str(value)
+                    for value in metadata.get(PROFILE_WRAP_LIST_FIELD, [])
+                )
+                if PASSWORD_WRAP_FIELD in metadata:
+                    wrapped_values.append(str(metadata[PASSWORD_WRAP_FIELD]))
+                for encoded_wrapped_key in wrapped_values:
                     try:
                         wrapped_key = base64.b64decode(
-                            str(metadata[wrap_field]),
+                            encoded_wrapped_key,
                             validate=True,
                         )
                         volume_key = secret.SecretBox(master_key).decrypt(
@@ -1227,6 +1299,23 @@ class EncryptedBlockVolume:
                 raise InvalidBlockVolumeError(
                     "Парольный слот диска содержит неверную соль."
                 )
+        additional_profiles = metadata.get(PROFILE_WRAP_LIST_FIELD, [])
+        if (
+            not isinstance(additional_profiles, list)
+            or len(additional_profiles) > MAXIMUM_ADDITIONAL_PROFILE_SLOTS
+        ):
+            raise InvalidBlockVolumeError(
+                "Некорректный список локальных профилей диска."
+            )
+        try:
+            for value in additional_profiles:
+                if not isinstance(value, str):
+                    raise ValueError("profile slot type")
+                base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise InvalidBlockVolumeError(
+                "Локальный слот профиля диска повреждён."
+            ) from error
 
     @staticmethod
     def _validate_password(password: str) -> bytes:

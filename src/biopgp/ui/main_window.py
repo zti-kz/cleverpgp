@@ -30,7 +30,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from biopgp.core.block_volume import BlockVolumeError
+from biopgp.core.block_volume import (
+    BlockVolumeError,
+    EncryptedBlockVolume,
+)
 from biopgp.core.disk_crypto import DEFAULT_DISK_ALGORITHM
 from biopgp.core.errors import BioPGPError, InvalidContainerError
 from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer
@@ -1285,6 +1288,11 @@ class MainWindow(QMainWindow):
             request.password,
             request.hidden_protection_password,
         ]
+        profile_key = (
+            bytearray(self.session.master_key_copy())
+            if self.session is not None and self.session.is_unlocked
+            else None
+        )
 
         def mount_opaque(progress: Callable[[int, str], None]) -> str:
             opener = getattr(self.mount_manager, "mount_opaque", None)
@@ -1293,6 +1301,19 @@ class MainWindow(QMainWindow):
                     "Этот зашифрованный диск нельзя открыть выбранным способом."
                 )
             try:
+                if profile_key is not None:
+                    try:
+                        progress(3, "Привязка локального профиля к диску")
+                        EncryptedBlockVolume.add_profile_access(
+                            source,
+                            passwords[0],
+                            bytes(profile_key),
+                        )
+                    except BioPGPError:
+                        # Linking is an optional convenience. The manager still
+                        # performs the authoritative password authentication,
+                        # including for opaque hidden v4 disks.
+                        pass
                 return opener(
                     source,
                     passwords[0],
@@ -1310,6 +1331,8 @@ class MainWindow(QMainWindow):
             finally:
                 passwords[0] = None
                 passwords[1] = None
+                if profile_key is not None:
+                    profile_key[:] = b"\x00" * len(profile_key)
 
         self._start_progress_task(mount_opaque, self._container_mounted)
 
