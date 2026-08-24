@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -8,16 +9,54 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from cleverpgp.config import app_data_directory
 
 
+def application_instance_name() -> str:
+    identity = str(app_data_directory()).casefold().encode("utf-8")
+    suffix = hashlib.sha256(identity).hexdigest()[:20]
+    return f"CleverPGP-shell-{suffix}"
+
+
+def request_primary_shutdown(*, timeout_seconds: float = 15.0) -> int:
+    """Ask the regular shell to exit, then wait until it releases its IPC."""
+
+    name = application_instance_name()
+    if not _send_command(name, b"shutdown\n"):
+        return 0
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        probe = QLocalSocket()
+        probe.connectToServer(name)
+        if not probe.waitForConnected(100):
+            probe.abort()
+            return 0
+        probe.disconnectFromServer()
+        time.sleep(0.05)
+    return 1
+
+
+def _send_command(name: str, command: bytes) -> bool:
+    socket = QLocalSocket()
+    socket.connectToServer(name)
+    if not socket.waitForConnected(250):
+        socket.abort()
+        return False
+    socket.write(command)
+    socket.flush()
+    socket.waitForBytesWritten(250)
+    socket.waitForReadyRead(750)
+    socket.readAll()
+    socket.disconnectFromServer()
+    return True
+
+
 class SingleApplicationInstance(QObject):
     """Keep one regular Clever PGP shell per Windows user session."""
 
     activation_requested = Signal()
+    shutdown_requested = Signal()
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        identity = str(app_data_directory()).casefold().encode("utf-8")
-        suffix = hashlib.sha256(identity).hexdigest()[:20]
-        self.name = f"CleverPGP-shell-{suffix}"
+        self.name = application_instance_name()
         self._server = QLocalServer(self)
         self._owns_server = False
         self._server.newConnection.connect(self._accept_connections)
@@ -48,18 +87,7 @@ class SingleApplicationInstance(QObject):
             QLocalServer.removeServer(self.name)
 
     def _notify_existing(self) -> bool:
-        socket = QLocalSocket()
-        socket.connectToServer(self.name)
-        if not socket.waitForConnected(250):
-            socket.abort()
-            return False
-        socket.write(b"activate\n")
-        socket.flush()
-        socket.waitForBytesWritten(250)
-        socket.waitForReadyRead(750)
-        socket.readAll()
-        socket.disconnectFromServer()
-        return True
+        return _send_command(self.name, b"activate\n")
 
     def _accept_connections(self) -> None:
         while self._server.hasPendingConnections():
@@ -77,12 +105,18 @@ class SingleApplicationInstance(QObject):
                 self._read_request(socket)
 
     def _read_request(self, socket: QLocalSocket) -> None:
-        if (
-            b"activate" in bytes(socket.readAll())
-            and not getattr(socket, "_cleverpgp_activated", False)
-        ):
-            setattr(socket, "_cleverpgp_activated", True)
+        payload = bytes(socket.readAll())
+        if not payload or getattr(socket, "_cleverpgp_handled", False):
+            return
+        handled = False
+        if b"shutdown" in payload:
+            handled = True
+            self.shutdown_requested.emit()
+        elif b"activate" in payload:
+            handled = True
             self.activation_requested.emit()
+        if handled:
+            setattr(socket, "_cleverpgp_handled", True)
             if socket.state() == QLocalSocket.LocalSocketState.ConnectedState:
                 socket.write(b"ok\n")
                 socket.flush()

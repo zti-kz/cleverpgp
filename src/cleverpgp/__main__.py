@@ -32,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             return 1
         return restart_after_process_exit(process_id)
+    if arguments == ["--shutdown-for-uninstall"]:
+        from cleverpgp.single_instance import request_primary_shutdown
+
+        return request_primary_shutdown()
     if arguments[:1] == ["--purge-local-profile"] and len(arguments) in (1, 2):
         from cleverpgp.core.profile_purge import purge_local_profile
 

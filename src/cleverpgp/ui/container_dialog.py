@@ -35,6 +35,7 @@ from cleverpgp.core.winspd import MIN_HIDDEN_WINDOWS_COVER_CAPACITY
 from cleverpgp.localization import localize_widget_tree, tr
 from cleverpgp.ui.adaptive import ResponsiveBox
 from cleverpgp.ui.icons import line_icon
+from cleverpgp.ui.password_generator import create_password_generator_button
 
 MEBIBYTE = 1024 * 1024
 GIBIBYTE = 1024 * MEBIBYTE
@@ -454,6 +455,13 @@ class ContainerCreationDialog(QDialog):
         password_layout.addWidget(password_description)
         password_layout.addWidget(self.password_input)
         password_layout.addWidget(self.password_confirm_input)
+        password_layout.addWidget(
+            create_password_generator_button(
+                self.password_input,
+                self.password_confirm_input,
+                self.password_card,
+            )
+        )
         outer.addWidget(self.password_card)
 
         label_title = QLabel("Название диска")

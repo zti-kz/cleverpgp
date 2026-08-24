@@ -27,6 +27,7 @@ from cleverpgp.core.storage import ProfileRepository
 from cleverpgp.localization import localize_widget_tree, set_language, tr
 from cleverpgp.ui.adaptive import scrollable_dialog_layout
 from cleverpgp.ui.icons import line_icon
+from cleverpgp.ui.password_generator import create_password_generator_button
 from cleverpgp.ui.screen_bounds import install_screen_bounds
 
 if TYPE_CHECKING:
@@ -126,6 +127,13 @@ class DiskPasswordChangeDialog(QDialog):
         layout.addWidget(self.current_password)
         layout.addWidget(self.new_password)
         layout.addWidget(self.repeat_password)
+        layout.addWidget(
+            create_password_generator_button(
+                self.new_password,
+                self.repeat_password,
+                self,
+            )
+        )
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)

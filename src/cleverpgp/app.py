@@ -101,4 +101,5 @@ def main(
         fit_window_to_screen(window)
     if instance is not None:
         instance.activation_requested.connect(window._show_from_tray)
+        instance.shutdown_requested.connect(window._shutdown_for_uninstall)
     return application.exec()

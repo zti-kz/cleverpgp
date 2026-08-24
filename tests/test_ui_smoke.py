@@ -826,6 +826,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
             self.mounted_drive: str | None = None
             self.create_call: dict[str, object] | None = None
             self.mount_call: dict[str, object] | None = None
+            self.operation: object | None = None
 
         def create_and_mount(
             self,
@@ -844,6 +845,41 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
             self.mounted_drive = "Y:"
             progress(100, "Готово")
             return self.mounted_drive
+
+        def begin_create_and_mount_isolated(
+            self,
+            container_path: Path,
+            master_key: bytes,
+            **options: object,
+        ) -> object:
+            self.create_call = {
+                "container_path": container_path,
+                "master_key": master_key,
+                **options,
+            }
+
+            class Operation:
+                finished = True
+                cleaned = False
+
+                @staticmethod
+                def read_progress() -> tuple[int, str]:
+                    return 75, "Форматирование"
+
+                @staticmethod
+                def result() -> str:
+                    return "Y:"
+
+                def cleanup(self) -> None:
+                    self.cleaned = True
+
+            self.operation = Operation()
+            return self.operation
+
+        def adopt_isolated_creation(self, path: Path, drive: str) -> str:
+            assert path == CreationDialog.container_path
+            self.mounted_drive = drive
+            return drive
 
         def mount(
             self,
@@ -1201,9 +1237,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
 
     assert CreationDialog.options == {
         "minimum_capacity": 32 * 1024 * 1024,
-        "allow_backend_choice": True,
-        "system_backend_available": True,
-        "winfsp_backend_available": True,
+        "system_disk": True,
         "hidden_volume_available": True,
     }
     assert manager.create_call is not None
@@ -1265,6 +1299,7 @@ def test_hidden_disk_creation_uses_dual_password_windows_workflow(
         def __init__(self) -> None:
             self.mounted_drive: str | None = None
             self.hidden_call: dict[str, object] | None = None
+            self.operation: object | None = None
 
         def create_hidden_and_mount(
             self,
@@ -1273,25 +1308,43 @@ def test_hidden_disk_creation_uses_dual_password_windows_workflow(
         ) -> str:
             raise AssertionError("Qt worker must use isolated hidden creation")
 
-        def create_hidden_and_mount_isolated(
+        def begin_create_hidden_and_mount_isolated(
             self,
             path: Path,
             outer_password: str,
             hidden_password: str,
             **options: object,
-        ) -> str:
-            progress = options.pop("progress")
-            assert callable(progress)
+        ) -> object:
             self.hidden_call = {
                 "path": path,
                 "outer_password": outer_password,
                 "hidden_password": hidden_password,
                 **options,
             }
+
+            class Operation:
+                finished = True
+                cleaned = False
+
+                @staticmethod
+                def read_progress() -> tuple[int, str]:
+                    return 80, "Создание скрытого диска"
+
+                @staticmethod
+                def result() -> str:
+                    return "H:"
+
+                def cleanup(self) -> None:
+                    self.cleaned = True
+
+            self.operation = Operation()
+            return self.operation
+
+        def adopt_isolated_creation(self, path: Path, drive: str) -> str:
+            assert path == CreationDialog.container_path
             self.uses_windows_system_disk = True
-            self.mounted_drive = "H:"
-            progress(100, "Скрытый виртуальный диск готов")
-            return self.mounted_drive
+            self.mounted_drive = drive
+            return drive
 
         def unmount(self) -> None:
             self.mounted_drive = None

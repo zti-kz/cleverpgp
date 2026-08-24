@@ -80,6 +80,7 @@ from cleverpgp.ui.hidden_volume_dialog import (
 )
 from cleverpgp.ui.icons import line_icon
 from cleverpgp.ui.key_dialogs import ContactsDialog, RecipientSelectionDialog
+from cleverpgp.ui.password_generator import create_password_generator_button
 from cleverpgp.ui.resize_dialog import ContainerResizeDialog
 from cleverpgp.ui.settings_dialog import AccessSettingsDialog
 
@@ -240,6 +241,13 @@ class MainWindow(QMainWindow):
         form.addRow("Повторите пароль", self.password_repeat_input)
         form.addRow("Режим разблокировки", self.mode_input)
         content.addLayout(form)
+        content.addWidget(
+            create_password_generator_button(
+                self.password_input,
+                self.password_repeat_input,
+                page,
+            )
+        )
 
         note = QLabel(
             "Биометрия управляет доступом: лицо не "
@@ -1025,12 +1033,16 @@ class MainWindow(QMainWindow):
                 hidden_volume_available=True,
             )
         elif self._automatically_selects_disk_backend:
+            if sys.platform == "win32" and not winspd_driver_available():
+                self._show_error(
+                    "Компонент быстрого виртуального диска Windows не установлен. "
+                    "Переустановите Clever PGP и повторите создание."
+                )
+                return
             dialog = ContainerCreationDialog(
                 self,
                 minimum_capacity=MIN_WINDOWS_DISK_CAPACITY,
-                allow_backend_choice=True,
-                system_backend_available=winspd_driver_available(),
-                winfsp_backend_available=mount_backend_available(),
+                system_disk=sys.platform == "win32",
                 hidden_volume_available=winspd_driver_available(),
             )
         else:
@@ -1047,8 +1059,13 @@ class MainWindow(QMainWindow):
             DEFAULT_DISK_ALGORITHM,
         )
         disk_password = getattr(dialog, "disk_password", None)
+        # New Windows containers always use the fast block-disk backend.  The
+        # older WinFsp format remains readable, but must never silently become
+        # the creation path and reintroduce a blocking Qt worker.
         create_as_system_disk = self._uses_windows_system_disk or (
-            self._automatically_selects_disk_backend and dialog.system_disk
+            self._automatically_selects_disk_backend
+            and sys.platform == "win32"
+            and winspd_driver_available()
         )
         isolated_creator = getattr(
             self.mount_manager,
@@ -1262,6 +1279,10 @@ class MainWindow(QMainWindow):
                         created,
                     )
                     return
+                self._show_error(
+                    "Неблокирующий компонент создания скрытого диска недоступен."
+                )
+                return
             else:
                 starter = getattr(
                     self.mount_manager,
@@ -1298,6 +1319,10 @@ class MainWindow(QMainWindow):
                         created,
                     )
                     return
+                self._show_error(
+                    "Неблокирующий компонент создания диска недоступен."
+                )
+                return
 
         if hidden_request is not None:
             self._start_progress_task(create_hidden_container, created)
@@ -2062,6 +2087,14 @@ class MainWindow(QMainWindow):
         application = QApplication.instance()
         if application is not None:
             application.quit()
+
+    @Slot()
+    def _shutdown_for_uninstall(self) -> None:
+        """Release profile files before the elevated uninstaller removes them."""
+
+        if self._busy:
+            return
+        self._close_background_window()
 
     def _clear_session(self) -> None:
         if self.session is not None:

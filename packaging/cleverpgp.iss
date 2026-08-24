@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.13.3"
+  #define AppVersion "0.13.4"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -153,7 +153,32 @@ end;
 function InitializeUninstall(): Boolean;
 var
   Choice: Integer;
+  ShutdownResult: Integer;
 begin
+  if FileExists(ExpandConstant('{app}\{#AppExecutable}')) then
+  begin
+    if
+      (not Exec(
+        ExpandConstant('{app}\{#AppExecutable}'),
+        '--shutdown-for-uninstall',
+        ExpandConstant('{app}'),
+        SW_HIDE,
+        ewWaitUntilTerminated,
+        ShutdownResult
+      )) or
+      (ShutdownResult <> 0)
+    then
+    begin
+      MsgBox(
+        'Не удалось завершить Clever PGP. ' +
+        'Дождитесь окончания текущей операции и повторите удаление.',
+        mbError,
+        MB_OK
+      );
+      Result := False;
+      exit;
+    end;
+  end;
   Choice := MsgBox(
     'Удалить локальный профиль Clever PGP?' + #13#10 + #13#10 +
     'Да — удалить профиль, настройки, биометрические данные и локальные ключи.' + #13#10 +

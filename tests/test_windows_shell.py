@@ -248,6 +248,8 @@ def test_uninstaller_offers_to_keep_or_remove_only_local_profile() -> None:
 
     assert "function InitializeUninstall(): Boolean;" in installer
     assert "MB_YESNOCANCEL" in installer
+    assert "--shutdown-for-uninstall" in installer
+    assert "ShutdownResult <> 0" in installer
     assert "[UninstallRun]" in installer
     assert '--purge-local-profile ""{code:ProfilePathForUninstall}""' in installer
     assert 'Check: DeleteLocalProfile' in installer

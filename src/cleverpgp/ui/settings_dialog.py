@@ -25,6 +25,7 @@ from cleverpgp.localization import (
 )
 from cleverpgp.ui.adaptive import scrollable_dialog_layout
 from cleverpgp.ui.icons import line_icon
+from cleverpgp.ui.password_generator import create_password_generator_button
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +205,13 @@ class AccessSettingsDialog(QDialog):
         password_layout.addWidget(self.current_password_input)
         password_layout.addWidget(self.new_password_input)
         password_layout.addWidget(self.repeat_password_input)
+        password_layout.addWidget(
+            create_password_generator_button(
+                self.new_password_input,
+                self.repeat_password_input,
+                password_card,
+            )
+        )
         password_button = QPushButton("Изменить мастер-пароль")
         password_button.setObjectName("primary")
         password_button.setIcon(line_icon("lock"))
