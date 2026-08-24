@@ -573,8 +573,8 @@ class ContainerCreationDialog(QDialog):
             self.algorithm_input.setEnabled(self.algorithm_input.count() > 1)
             self._minimum_capacity = self._base_minimum_capacity
             description = (
-                "Диск можно открыть локальным профилем или его собственным "
-                "переносимым паролем."
+                "Диск открывается только своим переносимым паролем. Общий "
+                "мастер-пароль программы не используется."
             )
         self.password_card.setVisible(not self.hidden_volume)
         self.volume_kind_description.setText(tr(description))

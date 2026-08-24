@@ -17,14 +17,11 @@ from PySide6.QtWidgets import (
 )
 
 from cleverpgp.core.file_crypto import FileCryptoService
-from cleverpgp.core.identity import formatted_fingerprint
-from cleverpgp.core.models import Contact
-from cleverpgp.core.profile_service import ProfileService
 from cleverpgp.core.storage import ProfileRepository
 from cleverpgp.localization import localize_widget_tree, set_language, tr
 from cleverpgp.ui.adaptive import scrollable_dialog_layout
 from cleverpgp.ui.icons import line_icon
-from cleverpgp.ui.key_dialogs import RecipientSelectionDialog
+from cleverpgp.ui.password_generator import add_password_generator_action
 
 Operation = Literal["encrypt", "decrypt"]
 
@@ -43,7 +40,6 @@ class ShellFileWorker(QObject):
         target: Path,
         password: str,
         overwrite: bool,
-        recipients: tuple[Contact, ...] = (),
     ) -> None:
         super().__init__()
         self.repository = repository
@@ -55,63 +51,32 @@ class ShellFileWorker(QObject):
         self.target = target
         self.password = password
         self.overwrite = overwrite
-        self.recipients = recipients
 
     @Slot()
     def run(self) -> None:
-        session = None
         try:
-            session = ProfileService(self.repository).unlock_with_password(self.password)
-            self.password = ""
-            master_key = session.master_key_copy()
             service = FileCryptoService(self.repository)
-            try:
-                if self.operation == "encrypt":
-                    result = service.encrypt_file(
-                        self.source,
-                        self.target,
-                        master_key,
-                        recipients=self.recipients,
-                        overwrite=self.overwrite,
-                        progress=self._report_progress,
-                    )
-                else:
-                    detailed = service.decrypt_file_detailed(
-                        self.source,
-                        self.target,
-                        master_key,
-                        overwrite=self.overwrite,
-                        progress=self._report_progress,
-                    )
-                    if detailed.sender_is_self:
-                        verification = tr(
-                            "Подпись текущего профиля подтверждена."
-                        )
-                    elif detailed.sender_is_known:
-                        verification = tr(
-                            "Подпись контакта {name} подтверждена.",
-                            name=detailed.sender.display_name,
-                        )
-                    else:
-                        verification = tr(
-                            "Подпись математически верна, но отправитель {name} ещё не "
-                            "сохранён в контактах. Сверьте полный отпечаток по "
-                            "независимому каналу:\n{fingerprint}",
-                            name=detailed.sender.display_name,
-                            fingerprint=formatted_fingerprint(
-                                detailed.sender.fingerprint
-                            ),
-                        )
-                    result = f"{detailed.path}\n{verification}"
-            finally:
-                del master_key
+            if self.operation == "encrypt":
+                result = service.encrypt_file_with_password(
+                    self.source,
+                    self.target,
+                    self.password,
+                    overwrite=self.overwrite,
+                    progress=self._report_progress,
+                )
+            else:
+                result = service.decrypt_file_with_password(
+                    self.source,
+                    self.target,
+                    self.password,
+                    overwrite=self.overwrite,
+                    progress=self._report_progress,
+                )
             self.succeeded.emit(str(result))
         except Exception as error:
             self.failed.emit(str(error))
         finally:
             self.password = ""
-            if session is not None:
-                session.lock()
             self.finished.emit()
 
     def _report_progress(self, value: int, message: str) -> None:
@@ -133,7 +98,6 @@ class ShellOperationDialog(QDialog):
         self.target = self._default_target()
         self.thread: QThread | None = None
         self.worker: ShellFileWorker | None = None
-        self.selected_contacts: tuple[Contact, ...] = ()
         self.running = False
         self.operation_succeeded: bool | None = None
 
@@ -178,27 +142,22 @@ class ShellOperationDialog(QDialog):
         layout.addWidget(QLabel("Результат:"))
         layout.addLayout(target_row)
 
-        self.recipient_button: QPushButton | None = None
-        self.recipient_label: QLabel | None = None
-        if self.operation == "encrypt":
-            recipient_row = QHBoxLayout()
-            self.recipient_label = QLabel()
-            self.recipient_label.setObjectName("path")
-            self.recipient_label.setWordWrap(True)
-            self.recipient_button = QPushButton("Выбрать получателей…")
-            self.recipient_button.setIcon(line_icon("contact_add"))
-            self.recipient_button.clicked.connect(self._choose_recipients)
-            recipient_row.addWidget(self.recipient_label, 1)
-            recipient_row.addWidget(self.recipient_button)
-            layout.addWidget(QLabel("Получатели:"))
-            layout.addLayout(recipient_row)
-            self._update_recipient_summary()
-
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_input.setPlaceholderText("Мастер-пароль Clever PGP")
+        self.password_input.setPlaceholderText("Пароль файла — не менее 12 символов")
         self.password_input.returnPressed.connect(self._start)
         layout.addWidget(self.password_input)
+        self.password_repeat_input: QLineEdit | None = None
+        if self.operation == "encrypt":
+            self.password_repeat_input = QLineEdit()
+            self.password_repeat_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.password_repeat_input.setPlaceholderText("Повторите пароль файла")
+            self.password_repeat_input.returnPressed.connect(self._start)
+            layout.addWidget(self.password_repeat_input)
+            add_password_generator_action(
+                self.password_input,
+                self.password_repeat_input,
+            )
 
         note = QLabel(
             "Оригинальный файл останется без изменений. "
@@ -217,6 +176,8 @@ class ShellOperationDialog(QDialog):
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
+        self.status.setMinimumHeight(52)
+        self.status.setContentsMargins(14, 10, 14, 10)
         self.status.hide()
         layout.addWidget(self.status)
 
@@ -261,45 +222,23 @@ class ShellOperationDialog(QDialog):
             self.target = Path(selected).expanduser().resolve()
             self.target_label.setText(str(self.target))
 
-    def _choose_recipients(self) -> None:
-        if self.running:
-            return
-        contacts = self.repository.list_contacts()
-        if not contacts:
-            self.status.setObjectName("error")
-            self.status.setText(
-                tr(
-                    "Контакты ещё не добавлены. Импортируйте открытый ключ "
-                    "получателя в главном окне Clever PGP."
-                )
-            )
-            self.status.style().unpolish(self.status)
-            self.status.style().polish(self.status)
-            self.status.show()
-            return
-        dialog = RecipientSelectionDialog(contacts, self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.selected_contacts = dialog.selected_contacts
-            self._update_recipient_summary()
-
-    def _update_recipient_summary(self) -> None:
-        if self.recipient_label is None:
-            return
-        if not self.selected_contacts:
-            self.recipient_label.setText(tr("Только текущий профиль"))
-            return
-        names = ", ".join(contact.display_name for contact in self.selected_contacts)
-        self.recipient_label.setText(
-            tr("Текущий профиль и: {names}", names=names)
-        )
-
     def _start(self) -> None:
         if self.running:
             return
         password = self.password_input.text()
         if not password:
             self.status.setObjectName("error")
-            self.status.setText(tr("Введите мастер-пароль."))
+            self.status.setText(tr("Введите пароль файла."))
+            self.status.style().unpolish(self.status)
+            self.status.style().polish(self.status)
+            self.status.show()
+            return
+        if (
+            self.password_repeat_input is not None
+            and password != self.password_repeat_input.text()
+        ):
+            self.status.setObjectName("error")
+            self.status.setText(tr("Пароли файла не совпадают."))
             self.status.style().unpolish(self.status)
             self.status.style().polish(self.status)
             self.status.show()
@@ -324,11 +263,12 @@ class ShellOperationDialog(QDialog):
         self.operation_succeeded = None
         self.password_input.clear()
         self.password_input.setEnabled(False)
+        if self.password_repeat_input is not None:
+            self.password_repeat_input.clear()
+            self.password_repeat_input.setEnabled(False)
         self.choose_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.action_button.setEnabled(False)
-        if self.recipient_button is not None:
-            self.recipient_button.setEnabled(False)
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
         self.show()
         self.progress.show()
@@ -344,7 +284,6 @@ class ShellOperationDialog(QDialog):
             self.target,
             password,
             overwrite,
-            self.selected_contacts,
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -394,12 +333,12 @@ class ShellOperationDialog(QDialog):
         self.worker = None
         self.thread = None
         self.cancel_button.setEnabled(True)
-        if self.recipient_button is not None:
-            self.recipient_button.setEnabled(True)
         if self.operation_succeeded:
             self.action_button.setEnabled(True)
         else:
             self.password_input.setEnabled(True)
+            if self.password_repeat_input is not None:
+                self.password_repeat_input.setEnabled(True)
             self.choose_button.setEnabled(True)
             self.action_button.setEnabled(True)
             self.password_input.setFocus()
@@ -428,8 +367,20 @@ QLabel#path {
     color: #cbd5e1;
 }
 QLabel#muted { color: #9ca3af; }
-QLabel#success { color: #99f6e4; }
-QLabel#error { color: #fca5a5; }
+QLabel#success {
+    color: #99f6e4;
+    background: #052e2b;
+    border: 1px solid #0f766e;
+    border-radius: 9px;
+    padding: 10px 14px;
+}
+QLabel#error {
+    color: #fca5a5;
+    background: #3f151b;
+    border: 1px solid #991b1b;
+    border-radius: 9px;
+    padding: 10px 14px;
+}
 QLineEdit {
     background: #0f172a;
     border: 1px solid #475569;

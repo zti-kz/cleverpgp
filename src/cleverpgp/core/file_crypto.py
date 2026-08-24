@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from nacl import bindings, exceptions, public, secret
+from nacl import bindings, exceptions, public, pwhash, secret, utils
 
 from cleverpgp.core.errors import (
     CryptographicIdentityError,
@@ -31,6 +31,7 @@ from cleverpgp.core.storage import ProfileRepository
 
 MAGIC = b"CPGPFILE"
 FORMAT_VERSION = 2
+PASSWORD_FORMAT_VERSION = 3
 PREFIX = struct.Struct(">8sBI")
 RECORD_LENGTH = struct.Struct(">I")
 CHUNK_SIZE = 1024 * 1024
@@ -40,6 +41,8 @@ ALGORITHM = "XCHACHA20-POLY1305-SECRETSTREAM"
 KEY_WRAP = "X25519-SEALEDBOX"
 SIGNATURE_ALGORITHM = "ED25519PH"
 SIGNATURE_DOMAIN = b"Clever PGP signed encrypted file v2\0"
+PASSWORD_KEY_WRAP = "ARGON2ID-SECRETBOX"
+MINIMUM_FILE_PASSWORD_LENGTH = 12
 
 ProgressCallback = Callable[[int, str], None]
 
@@ -68,6 +71,227 @@ class FileCryptoService:
         if self.repository is not None and self.repository.path != repository.path:
             raise ValueError("File crypto service is already bound to another profile.")
         self.repository = repository
+
+    def encrypt_file_with_password(
+        self,
+        source_path: Path,
+        target_path: Path,
+        password: str,
+        *,
+        overwrite: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> Path:
+        """Encrypt a portable file with a password owned by that file.
+
+        The password only unlocks a randomly generated per-file key. It is
+        never used directly as the data-encryption key and is not stored by the
+        application.
+        """
+
+        self._report_progress(progress, 2, "Проверка исходного файла")
+        source, target = self._validate_paths(source_path, target_path, overwrite)
+        if source.suffix.casefold() in {".cpgp", ".cpgv", ".cpgk"}:
+            raise ValidationError(
+                "Этот файл уже защищён или является служебным файлом Clever PGP. "
+                "Повторное шифрование не требуется."
+            )
+        password_bytes = self._validate_object_password(password)
+        file_key = bindings.crypto_secretstream_xchacha20poly1305_keygen()
+        salt = utils.random(pwhash.argon2id.SALTBYTES)
+        access_key = pwhash.argon2id.kdf(
+            secret.SecretBox.KEY_SIZE,
+            password_bytes,
+            salt,
+            opslimit=pwhash.argon2id.OPSLIMIT_MODERATE,
+            memlimit=pwhash.argon2id.MEMLIMIT_MODERATE,
+        )
+        try:
+            wrapped_file_key = bytes(secret.SecretBox(access_key).encrypt(file_key))
+        finally:
+            del access_key
+            del password_bytes
+
+        state = bindings.crypto_secretstream_xchacha20poly1305_state()
+        stream_header = bindings.crypto_secretstream_xchacha20poly1305_init_push(
+            state,
+            file_key,
+        )
+        header = _canonical_json(
+            {
+                "algorithm": ALGORITHM,
+                "chunk_size": CHUNK_SIZE,
+                "key_wrap": PASSWORD_KEY_WRAP,
+                "password_kdf": "ARGON2ID",
+                "password_kdf_memlimit": pwhash.argon2id.MEMLIMIT_MODERATE,
+                "password_kdf_opslimit": pwhash.argon2id.OPSLIMIT_MODERATE,
+                "password_kdf_salt": base64.b64encode(salt).decode("ascii"),
+                "stream_header": base64.b64encode(stream_header).decode("ascii"),
+                "wrapped_file_key": base64.b64encode(wrapped_file_key).decode("ascii"),
+            }
+        )
+        prefix = PREFIX.pack(MAGIC, PASSWORD_FORMAT_VERSION, len(header))
+        associated_data = prefix + header
+        source_size = source.stat().st_size
+        temporary_path: Path | None = None
+        try:
+            self._report_progress(progress, 5, "Подготовка шифрования")
+            temporary_path, target_stream = self._temporary_output(target)
+            with source.open("rb") as source_stream, target_stream:
+                target_stream.write(associated_data)
+                processed = 0
+                while chunk := source_stream.read(CHUNK_SIZE):
+                    encrypted = bindings.crypto_secretstream_xchacha20poly1305_push(
+                        state,
+                        chunk,
+                        associated_data,
+                        bindings.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE,
+                    )
+                    self._write_encrypted_record(target_stream, encrypted)
+                    processed += len(chunk)
+                    self._report_progress(
+                        progress,
+                        5 + round(88 * min(1.0, processed / max(1, source_size))),
+                        "Шифрование данных",
+                    )
+                final_record = bindings.crypto_secretstream_xchacha20poly1305_push(
+                    state,
+                    b"",
+                    associated_data,
+                    bindings.crypto_secretstream_xchacha20poly1305_TAG_FINAL,
+                )
+                self._write_encrypted_record(target_stream, final_record)
+                self._report_progress(progress, 97, "Сохранение результата")
+                target_stream.flush()
+                os.fsync(target_stream.fileno())
+            os.replace(temporary_path, target)
+            temporary_path = None
+            self._report_progress(progress, 100, "Шифрование завершено")
+            return target
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            del file_key
+
+    def decrypt_file_with_password(
+        self,
+        source_path: Path,
+        target_path: Path,
+        password: str,
+        *,
+        overwrite: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> Path:
+        """Decrypt a password-owned v3 `.cpgp` file."""
+
+        self._report_progress(progress, 2, "Проверка зашифрованного файла")
+        source, target = self._validate_paths(source_path, target_path, overwrite)
+        password_bytes = self._validate_object_password(password)
+        temporary_path: Path | None = None
+        try:
+            encrypted_size = source.stat().st_size
+            with source.open("rb") as source_stream:
+                raw_prefix = self._read_exact(source_stream, PREFIX.size)
+                magic, version, header_size = PREFIX.unpack(raw_prefix)
+                if magic != MAGIC or version != PASSWORD_FORMAT_VERSION:
+                    raise InvalidEncryptedFileError(
+                        "Это не зашифрованный паролем файл Clever PGP текущего формата."
+                    )
+                if not (1 <= header_size <= MAX_HEADER_SIZE):
+                    raise InvalidEncryptedFileError(
+                        "Некорректный размер заголовка зашифрованного файла."
+                    )
+                raw_header = self._read_exact(source_stream, header_size)
+                associated_data = raw_prefix + raw_header
+                try:
+                    metadata = json.loads(raw_header.decode("ascii"))
+                    if not isinstance(metadata, dict):
+                        raise TypeError
+                    if metadata.get("algorithm") != ALGORITHM:
+                        raise ValueError("algorithm")
+                    if metadata.get("key_wrap") != PASSWORD_KEY_WRAP:
+                        raise ValueError("key_wrap")
+                    salt = base64.b64decode(
+                        str(metadata["password_kdf_salt"]), validate=True
+                    )
+                    operations = int(metadata["password_kdf_opslimit"])
+                    memory = int(metadata["password_kdf_memlimit"])
+                    wrapped_file_key = base64.b64decode(
+                        str(metadata["wrapped_file_key"]), validate=True
+                    )
+                    stream_header = base64.b64decode(
+                        str(metadata["stream_header"]), validate=True
+                    )
+                    if len(salt) != pwhash.argon2id.SALTBYTES:
+                        raise ValueError("salt")
+                    if operations != pwhash.argon2id.OPSLIMIT_MODERATE:
+                        raise ValueError("operations")
+                    if memory != pwhash.argon2id.MEMLIMIT_MODERATE:
+                        raise ValueError("memory")
+                    if len(stream_header) != bindings.crypto_secretstream_xchacha20poly1305_HEADERBYTES:
+                        raise ValueError("stream_header")
+                except (
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                    binascii.Error,
+                ) as error:
+                    raise InvalidEncryptedFileError(
+                        "Повреждён заголовок зашифрованного файла."
+                    ) from error
+
+                access_key = pwhash.argon2id.kdf(
+                    secret.SecretBox.KEY_SIZE,
+                    password_bytes,
+                    salt,
+                    opslimit=operations,
+                    memlimit=memory,
+                )
+                try:
+                    file_key = secret.SecretBox(access_key).decrypt(wrapped_file_key)
+                except (exceptions.CryptoError, TypeError, ValueError) as error:
+                    raise InvalidEncryptedFileError(
+                        "Неверный пароль зашифрованного файла."
+                    ) from error
+                finally:
+                    del access_key
+                    del password_bytes
+                if len(file_key) != bindings.crypto_secretstream_xchacha20poly1305_KEYBYTES:
+                    raise InvalidEncryptedFileError("Повреждён ключ зашифрованного файла.")
+
+                state = bindings.crypto_secretstream_xchacha20poly1305_state()
+                try:
+                    bindings.crypto_secretstream_xchacha20poly1305_init_pull(
+                        state,
+                        stream_header,
+                        file_key,
+                    )
+                except (ValueError, RuntimeError) as error:
+                    raise InvalidEncryptedFileError(
+                        "Некорректный криптографический заголовок файла."
+                    ) from error
+                temporary_path, target_stream = self._temporary_output(target)
+                self._report_progress(progress, 5, "Проверка пароля файла")
+                with target_stream:
+                    self._decrypt_password_records(
+                        source_stream,
+                        target_stream,
+                        state,
+                        associated_data,
+                        encrypted_size=encrypted_size,
+                        progress=progress,
+                    )
+                    self._report_progress(progress, 97, "Сохранение результата")
+                    target_stream.flush()
+                    os.fsync(target_stream.fileno())
+            os.replace(temporary_path, target)
+            temporary_path = None
+            self._report_progress(progress, 100, "Расшифрование завершено")
+            return target
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
 
     def encrypt_file(
         self,
@@ -675,6 +899,61 @@ class FileCryptoService:
             self._report_progress(progress, 95, "Цифровая подпись подтверждена")
             return
 
+    def _decrypt_password_records(
+        self,
+        source_stream: BinaryIO,
+        target_stream: BinaryIO,
+        state: bindings.crypto_secretstream_xchacha20poly1305_state,
+        associated_data: bytes,
+        *,
+        encrypted_size: int,
+        progress: ProgressCallback | None,
+    ) -> None:
+        maximum_record_size = (
+            CHUNK_SIZE + bindings.crypto_secretstream_xchacha20poly1305_ABYTES
+        )
+        while True:
+            raw_length = source_stream.read(RECORD_LENGTH.size)
+            if not raw_length:
+                raise InvalidEncryptedFileError("В файле отсутствует завершающий блок.")
+            if len(raw_length) != RECORD_LENGTH.size:
+                raise InvalidEncryptedFileError("Оборвана длина блока шифротекста.")
+            (record_size,) = RECORD_LENGTH.unpack(raw_length)
+            if not (
+                bindings.crypto_secretstream_xchacha20poly1305_ABYTES
+                <= record_size
+                <= maximum_record_size
+            ):
+                raise InvalidEncryptedFileError("Недопустимый размер блока шифротекста.")
+            encrypted = self._read_exact(source_stream, record_size)
+            try:
+                plaintext, tag = bindings.crypto_secretstream_xchacha20poly1305_pull(
+                    state,
+                    encrypted,
+                    associated_data,
+                )
+            except (exceptions.CryptoError, ValueError, RuntimeError) as error:
+                raise InvalidEncryptedFileError(
+                    "Нарушена целостность зашифрованного файла."
+                ) from error
+            if tag == bindings.crypto_secretstream_xchacha20poly1305_TAG_MESSAGE:
+                target_stream.write(plaintext)
+                fraction = source_stream.tell() / max(1, encrypted_size)
+                self._report_progress(
+                    progress,
+                    5 + round(88 * min(1.0, fraction)),
+                    "Расшифрование и проверка данных",
+                )
+                continue
+            if tag != bindings.crypto_secretstream_xchacha20poly1305_TAG_FINAL:
+                raise InvalidEncryptedFileError("Недопустимый тег блока.")
+            if plaintext or source_stream.read(1):
+                raise InvalidEncryptedFileError(
+                    "После завершающего блока обнаружены лишние данные."
+                )
+            self._report_progress(progress, 95, "Целостность файла подтверждена")
+            return
+
     @staticmethod
     def _decode_signature_payload(payload: bytes, processed: int) -> bytes:
         try:
@@ -710,6 +989,17 @@ class FileCryptoService:
     ) -> None:
         if progress is not None:
             progress(max(0, min(100, int(value))), message)
+
+    @staticmethod
+    def _validate_object_password(password: str) -> bytes:
+        if not isinstance(password, str) or len(password) < MINIMUM_FILE_PASSWORD_LENGTH:
+            raise ValidationError(
+                f"Пароль файла должен содержать не менее {MINIMUM_FILE_PASSWORD_LENGTH} символов."
+            )
+        encoded = password.encode("utf-8")
+        if len(encoded) > 1024:
+            raise ValidationError("Пароль файла слишком длинный.")
+        return encoded
 
     @staticmethod
     def _read_exact(source_stream: BinaryIO, size: int) -> bytes:

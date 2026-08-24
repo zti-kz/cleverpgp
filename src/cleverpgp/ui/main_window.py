@@ -83,6 +83,7 @@ from cleverpgp.ui.key_dialogs import ContactsDialog, RecipientSelectionDialog
 from cleverpgp.ui.password_generator import add_password_generator_action
 from cleverpgp.ui.resize_dialog import ContainerResizeDialog
 from cleverpgp.ui.settings_dialog import AccessSettingsDialog
+from cleverpgp.ui.shell_dialog import ShellOperationDialog
 
 
 class BackgroundTaskThread(QThread):
@@ -184,12 +185,9 @@ class MainWindow(QMainWindow):
         self._mount_monitor.timeout.connect(self._sync_tray_state)
         self._mount_monitor.start()
 
-        if self.repository.has_profile():
-            self._show_unlock()
-        elif self.startup_container is not None:
-            # A portable disk must remain usable after a clean reinstall. It
-            # therefore asks for its own password before any local profile is
-            # created on this computer.
+        if self.startup_container is not None:
+            # Every disk owns its password. Opening a local or portable disk
+            # must never be preceded by authentication against a local profile.
             source = self.startup_container
             self.startup_container = None
             self._direct_mount_pending = True
@@ -202,7 +200,16 @@ class MainWindow(QMainWindow):
             self.setCentralWidget(page)
             QTimer.singleShot(0, lambda: self._prompt_opaque_volume_password(source))
         else:
-            self._show_profile_creation()
+            self._show_dashboard()
+            if self._startup_action == "settings":
+                self._startup_action = None
+                QTimer.singleShot(0, lambda: self._show_access_settings())
+            elif self._startup_action == "resize":
+                self._startup_action = None
+                QTimer.singleShot(0, lambda: self._show_resize_dialog())
+            elif self._startup_action == "algorithm":
+                self._startup_action = None
+                QTimer.singleShot(0, lambda: self._show_algorithm_dialog())
 
     def _show_profile_creation(self) -> None:
         page, content = self._base_page(
@@ -463,20 +470,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self._show_algorithm_dialog)
 
     def _show_dashboard(self) -> None:
-        profile = self.repository.get_profile()
-        if profile is None or self.session is None or not self.session.is_unlocked:
-            self._show_unlock()
-            return
-
         page, content = self._base_page(
-            "Clever PGP разблокирован",
-            tr(
-                "Профиль: {name}. Ключ доступен только текущему сеансу.",
-                name=profile.display_name,
-            ),
+            "Clever PGP",
+            "Выберите файл или зашифрованный диск. Пароль запрашивается только для выбранного объекта.",
         )
 
-        status = QLabel("● Защищённый сеанс активен")
+        status = QLabel("● Программа готова к работе")
         status.setObjectName("success")
         status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content.addWidget(status)
@@ -496,12 +495,8 @@ class MainWindow(QMainWindow):
         decrypt_button = QPushButton("Расшифровать файл .cpgp")
         decrypt_button.setIcon(line_icon("file_open"))
         decrypt_button.clicked.connect(self._decrypt_file)
-        contacts_button = QPushButton("Открытые ключи и контакты")
-        contacts_button.setIcon(line_icon("key"))
-        contacts_button.clicked.connect(self._show_contacts)
         file_layout.addWidget(encrypt_button)
         file_layout.addWidget(decrypt_button)
-        file_layout.addWidget(contacts_button)
 
         info = QLabel(
             "Файл обрабатывается локально. Для каждого файла создаётся новый случайный "
@@ -511,15 +506,6 @@ class MainWindow(QMainWindow):
         info.setObjectName("muted")
         file_layout.addWidget(info)
 
-        file_layout.addLayout(self._section_heading("Биометрия лица", "face"))
-        biometric_button = QPushButton(
-            "Обновить данные лица"
-            if self.repository.has_biometric_profile()
-            else "Зарегистрировать лицо"
-        )
-        biometric_button.setIcon(line_icon("face"))
-        biometric_button.clicked.connect(self._enroll_face)
-        file_layout.addWidget(biometric_button)
         file_layout.addStretch()
 
         container_panel = QFrame()
@@ -581,6 +567,11 @@ class MainWindow(QMainWindow):
 
         self.dashboard_status = QLabel()
         self.dashboard_status.setWordWrap(True)
+        self.dashboard_status.setMinimumHeight(56)
+        self.dashboard_status.setContentsMargins(18, 12, 18, 12)
+        self.dashboard_status.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.dashboard_status.hide()
         content.addWidget(self.dashboard_status)
 
@@ -589,27 +580,17 @@ class MainWindow(QMainWindow):
         self.dashboard_progress.setValue(0)
         self.dashboard_progress.hide()
         content.addWidget(self.dashboard_progress)
-        footer = QHBoxLayout()
-        footer.addStretch()
-        lock_button = QPushButton("Заблокировать")
-        lock_button.setIcon(line_icon("lock"))
-        lock_button.clicked.connect(self._lock)
-        footer.addWidget(lock_button)
-        content.addLayout(footer)
-
         localize_widget_tree(page)
         self.setCentralWidget(page)
 
     def _show_access_settings(self) -> None:
         if self._busy:
             return
-        profile = self.repository.get_profile()
-        if profile is None or self.session is None or not self.session.is_unlocked:
-            self._show_unlock()
+        if self._compact_settings_launch and not self._validate_compact_settings_drive():
             return
         dialog = AccessSettingsDialog(
-            profile.unlock_mode,
-            biometric_enrolled=self.repository.has_biometric_profile(),
+            UnlockMode.PASSWORD_ONLY,
+            biometric_enrolled=False,
             drive=(
                 normalized_drive_name(self._startup_drive)
                 if self._compact_settings_launch
@@ -617,6 +598,7 @@ class MainWindow(QMainWindow):
                 else None
             ),
             selected_language=current_language(),
+            show_profile_controls=False,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.request is None:
@@ -915,34 +897,8 @@ class MainWindow(QMainWindow):
         source_name, _ = QFileDialog.getOpenFileName(self, tr("Выберите файл"))
         if not source_name:
             return
-        source = Path(source_name)
-        selected_contacts = ()
-        contacts = self.repository.list_contacts()
-        if contacts:
-            recipient_dialog = RecipientSelectionDialog(contacts, self)
-            if recipient_dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            selected_contacts = recipient_dialog.selected_contacts
-        suggested = self.file_crypto.default_encrypted_path(source)
-        target_name, _ = QFileDialog.getSaveFileName(
-            self,
-            tr("Сохранить зашифрованный файл"),
-            str(suggested),
-            "Clever PGP (*.cpgp)",
-        )
-        if not target_name:
-            return
-        self._run_file_operation(
-            tr("Зашифровано"),
-            lambda key, progress: self.file_crypto.encrypt_file(
-                source,
-                Path(target_name),
-                key,
-                recipients=selected_contacts,
-                overwrite=True,
-                progress=progress,
-            ),
-        )
+        dialog = ShellOperationDialog(self.repository, "encrypt", Path(source_name))
+        dialog.exec()
 
     def _decrypt_file(self) -> None:
         source_name, _ = QFileDialog.getOpenFileName(
@@ -952,46 +908,8 @@ class MainWindow(QMainWindow):
         )
         if not source_name:
             return
-        source = Path(source_name)
-        suggested = self.file_crypto.default_decrypted_path(source)
-        target_name, _ = QFileDialog.getSaveFileName(
-            self, tr("Сохранить расшифрованный файл"), str(suggested)
-        )
-        if not target_name:
-            return
-        def decrypted(result: object) -> None:
-            if not isinstance(result, DecryptedFileResult):
-                self._show_error("Не удалось получить сведения о подписи файла.")
-                return
-            if result.sender_is_self:
-                verification = tr("Подпись текущего профиля подтверждена.")
-            elif result.sender_is_known:
-                verification = tr(
-                    "Подпись контакта {name} подтверждена.",
-                    name=result.sender.display_name,
-                )
-            else:
-                verification = tr(
-                    "Подпись математически верна, но отправитель {name} ещё не "
-                    "сохранён в контактах. Сверьте полный отпечаток по "
-                    "независимому каналу:\n{fingerprint}",
-                    name=result.sender.display_name,
-                    fingerprint=formatted_fingerprint(result.sender.fingerprint),
-                )
-            self._set_dashboard_status(
-                tr("Расшифровано: {path}", path=result.path) + "\n" + verification
-            )
-
-        self._start_key_progress_task(
-            lambda key, progress: self.file_crypto.decrypt_file_detailed(
-                source,
-                Path(target_name),
-                key,
-                overwrite=True,
-                progress=progress,
-            ),
-            decrypted,
-        )
+        dialog = ShellOperationDialog(self.repository, "decrypt", Path(source_name))
+        dialog.exec()
 
     def _show_contacts(self) -> None:
         if self.session is None or not self.session.is_unlocked:
@@ -1102,6 +1020,9 @@ class MainWindow(QMainWindow):
             ):
                 return
             hidden_request = hidden_dialog.request
+        ordinary_key = (
+            bytearray(os.urandom(32)) if hidden_request is None else None
+        )
 
         def create_hidden_container(
             progress: Callable[[int, str], None],
@@ -1152,63 +1073,77 @@ class MainWindow(QMainWindow):
             return target, drive, None
 
         def create_container(
-            master_key: bytes, progress: Callable[[int, str], None]
+            progress: Callable[[int, str], None],
         ) -> tuple[Path, str | None, str | None]:
-            if create_as_system_disk:
+            if ordinary_key is None:
+                raise BioPGPError("Не удалось создать ключ нового диска.")
+            master_key = bytes(ordinary_key)
+            try:
+                if create_as_system_disk:
+                    try:
+                        creator = getattr(
+                            self.mount_manager,
+                            "create_and_mount_isolated",
+                            None,
+                        )
+                        if not callable(creator):
+                            creator = self.mount_manager.create_and_mount
+                        drive = creator(
+                            target,
+                            master_key,
+                            logical_capacity=data_capacity,
+                            label=volume_label,
+                            file_system=file_system,
+                            algorithm=disk_algorithm,
+                            password=disk_password,
+                            context_menu_labels=self._ordinary_disk_context_labels(),
+                            progress=progress,
+                        )
+                    except Exception as error:
+                        if target.is_file():
+                            progress(100, "Контейнер создан без подключения")
+                            return target, None, str(error)
+                        raise
+                    return target, drive, None
+
+                def creation_progress(value: int, message: str) -> None:
+                    progress(max(1, round(value * 0.6)), message)
+
+                container = EncryptedContainer.create(
+                    target,
+                    master_key,
+                    data_capacity=data_capacity,
+                    label=volume_label,
+                    algorithm=disk_algorithm,
+                    password=disk_password,
+                    progress=creation_progress,
+                )
+                container.close(save=False)
+                if not mount_backend_available():
+                    progress(100, "Контейнер создан")
+                    return target, None, None
+                creator = getattr(
+                    self.mount_manager,
+                    "mount",
+                    None,
+                )
+                if not callable(creator):
+                    progress(100, "Контейнер создан")
+                    return target, None, None
                 try:
-                    creator = getattr(
-                        self.mount_manager,
-                        "create_and_mount_isolated",
-                        None,
-                    )
-                    if not callable(creator):
-                        creator = self.mount_manager.create_and_mount
                     drive = creator(
                         target,
                         master_key,
-                        logical_capacity=data_capacity,
-                        label=volume_label,
-                        file_system=file_system,
-                        algorithm=disk_algorithm,
-                        password=disk_password,
-                        context_menu_labels=self._ordinary_disk_context_labels(),
-                        progress=progress,
+                        progress=lambda value, message: progress(
+                            60 + round(value * 0.4), message
+                        ),
                     )
                 except Exception as error:
-                    if target.is_file():
-                        progress(100, "Контейнер создан без подключения")
-                        return target, None, str(error)
-                    raise
+                    progress(100, "Контейнер создан без подключения")
+                    return target, None, str(error)
                 return target, drive, None
-
-            def creation_progress(value: int, message: str) -> None:
-                progress(max(1, round(value * 0.6)), message)
-
-            container = EncryptedContainer.create(
-                target,
-                master_key,
-                data_capacity=data_capacity,
-                label=volume_label,
-                algorithm=disk_algorithm,
-                password=disk_password,
-                progress=creation_progress,
-            )
-            container.close(save=False)
-            if not mount_backend_available():
-                progress(100, "Контейнер создан")
-                return target, None, None
-            try:
-                drive = self.mount_manager.mount(
-                    target,
-                    master_key,
-                    progress=lambda value, message: progress(
-                        60 + round(value * 0.4), message
-                    ),
-                )
-            except Exception as error:
-                progress(100, "Контейнер создан без подключения")
-                return target, None, str(error)
-            return target, drive, None
+            finally:
+                ordinary_key[:] = b"\x00" * len(ordinary_key)
 
         def created(result: object) -> None:
             created_path, drive, mount_error = result
@@ -1287,16 +1222,15 @@ class MainWindow(QMainWindow):
                     None,
                 )
                 if callable(starter) and callable(adopter):
-                    if self.session is None:
-                        self._show_unlock()
+                    if ordinary_key is None:
+                        self._show_error("Не удалось создать ключ нового диска.")
                         return
-                    key_buffer = bytearray(self.session.master_key_copy())
 
                     def begin_ordinary_creation() -> object:
                         try:
                             return starter(
                                 target,
-                                bytes(key_buffer),
+                                bytes(ordinary_key),
                                 logical_capacity=data_capacity,
                                 label=volume_label,
                                 file_system=file_system,
@@ -1307,7 +1241,7 @@ class MainWindow(QMainWindow):
                                 ),
                             )
                         finally:
-                            key_buffer[:] = b"\x00" * len(key_buffer)
+                            ordinary_key[:] = b"\x00" * len(ordinary_key)
 
                     self._start_isolated_disk_creation(
                         begin_ordinary_creation,
@@ -1324,7 +1258,7 @@ class MainWindow(QMainWindow):
         if hidden_request is not None:
             self._start_progress_task(create_hidden_container, created)
         else:
-            self._start_key_progress_task(create_container, created)
+            self._start_progress_task(create_container, created)
 
     @property
     def _uses_windows_system_disk(self) -> bool:
@@ -1422,42 +1356,9 @@ class MainWindow(QMainWindow):
         self._mount_container(Path(source_name))
 
     def _mount_container(self, source: Path) -> None:
-        def mount_container(
-            master_key: bytes,
-            progress: Callable[[int, str], None],
-        ) -> str | _OpaquePasswordRequired:
-            try:
-                if self._uses_windows_system_disk or getattr(
-                    self.mount_manager,
-                    "automatically_selects_backend",
-                    False,
-                ):
-                    return self.mount_manager.mount(
-                        source,
-                        master_key,
-                        context_menu_labels=self._ordinary_disk_context_labels(),
-                        progress=progress,
-                    )
-                return self.mount_manager.mount(
-                    source,
-                    master_key,
-                    progress=progress,
-                )
-            except (BlockVolumeError, InvalidContainerError):
-                if callable(getattr(self.mount_manager, "mount_opaque", None)):
-                    return _OpaquePasswordRequired(source)
-                raise
-
-        def mounted(result: object) -> None:
-            if isinstance(result, _OpaquePasswordRequired):
-                self._prompt_opaque_volume_password(result.source)
-                return
-            self._container_mounted(result)
-
-        self._start_key_progress_task(
-            mount_container,
-            mounted,
-        )
+        # Local and portable disks follow the same rule: authenticate only
+        # with the password stored in that disk's own key slot.
+        self._prompt_opaque_volume_password(source)
 
     def _prompt_opaque_volume_password(self, source: Path) -> None:
         dialog = OpaqueVolumeUnlockDialog(source, self)
@@ -2046,18 +1947,13 @@ class MainWindow(QMainWindow):
 
     def _hide_to_tray(self) -> None:
         self._clear_session()
-        if self.repository.get_profile() is not None:
-            self._show_unlock()
+        self._show_dashboard()
         self._sync_tray_state()
         self._tray_icon.show()
         self.hide()
 
     def _show_from_tray(self) -> None:
-        if self.session is None or not self.session.is_unlocked:
-            if self.repository.get_profile() is None:
-                self._show_profile_creation()
-            else:
-                self._show_unlock()
+        self._show_dashboard()
         self.showMaximized()
         self.raise_()
         self.activateWindow()
@@ -2141,15 +2037,14 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout(header_controls)
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(8)
-        if self.session is not None and self.session.is_unlocked:
-            settings_button = QPushButton()
-            settings_button.setObjectName("headerIconButton")
-            settings_button.setIcon(line_icon("settings", "#bae6fd"))
-            settings_button.setFixedSize(46, 46)
-            settings_button.setToolTip("Настройки доступа")
-            settings_button.setAccessibleName("Настройки доступа")
-            settings_button.clicked.connect(self._show_access_settings)
-            controls.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignTop)
+        settings_button = QPushButton()
+        settings_button.setObjectName("headerIconButton")
+        settings_button.setIcon(line_icon("settings", "#bae6fd"))
+        settings_button.setFixedSize(46, 46)
+        settings_button.setToolTip("Настройки")
+        settings_button.setAccessibleName("Настройки")
+        settings_button.clicked.connect(self._show_access_settings)
+        controls.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignTop)
         about_button = QPushButton()
         about_button.setObjectName("headerIconButton")
         about_button.setIcon(line_icon("info", "#bae6fd"))

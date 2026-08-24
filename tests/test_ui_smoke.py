@@ -305,7 +305,9 @@ def test_deleted_unlock_progress_does_not_block_task_start(tmp_path: Path) -> No
     application.processEvents()
 
 
-def test_face_only_mode_keeps_hidden_master_password_recovery(tmp_path: Path) -> None:
+def test_existing_local_profile_does_not_restore_a_global_master_password_gate(
+    tmp_path: Path,
+) -> None:
     application = QApplication.instance() or QApplication([])
     repository = ProfileRepository(tmp_path / "profile.sqlite3")
     repository.initialize()
@@ -336,17 +338,13 @@ def test_face_only_mode_keeps_hidden_master_password_recovery(tmp_path: Path) ->
     )
 
     window = MainWindow(repository, profile_service, FileCryptoService())
-    recovery = next(
-        button
+    labels = {
+        button.text()
         for button in window.centralWidget().findChildren(QPushButton)
-        if button.text() == "Использовать мастер-пароль"
-    )
-
-    assert window.unlock_password_input.isHidden()
-    assert window.unlock_password_button.isHidden()
-    recovery.click()
-    assert not window.unlock_password_input.isHidden()
-    assert not window.unlock_password_button.isHidden()
+    }
+    assert "Использовать мастер-пароль" not in labels
+    assert "Разблокировать паролем" not in labels
+    assert "Зашифровать файл" in labels
 
     window.close()
     application.processEvents()
@@ -488,7 +486,7 @@ def test_explorer_settings_open_without_showing_dashboard(
     application.processEvents()
 
     assert settings_calls == [True]
-    assert not hasattr(window, "dashboard_status")
+    assert not hasattr(window, "unlock_password_input")
     window.close()
     application.processEvents()
 
@@ -694,7 +692,7 @@ def test_explorer_settings_change_password_without_opening_dashboard(
 
     assert not window._busy
     assert "Мастер-пароль успешно изменён" in visible_text
-    assert not hasattr(window, "dashboard_status")
+    assert not hasattr(window, "unlock_password_input")
     assert mounted.unmount_calls == 0
     changed_session = profile_service.unlock_with_password(new_password)
     assert changed_session.master_key_copy() == original_key
@@ -845,6 +843,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
         data_capacity = 64 * 1024 * 1024
         volume_label = "System disk"
         file_system = "EXFAT"
+        disk_password = "SystemDisk@2026"
         requested_minimum: int | None = None
         requested_system_mode = False
 
@@ -1010,26 +1009,13 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     )
 
     manager.mounted_drive = None
+    password_prompts: list[Path] = []
+    window._prompt_opaque_volume_password = password_prompts.append  # type: ignore[method-assign]
     window._mount_container(tmp_path / "existing-system.cpgv")
-    deadline = time.monotonic() + 5
-    while window._busy and time.monotonic() < deadline:
-        application.processEvents()
-        time.sleep(0.01)
-
-    assert manager.mounted_drive == "X:"
-    assert manager.mount_call is not None
-    assert manager.mount_call["context_menu_labels"] == (
-            "Открыть зашифрованный диск",
-            "Сведения о диске",
-            "Настройки доступа",
-            "Изменить пароль диска",
-        "Изменить метод шифрования",
-        "Увеличить диск",
-        "Отключить зашифрованный диск",
-    )
+    assert password_prompts == [tmp_path / "existing-system.cpgv"]
     window._sync_tray_state()
     assert window._tray_exit_action.isEnabled()
-    assert "диск останется подключённым" in window._tray_exit_action.text()
+    assert "Clever PGP" in window._tray_exit_action.text()
 
     manager.mounted_drive = None
     window.close()
@@ -1047,17 +1033,17 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
             self.uses_windows_system_disk = False
             self.mount_call: dict[str, object] | None = None
 
-        def mount(
+        def mount_opaque(
             self,
             source: Path,
-            key: bytes,
+            password: str,
             **options: object,
         ) -> str:
             progress = options.pop("progress")
             assert callable(progress)
             self.mount_call = {
                 "source": source,
-                "key": key,
+                "password": password,
                 **options,
             }
             progress(3, "Проверка типа зашифрованного диска")
@@ -1071,6 +1057,20 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
             self.uses_windows_system_disk = False
 
     opened_urls: list[str] = []
+    class PasswordDialog:
+        request = OpaqueVolumeUnlockRequest("AutomaticDisk@2026")
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        main_window_module,
+        "OpaqueVolumeUnlockDialog",
+        PasswordDialog,
+    )
     monkeypatch.setattr(
         main_window_module.QDesktopServices,
         "openUrl",
@@ -1098,13 +1098,8 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
         mount_manager=manager,  # type: ignore[arg-type]
         startup_container=container_path,
     )
-    window.session = profile_service.unlock_with_password(password)
-    window._show_dashboard()
     window.show()
     application.processEvents()
-    window._direct_mount_pending = True
-
-    window._mount_container(container_path)
     deadline = time.monotonic() + 5
     while (window._busy or window.isVisible()) and time.monotonic() < deadline:
         application.processEvents()
@@ -1112,13 +1107,13 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
 
     assert manager.mount_call is not None
     assert manager.mount_call["source"] == container_path
+    assert manager.mount_call["password"] == "AutomaticDisk@2026"
     assert manager.mount_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
         "Изменить пароль диска",
-        "Изменить метод шифрования",
-        "Увеличить диск",
+        "",
         "Отключить зашифрованный диск",
     )
     assert manager.uses_windows_system_disk
@@ -1587,7 +1582,7 @@ def test_closing_window_keeps_mounted_disk_running(tmp_path: Path) -> None:
     assert window.session is None
     assert not unlocked_session.is_unlocked
     assert any(
-        button.text() == "Разблокировать паролем"
+        button.text() == "Зашифровать файл"
         for button in window.findChildren(QPushButton)
     )
 
@@ -1642,7 +1637,7 @@ def test_successful_mount_always_hides_and_locks_gui_session(
     assert window.session is None
     assert not unlocked_session.is_unlocked
     assert any(
-        button.text() == "Разблокировать паролем"
+        button.text() == "Зашифровать файл"
         for button in window.findChildren(QPushButton)
     )
 
@@ -1686,7 +1681,7 @@ def test_unlocked_window_keeps_file_and_container_actions(tmp_path: Path) -> Non
     settings_buttons = [
         button
         for button in window.centralWidget().findChildren(QPushButton)
-        if button.toolTip() == "Настройки доступа"
+        if button.toolTip() == "Настройки"
     ]
     assert len(settings_buttons) == 1
     assert settings_buttons[0].text() == ""

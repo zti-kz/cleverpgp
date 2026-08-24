@@ -320,3 +320,47 @@ def test_file_operations_report_real_percentage_progress(
         assert len(set(values)) >= 4
         assert all(message for _value, message in updates)
     assert restored.read_bytes() == source.read_bytes()
+def test_password_file_is_portable_without_a_local_profile(tmp_path: Path) -> None:
+    source = tmp_path / "portable report.txt"
+    encrypted = tmp_path / "portable report.txt.cpgp"
+    restored = tmp_path / "portable report.restored.txt"
+    source.write_bytes((b"portable Clever PGP file\n" * 100_000) + b"end")
+    service = FileCryptoService()
+
+    service.encrypt_file_with_password(
+        source,
+        encrypted,
+        "Friendly@2026",
+    )
+    service.decrypt_file_with_password(
+        encrypted,
+        restored,
+        "Friendly@2026",
+    )
+
+    assert restored.read_bytes() == source.read_bytes()
+
+
+def test_password_file_rejects_wrong_password_and_tampering(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    encrypted = tmp_path / "source.bin.cpgp"
+    source.write_bytes(b"authenticated payload" * 10_000)
+    service = FileCryptoService()
+    service.encrypt_file_with_password(source, encrypted, "Friendly@2026")
+
+    with pytest.raises(Exception, match="Неверный пароль"):
+        service.decrypt_file_with_password(
+            encrypted,
+            tmp_path / "wrong.bin",
+            "Incorrect@2026",
+        )
+
+    payload = bytearray(encrypted.read_bytes())
+    payload[-1] ^= 1
+    encrypted.write_bytes(payload)
+    with pytest.raises(Exception, match="целостност"):
+        service.decrypt_file_with_password(
+            encrypted,
+            tmp_path / "tampered.bin",
+            "Friendly@2026",
+        )

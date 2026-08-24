@@ -33,13 +33,6 @@ def main(argv: list[str] | None = None) -> int:
     repository = ProfileRepository(database_path())
     repository.initialize()
     set_language(repository.get_setting("language") or "ru")
-    if not repository.has_profile():
-        QMessageBox.critical(
-            None,
-            "Clever PGP",
-            tr("Профиль Clever PGP ещё не создан. Сначала запустите основное приложение."),
-        )
-        return 2
     source = arguments.path.expanduser()
     if not source.is_file():
         QMessageBox.critical(None, "Clever PGP", tr("Выбранный файл не найден."))

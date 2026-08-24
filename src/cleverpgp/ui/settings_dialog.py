@@ -48,6 +48,7 @@ class AccessSettingsDialog(QDialog):
         biometric_enrolled: bool,
         drive: str | None = None,
         selected_language: str | None = None,
+        show_profile_controls: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -62,6 +63,7 @@ class AccessSettingsDialog(QDialog):
             current_mode,
             drive=drive,
             selected_language=selected_language or current_language(),
+            show_profile_controls=show_profile_controls,
         )
         localize_widget_tree(self)
 
@@ -71,6 +73,7 @@ class AccessSettingsDialog(QDialog):
         *,
         drive: str | None,
         selected_language: str,
+        show_profile_controls: bool,
     ) -> None:
         outer = scrollable_dialog_layout(self)
         outer.setContentsMargins(30, 26, 30, 28)
@@ -97,7 +100,10 @@ class AccessSettingsDialog(QDialog):
             outer.addWidget(selected_disk)
 
         scope_note = QLabel(
-            "Эти настройки относятся к локальному профилю Clever PGP. "
+            "Пароли принадлежат отдельным файлам и дискам. Clever PGP не требует "
+            "общего мастер-пароля при запуске."
+            if not show_profile_controls
+            else "Эти настройки относятся к локальному профилю Clever PGP. "
             "Пароли внешнего и скрытого дисков изменяются "
             "отдельной командой в контекстном меню."
         )
@@ -136,6 +142,14 @@ class AccessSettingsDialog(QDialog):
         add_language_button.clicked.connect(self._request_language_installation)
         language_layout.addWidget(add_language_button)
         outer.addWidget(language_card)
+
+        if not show_profile_controls:
+            self.error_label = QLabel()
+            self.error_label.setObjectName("error")
+            self.error_label.setWordWrap(True)
+            self.error_label.hide()
+            outer.addWidget(self.error_label)
+            return
 
         mode_card = self._card()
         mode_layout = QVBoxLayout(mode_card)
