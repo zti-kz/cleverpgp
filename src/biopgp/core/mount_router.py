@@ -201,13 +201,29 @@ class AutomaticMountManager:
         password: str,
         **options: object,
     ) -> str:
-        """Unlock an opaque outer/hidden disk with its own password."""
+        """Unlock a portable ordinary disk or an opaque outer/hidden disk."""
 
         if self.mounted_drive is not None:
             raise MountUnavailableError(
                 "Сначала отключите уже открытый диск Clever PGP."
             )
         source = resolve_file_hosted_container_path(container_path)
+        try:
+            portable_key = EncryptedBlockVolume.password_access_key(
+                source,
+                password,
+            )
+        except BlockVolumeError as portable_error:
+            if "Неверный пароль" in str(portable_error):
+                raise
+        else:
+            ordinary_options = dict(options)
+            ordinary_options.pop("hidden_protection_password", None)
+            try:
+                return self.mount(source, portable_key, **ordinary_options)
+            finally:
+                del portable_key
+
         manager = self._system_manager
         opener = (
             getattr(manager, "mount_opaque", None)

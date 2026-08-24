@@ -46,6 +46,7 @@ DISK_BACKEND_WINDOWS = "windows"
 DISK_BACKEND_WINFSP = "winfsp"
 VOLUME_KIND_NORMAL = "normal"
 VOLUME_KIND_HIDDEN = "hidden"
+MINIMUM_DISK_PASSWORD_LENGTH = 12
 
 
 def disk_algorithm_caption(identifier: str) -> str:
@@ -160,6 +161,10 @@ class ContainerCreationDialog(QDialog):
         )
         return XCHACHA20_POLY1305 if self.hidden_volume else selected
 
+    @property
+    def disk_password(self) -> str:
+        return self.password_input.text()
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -170,6 +175,9 @@ class ContainerCreationDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Keep transient Windows scrollbars away from controls and wrapped
+        # text on compact displays.
+        scroll.setViewportMargins(0, 0, 12, 10)
         body = QWidget()
         body.setObjectName("dialogBody")
         outer = QVBoxLayout(body)
@@ -411,6 +419,32 @@ class ContainerCreationDialog(QDialog):
         size_layout.addWidget(no_limit)
         outer.addWidget(size_card)
 
+        self.password_card = QFrame()
+        self.password_card.setObjectName("storageCard")
+        password_layout = QVBoxLayout(self.password_card)
+        password_layout.setContentsMargins(16, 12, 16, 12)
+        password_layout.setSpacing(8)
+        password_title = QLabel("Переносимый пароль диска")
+        password_title.setObjectName("fieldTitle")
+        password_description = QLabel(
+            "Этот пароль открывает контейнер после переустановки и на другом "
+            "компьютере. Он не хранится в программе и не является ключом "
+            "шифрования данных."
+        )
+        password_description.setObjectName("muted")
+        password_description.setWordWrap(True)
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_input.setPlaceholderText("Не менее 12 символов")
+        self.password_confirm_input = QLineEdit()
+        self.password_confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_confirm_input.setPlaceholderText("Повторите пароль диска")
+        password_layout.addWidget(password_title)
+        password_layout.addWidget(password_description)
+        password_layout.addWidget(self.password_input)
+        password_layout.addWidget(self.password_confirm_input)
+        outer.addWidget(self.password_card)
+
         label_title = QLabel("Название диска")
         label_title.setObjectName("fieldTitle")
         self.label_input = QLineEdit("Clever PGP")
@@ -510,8 +544,10 @@ class ContainerCreationDialog(QDialog):
             self.algorithm_input.setEnabled(self.algorithm_input.count() > 1)
             self._minimum_capacity = self._base_minimum_capacity
             description = (
-                "Один пароль профиля открывает обычный зашифрованный диск."
+                "Диск можно открыть локальным профилем или его собственным "
+                "переносимым паролем."
             )
+        self.password_card.setVisible(not self.hidden_volume)
         self.volume_kind_description.setText(tr(description))
         self._update_algorithm_description()
         if self._current_path is not None:
@@ -556,6 +592,13 @@ class ContainerCreationDialog(QDialog):
                 raise ValueError("Файл с таким именем уже существует. Выберите другое имя.")
             if not self.volume_label:
                 raise ValueError("Введите название диска.")
+            if not self.hidden_volume:
+                if len(self.disk_password) < MINIMUM_DISK_PASSWORD_LENGTH:
+                    raise ValueError(
+                        "Пароль диска должен содержать не менее 12 символов."
+                    )
+                if self.disk_password != self.password_confirm_input.text():
+                    raise ValueError("Пароли диска не совпадают.")
             capacity = self.data_capacity
             if self.hidden_volume and capacity < MIN_HIDDEN_WINDOWS_COVER_CAPACITY:
                 raise ValueError(

@@ -331,6 +331,7 @@ def create_windows_block_volume(
     library: WinSpdLibrary,
     label: str = "Clever PGP",
     algorithm: str = DEFAULT_DISK_ALGORITHM,
+    password: str | None = None,
     overwrite: bool = False,
     progress: Callable[[int, int], None] | None = None,
 ) -> EncryptedBlockVolume:
@@ -343,6 +344,7 @@ def create_windows_block_volume(
         logical_capacity=logical_capacity,
         label=label,
         algorithm=algorithm,
+        password=password,
         overwrite=overwrite,
         storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
         progress=progress,

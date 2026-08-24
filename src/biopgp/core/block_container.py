@@ -112,6 +112,7 @@ class BlockVaultContainer:
         data_capacity: int = 20 * 1024 * 1024,
         label: str = "Clever PGP",
         algorithm: str = DEFAULT_DISK_ALGORITHM,
+        password: str | None = None,
         overwrite: bool = False,
         progress: ProgressCallback | None = None,
     ) -> BlockVaultContainer:
@@ -150,6 +151,7 @@ class BlockVaultContainer:
             logical_capacity=logical_capacity,
             label=label,
             algorithm=algorithm,
+            password=password,
             overwrite=overwrite,
             storage_format=BLOCK_VAULT_STORAGE_FORMAT,
             progress=initialize_progress,

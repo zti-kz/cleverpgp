@@ -14,7 +14,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from nacl import bindings, exceptions, hash, secret, utils
+from nacl import bindings, exceptions, hash, pwhash, secret, utils
 from nacl.encoding import RawEncoder
 
 from biopgp.core.disk_crypto import (
@@ -27,8 +27,8 @@ from biopgp.core.disk_crypto import (
 from biopgp.core.errors import ContainerError, OutputExistsError, ValidationError
 from biopgp.core.mapped_stream import MappedFileStream
 
-MAGIC = b"CPGPBLK3"
-FORMAT_VERSION = 3
+MAGIC = b"CPGPBLK5"
+FORMAT_VERSION = 5
 HEADER_PREFIX = struct.Struct(">8sBI")
 HEADER_AREA_SIZE = 64 * 1024
 HEADER_JSON_LENGTH = struct.Struct(">I")
@@ -45,9 +45,18 @@ INITIALIZATION_BATCH_BLOCKS = 256
 ALGORITHM_CONVERSION_BATCH_BLOCKS = 256
 ALGORITHM = DEFAULT_DISK_ALGORITHM
 KEY_WRAP = "XSALSA20-POLY1305-SECRETBOX"
-GENERIC_STORAGE_FORMAT = "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
+GENERIC_STORAGE_FORMAT = "CLEVERPGP-AUTHENTICATED-BLOCKS-V2"
 HEADER_STATE_COMMITTED = "committed"
 HEADER_STATE_PREPARING = "preparing"
+PASSWORD_KDF = "ARGON2ID13"
+PASSWORD_WRAP_FIELD = "password_wrapped_volume_key"
+PASSWORD_SALT_FIELD = "password_kdf_salt"
+PASSWORD_OPSLIMIT_FIELD = "password_kdf_opslimit"
+PASSWORD_MEMLIMIT_FIELD = "password_kdf_memlimit"
+MINIMUM_PASSWORD_LENGTH = 12
+MAXIMUM_PASSWORD_BYTES = 1024
+MAXIMUM_KDF_MEMORY = pwhash.argon2id.MEMLIMIT_SENSITIVE
+MAXIMUM_KDF_OPERATIONS = pwhash.argon2id.OPSLIMIT_SENSITIVE
 
 
 class BlockVolumeError(ContainerError):
@@ -63,7 +72,7 @@ class BlockIntegrityError(BlockVolumeError):
 
 
 class EncryptedBlockVolume:
-    """Random-access authenticated storage for the version 3 disk backend.
+    """Random-access authenticated storage for the version 5 disk backend.
 
     Each logical 4096-byte block has an independent random nonce and
     authentication tag. Rewriting one block therefore never serializes or
@@ -107,6 +116,7 @@ class EncryptedBlockVolume:
         overwrite: bool = False,
         storage_format: str = GENERIC_STORAGE_FORMAT,
         algorithm: str = ALGORITHM,
+        password: str | None = None,
         progress: Callable[[int, int], None] | None = None,
     ) -> EncryptedBlockVolume:
         target = Path(path).expanduser().resolve()
@@ -146,6 +156,35 @@ class EncryptedBlockVolume:
             "volume_id": base64.b64encode(volume_id).decode("ascii"),
             "wrapped_volume_key": base64.b64encode(wrapped_key).decode("ascii"),
         }
+        if password is not None:
+            password_bytes = cls._validate_password(password)
+            password_salt = utils.random(pwhash.argon2id.SALTBYTES)
+            password_access_key = cls._derive_password_key(
+                password_bytes,
+                password_salt,
+                pwhash.argon2id.OPSLIMIT_MODERATE,
+                pwhash.argon2id.MEMLIMIT_MODERATE,
+            )
+            try:
+                metadata.update(
+                    {
+                        "password_kdf": PASSWORD_KDF,
+                        PASSWORD_SALT_FIELD: base64.b64encode(
+                            password_salt
+                        ).decode("ascii"),
+                        PASSWORD_OPSLIMIT_FIELD: pwhash.argon2id.OPSLIMIT_MODERATE,
+                        PASSWORD_MEMLIMIT_FIELD: pwhash.argon2id.MEMLIMIT_MODERATE,
+                        PASSWORD_WRAP_FIELD: base64.b64encode(
+                            bytes(
+                                secret.SecretBox(password_access_key).encrypt(
+                                    volume_key
+                                )
+                            )
+                        ).decode("ascii"),
+                    }
+                )
+            finally:
+                del password_access_key
         metadata = cls._authenticated_metadata(metadata, volume_key)
         raw_header = cls._encode_initial_header(metadata)
 
@@ -251,6 +290,166 @@ class EncryptedBlockVolume:
         )
 
     @classmethod
+    def password_access_key(cls, path: Path, password: str) -> bytes:
+        """Authenticate a portable password slot and return its access key.
+
+        The returned key is equivalent only to a wrapping credential for this
+        disk. It is never used as the block-encryption key itself.
+        """
+
+        source = Path(path).expanduser().resolve()
+        if not source.is_file():
+            raise InvalidBlockVolumeError("Файл зашифрованного диска не найден.")
+        password_bytes = cls._validate_password(password)
+        with source.open("rb") as stream:
+            raw_prefix = cls._read_exact(stream, HEADER_PREFIX.size)
+            magic, version, header_size = HEADER_PREFIX.unpack(raw_prefix)
+            if magic != MAGIC or version != FORMAT_VERSION:
+                raise InvalidBlockVolumeError(
+                    "Это не переносимый зашифрованный диск Clever PGP."
+                )
+            if header_size != HEADER_AREA_SIZE:
+                raise InvalidBlockVolumeError("Некорректный размер заголовка диска.")
+            header_area = cls._read_exact(stream, header_size)
+
+        candidates: set[tuple[bytes, int, int]] = set()
+        for slot in range(HEADER_SLOT_COUNT):
+            start = slot * HEADER_SLOT_SIZE
+            try:
+                metadata = cls._decode_header_slot(
+                    header_area[start : start + HEADER_SLOT_SIZE]
+                )
+                cls._validate_metadata(metadata)
+                if PASSWORD_WRAP_FIELD not in metadata:
+                    continue
+                salt = base64.b64decode(
+                    str(metadata[PASSWORD_SALT_FIELD]), validate=True
+                )
+                operations = int(metadata[PASSWORD_OPSLIMIT_FIELD])
+                memory = int(metadata[PASSWORD_MEMLIMIT_FIELD])
+                cls._validate_password_kdf(operations, memory)
+                if len(salt) != pwhash.argon2id.SALTBYTES:
+                    raise ValueError("password salt")
+                candidates.add((salt, operations, memory))
+            except (
+                InvalidBlockVolumeError,
+                KeyError,
+                TypeError,
+                ValueError,
+                binascii.Error,
+            ):
+                continue
+
+        for salt, operations, memory in candidates:
+            access_key = cls._derive_password_key(
+                password_bytes,
+                salt,
+                operations,
+                memory,
+            )
+            try:
+                authenticated = cls._authenticated_header_candidates(
+                    header_area,
+                    access_key,
+                )
+                cls._select_header_candidate(
+                    authenticated,
+                    physical_file_size=source.stat().st_size,
+                )
+            except InvalidBlockVolumeError:
+                del access_key
+                continue
+            return access_key
+        raise InvalidBlockVolumeError("Неверный пароль зашифрованного диска.")
+
+    @classmethod
+    def open_with_password(
+        cls,
+        path: Path,
+        password: str,
+    ) -> EncryptedBlockVolume:
+        access_key = cls.password_access_key(path, password)
+        try:
+            return cls.open(path, access_key)
+        finally:
+            del access_key
+
+    @classmethod
+    def change_password(
+        cls,
+        path: Path,
+        current_password: str,
+        new_password: str,
+        *,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> Path:
+        """Replace only the portable wrapping slot, never the data key."""
+
+        if current_password == new_password:
+            raise ValidationError(
+                "Новый пароль диска должен отличаться от текущего."
+            )
+        cls._validate_password(new_password)
+        target = Path(path).expanduser().resolve()
+        if progress is not None:
+            progress(1, 5)
+        current_access_key = cls.password_access_key(target, current_password)
+        try:
+            volume = cls.open(target, current_access_key)
+        finally:
+            del current_access_key
+        try:
+            if progress is not None:
+                progress(2, 5)
+            salt = utils.random(pwhash.argon2id.SALTBYTES)
+            new_access_key = cls._derive_password_key(
+                new_password.encode("utf-8"),
+                salt,
+                pwhash.argon2id.OPSLIMIT_MODERATE,
+                pwhash.argon2id.MEMLIMIT_MODERATE,
+            )
+            try:
+                metadata = dict(volume._metadata)
+                metadata.pop("header_auth", None)
+                metadata.update(
+                    {
+                        "header_generation": volume._header_generation + 1,
+                        "password_kdf": PASSWORD_KDF,
+                        PASSWORD_SALT_FIELD: base64.b64encode(salt).decode("ascii"),
+                        PASSWORD_OPSLIMIT_FIELD: pwhash.argon2id.OPSLIMIT_MODERATE,
+                        PASSWORD_MEMLIMIT_FIELD: pwhash.argon2id.MEMLIMIT_MODERATE,
+                        PASSWORD_WRAP_FIELD: base64.b64encode(
+                            bytes(
+                                secret.SecretBox(new_access_key).encrypt(
+                                    bytes(volume._volume_key)
+                                )
+                            )
+                        ).decode("ascii"),
+                    }
+                )
+            finally:
+                del new_access_key
+            authenticated = cls._authenticated_metadata(
+                metadata,
+                bytes(volume._volume_key),
+            )
+            new_slot = (volume._active_header_slot + 1) % HEADER_SLOT_COUNT
+            volume._write_verified_header_slot(new_slot, authenticated)
+            if progress is not None:
+                progress(4, 5)
+            for slot in range(HEADER_SLOT_COUNT):
+                if slot != new_slot:
+                    volume._invalidate_header_slot(slot)
+            volume._metadata = authenticated
+            volume._active_header_slot = new_slot
+            volume._header_generation = int(authenticated["header_generation"])
+            if progress is not None:
+                progress(5, 5)
+        finally:
+            volume.close()
+        return target
+
+    @classmethod
     def convert_algorithm_atomic(
         cls,
         path: Path,
@@ -289,6 +488,11 @@ class EncryptedBlockVolume:
                 if source._pending_resize:
                     raise ValidationError(
                         "Сначала завершите или повторите увеличение зашифрованного диска."
+                    )
+                if PASSWORD_WRAP_FIELD in source._metadata:
+                    raise ValidationError(
+                        "Для переносимого диска изменение метода требует пароль "
+                        "самого диска. Эта операция будет добавлена отдельно."
                     )
                 if source.algorithm == target_cipher.identifier:
                     if progress is not None:
@@ -463,6 +667,10 @@ class EncryptedBlockVolume:
     @property
     def algorithm(self) -> str:
         return self._cipher.identifier
+
+    @property
+    def has_portable_password(self) -> bool:
+        return PASSWORD_WRAP_FIELD in self._metadata
 
     def read_blocks(
         self,
@@ -848,11 +1056,23 @@ class EncryptedBlockVolume:
                     header_area[start : start + HEADER_SLOT_SIZE]
                 )
                 cls._validate_metadata(metadata)
-                wrapped_key = base64.b64decode(
-                    str(metadata["wrapped_volume_key"]),
-                    validate=True,
-                )
-                volume_key = secret.SecretBox(master_key).decrypt(wrapped_key)
+                volume_key: bytes | None = None
+                for wrap_field in ("wrapped_volume_key", PASSWORD_WRAP_FIELD):
+                    if wrap_field not in metadata:
+                        continue
+                    try:
+                        wrapped_key = base64.b64decode(
+                            str(metadata[wrap_field]),
+                            validate=True,
+                        )
+                        volume_key = secret.SecretBox(master_key).decrypt(
+                            wrapped_key
+                        )
+                        break
+                    except (binascii.Error, exceptions.CryptoError, ValueError):
+                        continue
+                if volume_key is None:
+                    raise exceptions.CryptoError("key slot")
                 volume_id = base64.b64decode(
                     str(metadata["volume_id"]),
                     validate=True,
@@ -974,6 +1194,74 @@ class EncryptedBlockVolume:
         for name in ("volume_id", "wrapped_volume_key", "header_auth"):
             if not isinstance(metadata.get(name), str):
                 raise InvalidBlockVolumeError("Заголовок диска содержит неверные поля.")
+        password_fields = (
+            "password_kdf",
+            PASSWORD_SALT_FIELD,
+            PASSWORD_OPSLIMIT_FIELD,
+            PASSWORD_MEMLIMIT_FIELD,
+            PASSWORD_WRAP_FIELD,
+        )
+        present_password_fields = [name in metadata for name in password_fields]
+        if any(present_password_fields):
+            if not all(present_password_fields):
+                raise InvalidBlockVolumeError(
+                    "Парольный слот диска содержит неполные данные."
+                )
+            if metadata.get("password_kdf") != PASSWORD_KDF:
+                raise InvalidBlockVolumeError(
+                    "Парольный слот диска использует неподдерживаемый метод."
+                )
+            try:
+                salt = base64.b64decode(
+                    str(metadata[PASSWORD_SALT_FIELD]), validate=True
+                )
+                base64.b64decode(str(metadata[PASSWORD_WRAP_FIELD]), validate=True)
+                operations = int(metadata[PASSWORD_OPSLIMIT_FIELD])
+                memory = int(metadata[PASSWORD_MEMLIMIT_FIELD])
+                cls._validate_password_kdf(operations, memory)
+            except (TypeError, ValueError, binascii.Error) as error:
+                raise InvalidBlockVolumeError(
+                    "Парольный слот диска повреждён."
+                ) from error
+            if len(salt) != pwhash.argon2id.SALTBYTES:
+                raise InvalidBlockVolumeError(
+                    "Парольный слот диска содержит неверную соль."
+                )
+
+    @staticmethod
+    def _validate_password(password: str) -> bytes:
+        if not isinstance(password, str) or len(password) < MINIMUM_PASSWORD_LENGTH:
+            raise ValidationError(
+                f"Пароль диска должен содержать не менее {MINIMUM_PASSWORD_LENGTH} символов."
+            )
+        encoded = password.encode("utf-8")
+        if len(encoded) > MAXIMUM_PASSWORD_BYTES:
+            raise ValidationError("Пароль диска слишком длинный.")
+        return encoded
+
+    @staticmethod
+    def _validate_password_kdf(opslimit: int, memlimit: int) -> None:
+        if not pwhash.argon2id.OPSLIMIT_MIN <= opslimit <= MAXIMUM_KDF_OPERATIONS:
+            raise ValueError("password operations")
+        if not pwhash.argon2id.MEMLIMIT_MIN <= memlimit <= MAXIMUM_KDF_MEMORY:
+            raise ValueError("password memory")
+
+    @classmethod
+    def _derive_password_key(
+        cls,
+        password: bytes,
+        salt: bytes,
+        opslimit: int,
+        memlimit: int,
+    ) -> bytes:
+        cls._validate_password_kdf(opslimit, memlimit)
+        return pwhash.argon2id.kdf(
+            secret.SecretBox.KEY_SIZE,
+            password,
+            salt,
+            opslimit=opslimit,
+            memlimit=memlimit,
+        )
 
     @classmethod
     def _authenticated_metadata(

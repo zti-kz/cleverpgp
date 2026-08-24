@@ -53,6 +53,8 @@ def test_container_size_is_selected_with_a_slider(
     assert dialog.minimum_size_label.text().startswith("Минимум:")
     assert dialog.maximum_size_label.text().startswith("Максимум:")
 
+    dialog.password_input.setText("correct portable disk password")
+    dialog.password_confirm_input.setText("correct portable disk password")
     dialog.accept()
     assert dialog.container_path == (tmp_path / "private.cpgv").resolve()
     dialog.close()
@@ -121,6 +123,8 @@ def test_creation_dialog_keeps_action_bar_visible_when_content_scrolls() -> None
         if button.objectName() == "primary"
     )
     assert scroll is not None
+    assert scroll.viewportMargins().right() >= 12
+    assert scroll.viewportMargins().bottom() >= 10
     assert scroll.verticalScrollBar().maximum() > 0
     assert create.isVisible()
     assert create.geometry().bottom() <= dialog.height()
@@ -261,9 +265,32 @@ def test_selected_drive_limits_container_capacity(monkeypatch, tmp_path: Path) -
     dialog.size_slider.setValue(dialog.size_slider.maximum())
     assert dialog.data_capacity == 40 * MEBIBYTE
     assert dialog.create_button.isEnabled()
+    dialog.password_input.setText("correct portable disk password")
+    dialog.password_confirm_input.setText("correct portable disk password")
     dialog.accept()
     assert dialog.result() == dialog.DialogCode.Accepted
 
+    dialog.close()
+    application.processEvents()
+
+
+def test_ordinary_disk_requires_confirmed_portable_password(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = ContainerCreationDialog()
+    dialog.path_input.setText(str(tmp_path / "portable.cpgv"))
+
+    dialog.password_input.setText("correct portable disk password")
+    dialog.password_confirm_input.setText("different portable password")
+    dialog.accept()
+    assert dialog.result() == dialog.DialogCode.Rejected
+    assert "не совпадают" in dialog.error_label.text()
+
+    dialog.password_confirm_input.setText("correct portable disk password")
+    dialog.accept()
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.disk_password == "correct portable disk password"
     dialog.close()
     application.processEvents()
 

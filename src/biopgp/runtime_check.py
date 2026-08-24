@@ -119,10 +119,12 @@ def run(marker: Path) -> int:
 
 
 def run_ui_worker(marker: Path) -> int:
-    """Verify that packaged background UI tasks start and report completion."""
+    """Run real encrypted-disk creation inside the packaged UI worker."""
+    from nacl import secret, utils
     from PySide6.QtCore import QEventLoop, QTimer
     from PySide6.QtWidgets import QApplication
 
+    from biopgp.core.winspd import WinSpdLibrary, create_windows_block_volume
     from biopgp.ui.main_window import BackgroundTaskThread
 
     application = QApplication.instance() or QApplication([])
@@ -132,8 +134,27 @@ def run_ui_worker(marker: Path) -> int:
     state: dict[str, object] = {"progress": []}
 
     def operation(report_progress):
-        report_progress(37, "working")
-        return "completed"
+        report_progress(3, "loading disk component")
+        library = WinSpdLibrary()
+        with tempfile.TemporaryDirectory(
+            prefix="cleverpgp-ui-worker-check-"
+        ) as directory:
+            path = Path(directory) / "worker-created.cpgv"
+            volume = create_windows_block_volume(
+                path,
+                utils.random(secret.SecretBox.KEY_SIZE),
+                logical_capacity=32 * 1024 * 1024,
+                library=library,
+                password="packaged portable disk password",
+                progress=lambda completed, total: report_progress(
+                    5 + round(completed / total * 90),
+                    "creating encrypted disk",
+                ),
+            )
+            volume.close()
+            created_size = path.stat().st_size
+        report_progress(100, "completed")
+        return {"created_size": created_size}
 
     thread = BackgroundTaskThread(operation)
 
@@ -168,9 +189,10 @@ def run_ui_worker(marker: Path) -> int:
         raise RuntimeError("Фоновая операция интерфейса не завершилась.")
     if state.get("error"):
         raise RuntimeError(str(state["error"]))
-    if state.get("result") != "completed":
+    result = state.get("result")
+    if not isinstance(result, dict) or int(result.get("created_size", 0)) <= 0:
         raise RuntimeError("Фоновая операция не вернула ожидаемый результат.")
-    if [37, "working"] not in state["progress"]:
+    if [100, "completed"] not in state["progress"]:
         raise RuntimeError("Прогресс фоновой операции не был доставлен интерфейсу.")
 
     marker.write_text(

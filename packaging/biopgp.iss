@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.12.2"
+  #define AppVersion "0.13.0"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -85,6 +85,11 @@ Type: files; Name: "{app}\BioPGP.exe"
 Type: files; Name: "{autoprograms}\BioPGP.lnk"
 Type: files; Name: "{autodesktop}\BioPGP.lnk"
 
+[UninstallDelete]
+; User containers are deliberately outside this scope. Only the local profile,
+; settings, biometric slot and encrypted profile-key records can be removed.
+Type: filesandordirs; Name: "{localappdata}\BioPGP"; Check: DeleteLocalProfile
+
 [Icons]
 Name: "{autoprograms}\Clever PGP"; Filename: "{app}\{#AppExecutable}"; WorkingDir: "{app}"
 Name: "{autodesktop}\Clever PGP"; Filename: "{app}\{#AppExecutable}"; WorkingDir: "{app}"; Tasks: desktopicon
@@ -142,6 +147,35 @@ Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winspd-cleverpgp.msi"" /p
 Filename: "{app}\{#AppExecutable}"; Description: "Запустить Clever PGP"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
+var
+  RemoveLocalProfile: Boolean;
+
+function InitializeUninstall(): Boolean;
+var
+  Choice: Integer;
+begin
+  Choice := MsgBox(
+    'Удалить локальный профиль Clever PGP?' + #13#10 + #13#10 +
+    'Да — удалить профиль, настройки, биометрические данные и локальные ключи.' + #13#10 +
+    'Нет — сохранить их для последующей переустановки.' + #13#10 +
+    'Файлы .cpgp и диски .cpgv не удаляются.',
+    mbConfirmation,
+    MB_YESNOCANCEL
+  );
+  if Choice = IDCANCEL then
+  begin
+    Result := False;
+    exit;
+  end;
+  RemoveLocalProfile := Choice = IDYES;
+  Result := True;
+end;
+
+function DeleteLocalProfile(): Boolean;
+begin
+  Result := RemoveLocalProfile;
+end;
+
 function IsWinFspInstalled: Boolean;
 var
   InstallDirectory: String;

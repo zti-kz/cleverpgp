@@ -240,3 +240,14 @@ def test_public_key_association_imports_from_explorer() -> None:
         assert "--import-key" in source
     assert ".cpgk" in uninstaller
     assert "CleverPGP.PublicKey" in uninstaller
+
+
+def test_uninstaller_offers_to_keep_or_remove_only_local_profile() -> None:
+    project = Path(__file__).resolve().parents[1]
+    installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
+
+    assert "function InitializeUninstall(): Boolean;" in installer
+    assert "MB_YESNOCANCEL" in installer
+    assert 'Name: "{localappdata}\\BioPGP"; Check: DeleteLocalProfile' in installer
+    assert 'Name: "*.cpgv"' not in installer
+    assert 'Name: "*.cpgp"' not in installer

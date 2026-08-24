@@ -6,7 +6,8 @@ from pathlib import Path
 
 APP_NAME = "Clever PGP"
 ORGANIZATION_NAME = "Almas Oskenbay"
-# Keep the existing directory so upgrades retain the user's encrypted profile.
+# Keep the existing directory during upgrades. The uninstaller separately asks
+# whether this encrypted local profile should be retained or removed.
 APP_DATA_DIRECTORY_NAME = "BioPGP"
 DATABASE_FILENAME = "biopgp.sqlite3"
 

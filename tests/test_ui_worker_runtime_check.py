@@ -12,5 +12,5 @@ def test_ui_worker_runtime_check_completes(tmp_path) -> None:
 
     result = json.loads(marker.read_text(encoding="utf-8"))
     assert result["status"] == "ok"
-    assert result["result"] == "completed"
-    assert result["progress"] == [[37, "working"]]
+    assert result["result"]["created_size"] > 32 * 1024 * 1024
+    assert [100, "completed"] in result["progress"]

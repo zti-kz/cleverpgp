@@ -46,7 +46,7 @@ def test_block_volume_supports_independent_random_access(tmp_path: Path) -> None
     ) as volume:
         assert volume.logical_capacity == capacity
         assert volume.label == "Блочный диск"
-        assert volume.storage_format == "CLEVERPGP-AUTHENTICATED-BLOCKS-V1"
+        assert volume.storage_format == "CLEVERPGP-AUTHENTICATED-BLOCKS-V2"
         assert volume.read_blocks(0, 2) == bytes(2 * LOGICAL_BLOCK_SIZE)
         volume.write_blocks(3, b"A" * LOGICAL_BLOCK_SIZE)
         volume.write_blocks(8, b"B" * (2 * LOGICAL_BLOCK_SIZE))
@@ -57,6 +57,63 @@ def test_block_volume_supports_independent_random_access(tmp_path: Path) -> None
     with EncryptedBlockVolume.open(path, key) as reopened:
         assert reopened.read_blocks(3, 1) == b"A" * LOGICAL_BLOCK_SIZE
         assert reopened.read_blocks(4, 1) == bytes(LOGICAL_BLOCK_SIZE)
+
+
+def test_portable_password_slot_opens_disk_with_another_profile_key(
+    tmp_path: Path,
+) -> None:
+    original_profile_key = master_key()
+    unrelated_profile_key = master_key()
+    password = "correct portable disk password"
+    path = tmp_path / "portable.cpgv"
+    payload = b"portable".ljust(LOGICAL_BLOCK_SIZE, b"!")
+
+    with EncryptedBlockVolume.create(
+        path,
+        original_profile_key,
+        logical_capacity=1024 * 1024,
+        password=password,
+    ) as volume:
+        volume.write_blocks(7, payload)
+
+    with pytest.raises(InvalidBlockVolumeError):
+        EncryptedBlockVolume.open(path, unrelated_profile_key)
+
+    access_key = EncryptedBlockVolume.password_access_key(path, password)
+    with EncryptedBlockVolume.open(path, access_key) as portable:
+        assert portable.read_blocks(7, 1) == payload
+
+    with pytest.raises(InvalidBlockVolumeError, match="Неверный пароль"):
+        EncryptedBlockVolume.password_access_key(
+            path,
+            "wrong portable disk password",
+        )
+
+
+def test_portable_password_can_be_changed_without_reencrypting_data(
+    tmp_path: Path,
+) -> None:
+    key = master_key()
+    path = tmp_path / "password-change.cpgv"
+    old_password = "old correct portable password"
+    new_password = "new correct portable password"
+    payload = b"unchanged data".ljust(LOGICAL_BLOCK_SIZE, b".")
+    with EncryptedBlockVolume.create(
+        path,
+        key,
+        logical_capacity=1024 * 1024,
+        password=old_password,
+    ) as volume:
+        volume.write_blocks(9, payload)
+
+    EncryptedBlockVolume.change_password(path, old_password, new_password)
+
+    with pytest.raises(InvalidBlockVolumeError, match="Неверный пароль"):
+        EncryptedBlockVolume.password_access_key(path, old_password)
+    with EncryptedBlockVolume.open_with_password(path, new_password) as reopened:
+        assert reopened.read_blocks(9, 1) == payload
+    with EncryptedBlockVolume.open(path, key) as local_profile:
+        assert local_profile.read_blocks(9, 1) == payload
 
 
 @pytest.mark.skipif(

@@ -167,12 +167,18 @@ class FakeWinFspManager:
         self.mounted_drive = None
 
 
-def create_volume(path: Path, storage_format: str) -> None:
+def create_volume(
+    path: Path,
+    storage_format: str,
+    *,
+    password: str | None = None,
+) -> None:
     with EncryptedBlockVolume.create(
         path,
         MASTER_KEY,
         logical_capacity=MIN_LOGICAL_CAPACITY,
         storage_format=storage_format,
+        password=password,
     ):
         pass
 
@@ -235,6 +241,34 @@ def test_block_vault_routes_to_winfsp_manager(tmp_path: Path) -> None:
     assert manager.mounted_container == container_path.resolve()
     assert winfsp.mount_calls[0]["drive"] == "V:"
     assert not system.mount_calls
+
+
+def test_portable_password_routes_disk_without_original_profile_key(
+    tmp_path: Path,
+) -> None:
+    container_path = tmp_path / "portable-system.cpgv"
+    password = "correct portable disk password"
+    create_volume(
+        container_path,
+        WINDOWS_BLOCK_STORAGE_FORMAT,
+        password=password,
+    )
+    system = FakeSystemManager()
+    manager = AutomaticMountManager(
+        system_manager=system,
+        winfsp_manager=FakeWinFspManager(),  # type: ignore[arg-type]
+    )
+
+    mounted = manager.mount_opaque(container_path, password)
+
+    assert mounted == "S:"
+    assert len(system.mount_calls) == 1
+    portable_key = system.mount_calls[0]["master_key"]
+    assert isinstance(portable_key, bytes)
+    assert portable_key != MASTER_KEY
+    with EncryptedBlockVolume.open(container_path, portable_key):
+        pass
+    assert not system.opaque_mount_calls
 
 
 def test_fast_windows_disk_creation_routes_without_removing_winfsp(

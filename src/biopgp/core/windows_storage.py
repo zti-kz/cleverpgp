@@ -10,7 +10,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE
+from biopgp.core.block_volume import (
+    LOGICAL_BLOCK_SIZE,
+    BlockVolumeError,
+    EncryptedBlockVolume,
+)
 from biopgp.core.disk_control import (
     DiskControlRecord,
     DiskControlStore,
@@ -668,6 +672,7 @@ class WindowsSystemDiskManager:
         logical_capacity: int,
         label: str,
         algorithm: str = DEFAULT_DISK_ALGORITHM,
+        password: str | None = None,
         file_system: str = "NTFS",
         overwrite: bool = False,
         context_menu_labels: tuple[str, ...] | None = None,
@@ -677,6 +682,8 @@ class WindowsSystemDiskManager:
             raise MountUnavailableError(
                 "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
+        if progress is not None:
+            progress(3, "Проверка компонента виртуального диска")
         library = WinSpdLibrary()
 
         def creation_progress(completed: int, total: int) -> None:
@@ -688,7 +695,7 @@ class WindowsSystemDiskManager:
                 )
 
         if progress is not None:
-            progress(3, "Проверка параметров виртуального диска")
+            progress(4, "Проверка параметров виртуального диска")
         volume = create_windows_block_volume(
             container_path,
             master_key,
@@ -696,6 +703,7 @@ class WindowsSystemDiskManager:
             library=library,
             label=label,
             algorithm=algorithm,
+            password=password,
             overwrite=overwrite,
             progress=creation_progress,
         )
@@ -754,7 +762,7 @@ class WindowsSystemDiskManager:
                 container_path=container_path,
                 algorithm=algorithm,
                 context_menu_labels=context_menu_labels,
-                supports_algorithm_change=True,
+                supports_algorithm_change=password is None,
             )
         except Exception:
             self._process_manager.stop()
@@ -960,6 +968,7 @@ class WindowsSystemDiskManager:
         try:
             logical_capacity = volume.logical_capacity
             algorithm = volume.algorithm
+            supports_algorithm_change = not volume.has_portable_password
         finally:
             volume.close()
         before = list_windows_disks()
@@ -984,7 +993,7 @@ class WindowsSystemDiskManager:
                 container_path=container_path,
                 algorithm=algorithm,
                 context_menu_labels=context_menu_labels,
-                supports_algorithm_change=True,
+                supports_algorithm_change=supports_algorithm_change,
             )
         except Exception:
             self._process_manager.stop()
@@ -1009,11 +1018,30 @@ class WindowsSystemDiskManager:
         progress: Callable[[int, str], None] | None = None,
         header_store: OpaqueVolumeHeaderStore | None = None,
     ) -> str:
-        """Authenticate v4 locally, then start the host without the password."""
+        """Authenticate a portable v5 disk or an opaque v4 disk locally."""
 
         source = resolve_file_hosted_container_path(container_path)
         if not source.is_file():
             raise MountUnavailableError("Файл зашифрованного диска не найден.")
+        try:
+            portable_key = EncryptedBlockVolume.password_access_key(
+                source,
+                password,
+            )
+        except BlockVolumeError as portable_error:
+            if "Неверный пароль" in str(portable_error):
+                raise
+        else:
+            try:
+                return self.mount(
+                    source,
+                    portable_key,
+                    context_menu_labels=context_menu_labels,
+                    progress=progress,
+                )
+            finally:
+                del portable_key
+
         store = header_store or OpaqueVolumeHeaderStore()
 
         def unlock_progress(completed: int, total: int) -> None:
@@ -1128,7 +1156,7 @@ class WindowsSystemDiskManager:
         progress: Callable[[int, str], None] | None = None,
         header_store: OpaqueVolumeHeaderStore | None = None,
     ) -> Path:
-        """Safely detach an active v4 projection and replace its password."""
+        """Safely detach an active portable or hidden disk and rotate access."""
 
         drive = self.mounted_drive
         record = self._control_record
@@ -1140,6 +1168,36 @@ class WindowsSystemDiskManager:
         target = resolve_file_hosted_container_path(source)
         if not target.is_file():
             raise MountUnavailableError("Файл зашифрованного диска не найден.")
+        try:
+            portable_key = EncryptedBlockVolume.password_access_key(
+                target,
+                current_password,
+            )
+        except BlockVolumeError as portable_error:
+            if "Неверный пароль" in str(portable_error):
+                raise
+        else:
+            del portable_key
+            if progress is not None:
+                progress(30, "Безопасное отключение диска")
+            self.unmount()
+            EncryptedBlockVolume.change_password(
+                target,
+                current_password,
+                new_password,
+                progress=(
+                    None
+                    if progress is None
+                    else lambda completed, total: progress(
+                        35 + round(completed / total * 65),
+                        "Обновление переносимого парольного доступа",
+                    )
+                ),
+            )
+            if progress is not None:
+                progress(100, "Пароль диска успешно изменён")
+            return target
+
         store = header_store or OpaqueVolumeHeaderStore()
         if progress is not None:
             progress(3, "Проверка текущего пароля диска")

@@ -90,6 +90,9 @@ class BackgroundTaskThread(QThread):
 
     def run(self) -> None:
         try:
+            # This is emitted by the worker itself. The packaged UI can now
+            # distinguish a started operation from its pre-start paint value.
+            self._report_progress(2, "Операция запущена")
             self.succeeded.emit(self.operation(self._report_progress))
         except Exception as error:
             self.failed.emit(str(error))
@@ -165,6 +168,21 @@ class MainWindow(QMainWindow):
 
         if self.repository.has_profile():
             self._show_unlock()
+        elif self.startup_container is not None:
+            # A portable disk must remain usable after a clean reinstall. It
+            # therefore asks for its own password before any local profile is
+            # created on this computer.
+            source = self.startup_container
+            self.startup_container = None
+            self._direct_mount_pending = True
+            page, _content = self._base_page(
+                "Открытие переносимого диска",
+                tr("Контейнер: {name}", name=source.name),
+                compact=True,
+                page_icon="lock",
+            )
+            self.setCentralWidget(page)
+            QTimer.singleShot(0, lambda: self._prompt_opaque_volume_password(source))
         else:
             self._show_profile_creation()
 
@@ -978,6 +996,7 @@ class MainWindow(QMainWindow):
             "disk_algorithm",
             DEFAULT_DISK_ALGORITHM,
         )
+        disk_password = getattr(dialog, "disk_password", None)
         create_as_system_disk = self._uses_windows_system_disk or (
             self._automatically_selects_disk_backend and dialog.system_disk
         )
@@ -1053,6 +1072,7 @@ class MainWindow(QMainWindow):
                         label=volume_label,
                         file_system=file_system,
                         algorithm=disk_algorithm,
+                        password=disk_password,
                         context_menu_labels=self._ordinary_disk_context_labels(),
                         progress=progress,
                     )
@@ -1072,6 +1092,7 @@ class MainWindow(QMainWindow):
                 data_capacity=data_capacity,
                 label=volume_label,
                 algorithm=disk_algorithm,
+                password=disk_password,
                 progress=creation_progress,
             )
             container.close(save=False)
@@ -1140,7 +1161,7 @@ class MainWindow(QMainWindow):
             tr("Открыть зашифрованный диск"),
             tr("Сведения о диске"),
             tr("Настройки доступа"),
-            "",
+            tr("Изменить пароль диска"),
             tr("Изменить метод шифрования"),
             tr("Увеличить диск"),
             tr("Отключить зашифрованный диск"),
@@ -1254,7 +1275,10 @@ class MainWindow(QMainWindow):
         ):
             if self._direct_mount_pending:
                 self._direct_mount_pending = False
-                self._show_dashboard()
+                if self.repository.has_profile():
+                    self._show_dashboard()
+                else:
+                    self._close_background_window()
             return
         request = dialog.request
         passwords: list[str | None] = [
@@ -1658,7 +1682,7 @@ class MainWindow(QMainWindow):
     def _show_from_tray(self) -> None:
         if self.session is None or not self.session.is_unlocked:
             if self.repository.get_profile() is None:
-                self._show_create_profile()
+                self._show_profile_creation()
             else:
                 self._show_unlock()
         self.showMaximized()

@@ -26,6 +26,9 @@ def scrollable_dialog_layout(dialog: QDialog) -> QVBoxLayout:
     scroll.setFrameShape(QFrame.Shape.NoFrame)
     scroll.setWidgetResizable(True)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    # Windows can render a transient scrollbar over the viewport. Reserve a
+    # small safe gutter so it never covers the last words or rightmost button.
+    scroll.setViewportMargins(0, 0, 12, 10)
     scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
     scroll.setStyleSheet(
         "QScrollArea#adaptiveDialogScroll { background: transparent; border: 0; }"

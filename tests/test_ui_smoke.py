@@ -60,6 +60,76 @@ def test_first_window_can_be_created(tmp_path: Path) -> None:
     application.processEvents()
 
 
+def test_portable_disk_can_open_by_password_without_local_profile(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "portable.cpgv"
+    source.write_bytes(b"portable disk")
+
+    class UnlockDialog:
+        request = OpaqueVolumeUnlockRequest(
+            password="correct portable disk password",
+            hidden_protection_password=None,
+        )
+
+        def __init__(self, selected: Path, parent: object = None) -> None:
+            assert selected == source.resolve()
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    class PortableManager:
+        mounted_drive: str | None = None
+
+        def mount_opaque(
+            self,
+            selected: Path,
+            password: str,
+            **options: object,
+        ) -> str:
+            assert selected == source.resolve()
+            assert password == "correct portable disk password"
+            progress = options.get("progress")
+            assert callable(progress)
+            progress(100, "Виртуальный диск подключён")
+            self.mounted_drive = "P:"
+            return self.mounted_drive
+
+    monkeypatch.setattr(
+        main_window_module,
+        "OpaqueVolumeUnlockDialog",
+        UnlockDialog,
+    )
+    monkeypatch.setattr(
+        main_window_module.QDesktopServices,
+        "openUrl",
+        lambda _url: True,
+    )
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "empty-profile.sqlite3")
+    repository.initialize()
+    manager = PortableManager()
+    window = MainWindow(
+        repository,
+        ProfileService(repository),
+        FileCryptoService(),
+        mount_manager=manager,  # type: ignore[arg-type]
+        startup_container=source,
+    )
+    window.show()
+    deadline = time.monotonic() + 5
+    while manager.mounted_drive is None and time.monotonic() < deadline:
+        application.processEvents()
+        time.sleep(0.01)
+
+    assert manager.mounted_drive == "P:"
+    assert not repository.has_profile()
+    manager.mounted_drive = None
+    window.close()
+    application.processEvents()
+
+
 def test_background_task_shows_progress_and_blocks_closing(tmp_path: Path) -> None:
     application = QApplication.instance() or QApplication([])
     repository = ProfileRepository(tmp_path / "profile.sqlite3")
@@ -719,10 +789,10 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.create_call["label"] == "System disk"
     assert manager.create_call["file_system"] == "EXFAT"
     assert manager.create_call["context_menu_labels"] == (
-        "Открыть зашифрованный диск",
-        "Сведения о диске",
-        "Настройки доступа",
-        "",
+            "Открыть зашифрованный диск",
+            "Сведения о диске",
+            "Настройки доступа",
+            "Изменить пароль диска",
         "Изменить метод шифрования",
         "Увеличить диск",
         "Отключить зашифрованный диск",
@@ -738,10 +808,10 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.mounted_drive == "X:"
     assert manager.mount_call is not None
     assert manager.mount_call["context_menu_labels"] == (
-        "Открыть зашифрованный диск",
-        "Сведения о диске",
-        "Настройки доступа",
-        "",
+            "Открыть зашифрованный диск",
+            "Сведения о диске",
+            "Настройки доступа",
+            "Изменить пароль диска",
         "Изменить метод шифрования",
         "Увеличить диск",
         "Отключить зашифрованный диск",
@@ -835,7 +905,7 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
         "Открыть зашифрованный диск",
         "Сведения о диске",
         "Настройки доступа",
-        "",
+        "Изменить пароль диска",
         "Изменить метод шифрования",
         "Увеличить диск",
         "Отключить зашифрованный диск",
