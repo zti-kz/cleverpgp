@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cleverpgp"
-version = "0.13.2"
+version = "0.13.3"
 description = "Local encrypted files and mountable biometric containers"
 readme = "README.md"
 license = "GPL-3.0-or-later"

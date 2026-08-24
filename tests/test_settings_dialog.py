@@ -32,6 +32,7 @@ def test_settings_dialog_uses_title_bar_for_closing() -> None:
     assert "Отмена" not in button_texts
     assert button_texts == {
         "Сохранить язык",
+        "Добавить язык…",
         "Применить режим",
         "Обновить данные лица",
         "Изменить мастер-пароль",

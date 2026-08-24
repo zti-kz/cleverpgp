@@ -248,6 +248,9 @@ def test_uninstaller_offers_to_keep_or_remove_only_local_profile() -> None:
 
     assert "function InitializeUninstall(): Boolean;" in installer
     assert "MB_YESNOCANCEL" in installer
-    assert 'Name: "{localappdata}\\CleverPGP"; Check: DeleteLocalProfile' in installer
+    assert "[UninstallRun]" in installer
+    assert '--purge-local-profile ""{code:ProfilePathForUninstall}""' in installer
+    assert 'Check: DeleteLocalProfile' in installer
+    assert 'Name: "{localappdata}\\CleverPGP"' not in installer
     assert 'Name: "*.cpgv"' not in installer
     assert 'Name: "*.cpgp"' not in installer

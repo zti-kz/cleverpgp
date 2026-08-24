@@ -1080,6 +1080,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
             self.mounted_drive: str | None = None
             self.create_call: dict[str, object] | None = None
             self.events: list[str] = []
+            self.operation: object | None = None
 
         def prepare_system_backend(self) -> None:
             self.events.append("prepare")
@@ -1097,19 +1098,45 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
             master_key: bytes,
             **options: object,
         ) -> str:
-            self.events.append("create_isolated")
-            progress = options.pop("progress")
-            assert callable(progress)
-            progress(82, "Ожидание разрешения Windows")
+            raise AssertionError("Qt worker must not launch system disk creation")
+
+        def begin_create_and_mount_isolated(
+            self,
+            container_path: Path,
+            master_key: bytes,
+            **options: object,
+        ) -> object:
+            self.events.append("begin_isolated")
             self.create_call = {
                 "container_path": container_path,
                 "master_key": master_key,
                 **options,
             }
+
+            class Operation:
+                finished = False
+                cleaned = False
+
+                @staticmethod
+                def read_progress() -> tuple[int, str]:
+                    return 82, "Ожидание разрешения Windows"
+
+                @staticmethod
+                def result() -> str:
+                    return "Q:"
+
+                def cleanup(self) -> None:
+                    self.cleaned = True
+
+            self.operation = Operation()
+            return self.operation
+
+        def adopt_isolated_creation(self, path: Path, drive: str) -> str:
+            assert path == CreationDialog.container_path
+            self.events.append("adopt_isolated")
             self.uses_windows_system_disk = True
-            self.mounted_drive = "Q:"
-            progress(100, "Виртуальный диск готов")
-            return self.mounted_drive
+            self.mounted_drive = drive
+            return drive
 
         def unmount(self) -> None:
             self.mounted_drive = None
@@ -1157,6 +1184,16 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
 
     assert window._disk_backend_available()
     window._create_container()
+    application.processEvents()
+
+    assert window._busy
+    assert window._task_thread is None
+    assert manager.operation is not None
+    assert all(
+        not button.isEnabled()
+        for button in window.centralWidget().findChildren(QPushButton)
+    )
+    manager.operation.finished = True
     deadline = time.monotonic() + 5
     while window._busy and time.monotonic() < deadline:
         application.processEvents()
@@ -1173,8 +1210,9 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
     assert manager.create_call["container_path"] == tmp_path / "automatic-created.cpgv"
     assert manager.create_call["logical_capacity"] == 96 * 1024 * 1024
     assert manager.create_call["file_system"] == "NTFS"
-    assert manager.events == ["create_isolated"]
+    assert manager.events == ["begin_isolated", "adopt_isolated"]
     assert manager.mounted_drive == "Q:"
+    assert manager.operation.cleaned
 
     manager.mounted_drive = None
     manager.uses_windows_system_disk = False

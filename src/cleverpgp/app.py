@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication
 
 from cleverpgp.config import APP_NAME, ORGANIZATION_NAME, database_path
@@ -14,6 +15,7 @@ from cleverpgp.core.mount_router import AutomaticMountManager
 from cleverpgp.core.profile_service import ProfileService
 from cleverpgp.core.storage import ProfileRepository
 from cleverpgp.localization import set_language
+from cleverpgp.single_instance import SingleApplicationInstance
 from cleverpgp.ui.main_window import MainWindow
 from cleverpgp.ui.icons import line_icon
 from cleverpgp.ui.key_dialogs import PublicKeyImportDialog
@@ -50,6 +52,21 @@ def main(
     application.setWindowIcon(line_icon("shield", "#38bdf8"))
     install_screen_bounds(application)
 
+    regular_shell = (
+        container_path is None
+        and startup_action is None
+        and public_key_path is None
+    )
+    instance: SingleApplicationInstance | None = None
+    # Unit tests replace QApplication with a mock. The identity check keeps
+    # real local IPC limited to an actual Qt application object.
+    if regular_shell and QCoreApplication.instance() is application:
+        instance = SingleApplicationInstance(application)
+        if not instance.acquire():
+            return 0
+        setattr(application, "_cleverpgp_single_instance", instance)
+        application.aboutToQuit.connect(instance.close)
+
     repository = ProfileRepository(database_path())
     repository.initialize()
     selected_language = set_language(repository.get_setting("language"))
@@ -82,4 +99,6 @@ def main(
         # authentication window. Mounting or resizing then returns to tray.
         window.show()
         fit_window_to_screen(window)
+    if instance is not None:
+        instance.activation_requested.connect(window._show_from_tray)
     return application.exec()

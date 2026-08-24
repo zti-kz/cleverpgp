@@ -64,6 +64,39 @@ class DiskCreationRequest:
     hidden_label: str | None = None
 
 
+@dataclass(slots=True)
+class IsolatedDiskCreationProcess:
+    """A running disk creator that can be polled without blocking Qt."""
+
+    exchange: DiskCreationExchange
+    paths: DiskCreationPaths
+    process: subprocess.Popen[bytes]
+    _last_progress: tuple[int, str] | None = None
+
+    def read_progress(self) -> tuple[int, str] | None:
+        current = self.exchange.read_progress(self.paths)
+        if current is None or current == self._last_progress:
+            return None
+        self._last_progress = current
+        return current
+
+    @property
+    def finished(self) -> bool:
+        return self.paths.response_path.is_file() or self.process.poll() is not None
+
+    def result(self) -> str:
+        if self.paths.response_path.is_file():
+            return self.exchange.consume_response(self.paths)
+        if self.process.poll() is None:
+            raise RuntimeError("Процесс создания диска ещё выполняется.")
+        raise MountUnavailableError(
+            "Изолированный процесс создания диска завершился без ответа."
+        )
+
+    def cleanup(self) -> None:
+        self.exchange.cleanup(self.paths)
+
+
 class DiskCreationExchange:
     """Protected one-time IPC for disk creation outside the Qt process.
 
@@ -515,8 +548,7 @@ def create_windows_disk_isolated(
     exchange: DiskCreationExchange | None = None,
     command_prefix: Iterable[str] | None = None,
 ) -> str:
-    selected = exchange or DiskCreationExchange()
-    paths = selected.create_ordinary(
+    operation = start_windows_disk_creation(
         container_path,
         master_key,
         logical_capacity=logical_capacity,
@@ -526,12 +558,12 @@ def create_windows_disk_isolated(
         file_system=file_system,
         overwrite=overwrite,
         context_menu_labels=context_menu_labels,
+        exchange=exchange,
+        command_prefix=command_prefix,
     )
     return _run_creation_process(
-        paths,
-        selected,
+        operation,
         progress=progress,
-        command_prefix=command_prefix,
     )
 
 
@@ -551,6 +583,70 @@ def create_hidden_windows_disk_isolated(
     exchange: DiskCreationExchange | None = None,
     command_prefix: Iterable[str] | None = None,
 ) -> str:
+    operation = start_hidden_windows_disk_creation(
+        container_path,
+        outer_password,
+        hidden_password,
+        outer_capacity=outer_capacity,
+        hidden_capacity=hidden_capacity,
+        outer_label=outer_label,
+        hidden_label=hidden_label,
+        file_system=file_system,
+        overwrite=overwrite,
+        context_menu_labels=context_menu_labels,
+        exchange=exchange,
+        command_prefix=command_prefix,
+    )
+    return _run_creation_process(
+        operation,
+        progress=progress,
+    )
+
+
+def start_windows_disk_creation(
+    container_path: Path,
+    master_key: bytes,
+    *,
+    logical_capacity: int,
+    label: str,
+    algorithm: str,
+    password: str | None,
+    file_system: str,
+    overwrite: bool,
+    context_menu_labels: tuple[str, ...] | None,
+    exchange: DiskCreationExchange | None = None,
+    command_prefix: Iterable[str] | None = None,
+) -> IsolatedDiskCreationProcess:
+    selected = exchange or DiskCreationExchange()
+    paths = selected.create_ordinary(
+        container_path,
+        master_key,
+        logical_capacity=logical_capacity,
+        label=label,
+        algorithm=algorithm,
+        password=password,
+        file_system=file_system,
+        overwrite=overwrite,
+        context_menu_labels=context_menu_labels,
+    )
+    return _start_creation_process(paths, selected, command_prefix=command_prefix)
+
+
+def start_hidden_windows_disk_creation(
+    container_path: Path,
+    outer_password: str,
+    hidden_password: str,
+    *,
+    outer_capacity: int,
+    hidden_capacity: int,
+    outer_label: str,
+    hidden_label: str,
+    file_system: str,
+    overwrite: bool,
+    context_menu_labels: tuple[str, ...] | None,
+    exchange: DiskCreationExchange | None = None,
+    command_prefix: Iterable[str] | None = None,
+) -> IsolatedDiskCreationProcess:
     selected = exchange or DiskCreationExchange()
     paths = selected.create_hidden(
         container_path,
@@ -564,21 +660,15 @@ def create_hidden_windows_disk_isolated(
         overwrite=overwrite,
         context_menu_labels=context_menu_labels,
     )
-    return _run_creation_process(
-        paths,
-        selected,
-        progress=progress,
-        command_prefix=command_prefix,
-    )
+    return _start_creation_process(paths, selected, command_prefix=command_prefix)
 
 
-def _run_creation_process(
+def _start_creation_process(
     paths: DiskCreationPaths,
     exchange: DiskCreationExchange,
     *,
-    progress: Callable[[int, str], None] | None,
     command_prefix: Iterable[str] | None,
-) -> str:
+) -> IsolatedDiskCreationProcess:
     prefix = tuple(command_prefix or application_command_prefix())
     if not prefix:
         exchange.cleanup(paths)
@@ -587,8 +677,6 @@ def _run_creation_process(
     creation_flags = (
         getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
     )
-    if progress is not None:
-        progress(2, "Защита одноразового запроса создания диска")
     try:
         process = subprocess.Popen(
             command,
@@ -601,28 +689,28 @@ def _run_creation_process(
     except OSError:
         exchange.cleanup(paths)
         raise
-    last_progress: tuple[int, str] | None = None
+    return IsolatedDiskCreationProcess(exchange, paths, process)
+
+
+def _run_creation_process(
+    operation: IsolatedDiskCreationProcess,
+    *,
+    progress: Callable[[int, str], None] | None,
+) -> str:
+    if progress is not None:
+        progress(2, "Защита одноразового запроса создания диска")
+        progress(3, "Запуск изолированного процесса")
     try:
-        if progress is not None:
-            progress(3, "Запуск изолированного процесса")
         while True:
-            current = exchange.read_progress(paths)
-            if current is not None and current != last_progress:
-                last_progress = current
+            current = operation.read_progress()
+            if current is not None:
                 if progress is not None:
                     progress(*current)
-            if paths.response_path.is_file():
-                return exchange.consume_response(paths)
-            exit_code = process.poll()
-            if exit_code is not None:
-                if paths.response_path.is_file():
-                    return exchange.consume_response(paths)
-                raise MountUnavailableError(
-                    "Изолированный процесс создания диска завершился без ответа."
-                )
+            if operation.finished:
+                return operation.result()
             time.sleep(0.05)
     finally:
-        exchange.cleanup(paths)
+        operation.cleanup()
 
 
 def run_windows_create_helper(

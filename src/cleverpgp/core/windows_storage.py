@@ -826,6 +826,51 @@ class WindowsSystemDiskManager:
             )
         return drive
 
+    def begin_create_and_mount_isolated(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        *,
+        logical_capacity: int,
+        label: str,
+        algorithm: str = DEFAULT_DISK_ALGORITHM,
+        password: str | None = None,
+        file_system: str = "NTFS",
+        overwrite: bool = False,
+        context_menu_labels: tuple[str, ...] | None = None,
+    ) -> object:
+        """Start creation and return immediately so the Qt loop stays responsive."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
+            )
+        from cleverpgp.core.disk_creation import start_windows_disk_creation
+
+        return start_windows_disk_creation(
+            container_path,
+            master_key,
+            logical_capacity=logical_capacity,
+            label=label,
+            algorithm=algorithm,
+            password=password,
+            file_system=file_system,
+            overwrite=overwrite,
+            context_menu_labels=context_menu_labels,
+        )
+
+    def adopt_isolated_creation(self, container_path: Path, drive: str) -> str:
+        """Attach this shell to the control record published by its helper."""
+
+        del container_path
+        self._recover_existing_control_record()
+        recovered = self.mounted_drive
+        if recovered != drive:
+            raise MountUnavailableError(
+                "Созданный диск подключён, но приложение не получило канал управления."
+            )
+        return drive
+
     def create_hidden_and_mount(
         self,
         container_path: Path,
@@ -1034,6 +1079,41 @@ class WindowsSystemDiskManager:
                 "Созданный скрытый диск подключён, но канал управления недоступен."
             )
         return drive
+
+    def begin_create_hidden_and_mount_isolated(
+        self,
+        container_path: Path,
+        outer_password: str,
+        hidden_password: str,
+        *,
+        outer_capacity: int,
+        hidden_capacity: int,
+        outer_label: str,
+        hidden_label: str,
+        file_system: str = "NTFS",
+        overwrite: bool = False,
+        context_menu_labels: tuple[str, ...] | None = None,
+    ) -> object:
+        """Start hidden-disk creation without blocking the GUI thread."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый виртуальный диск Clever PGP."
+            )
+        from cleverpgp.core.disk_creation import start_hidden_windows_disk_creation
+
+        return start_hidden_windows_disk_creation(
+            container_path,
+            outer_password,
+            hidden_password,
+            outer_capacity=outer_capacity,
+            hidden_capacity=hidden_capacity,
+            outer_label=outer_label,
+            hidden_label=hidden_label,
+            file_system=file_system,
+            overwrite=overwrite,
+            context_menu_labels=context_menu_labels,
+        )
 
     def _verify_host_health(self, message: str) -> None:
         verifier = getattr(self._process_manager, "verify_healthy", None)

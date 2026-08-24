@@ -291,7 +291,17 @@ def run_block_create_child(marker: Path) -> int:
         )
         return 0
     finally:
-        target.unlink(missing_ok=True)
+        # Native Windows storage can release the final file handle a few
+        # milliseconds after ``close`` returns.  A transient sharing error
+        # must not turn a successful packaged-runtime check into a failure.
+        for attempt in range(20):
+            try:
+                target.unlink(missing_ok=True)
+                break
+            except PermissionError:
+                if attempt == 19:
+                    break
+                time.sleep(0.05)
 
 
 def run_virtual_disk(marker: Path) -> int:

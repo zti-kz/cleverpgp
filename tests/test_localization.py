@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -21,7 +22,13 @@ from cleverpgp.core.file_crypto import FileCryptoService  # noqa: E402
 from cleverpgp.core.identity import IdentityService  # noqa: E402
 from cleverpgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
 from cleverpgp.core.storage import ProfileRepository  # noqa: E402
-from cleverpgp.localization import available_languages, set_language, tr  # noqa: E402
+from cleverpgp.localization import (  # noqa: E402
+    available_languages,
+    install_language_pack,
+    reload_language_catalogs,
+    set_language,
+    tr,
+)
 from cleverpgp.ui.about_dialog import AboutDialog  # noqa: E402
 from cleverpgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
 from cleverpgp.ui.disk_algorithm_dialog import (  # noqa: E402
@@ -64,6 +71,35 @@ def test_three_extensible_language_catalogs_are_available() -> None:
         ("ru", "Русский"),
         ("kk", "Қазақша"),
     ]
+
+
+def test_text_only_language_pack_can_be_added_from_settings(
+    monkeypatch, tmp_path
+) -> None:
+    pack = tmp_path / "de.cpg-lang"
+    pack.write_text(
+        json.dumps(
+            {
+                "code": "de",
+                "native_name": "Deutsch",
+                "translations": {"Зашифровать файл": "Datei verschlüsseln"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with monkeypatch.context() as context:
+        context.setenv("CLEVERPGP_DATA_DIR", str(tmp_path / "application-data"))
+        reload_language_catalogs()
+        language = install_language_pack(pack)
+        assert language.native_name == "Deutsch"
+        assert "de" in {item.code for item in available_languages()}
+        assert set_language("de") == "de"
+        assert tr("Зашифровать файл") == "Datei verschlüsseln"
+        installed = tmp_path / "application-data" / "languages" / "de.json"
+        assert installed.is_file()
+    reload_language_catalogs()
+    set_language("ru")
 
 
 def test_author_and_institute_names_are_localized_exactly() -> None:

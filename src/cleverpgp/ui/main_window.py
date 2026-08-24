@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import subprocess
 import hmac
+import os
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -60,6 +61,7 @@ from cleverpgp.core.windows_shell import application_command_prefix
 from cleverpgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY
 from cleverpgp.localization import (
     current_language,
+    install_language_pack,
     localize_widget_tree,
     set_language,
     tr,
@@ -159,6 +161,13 @@ class MainWindow(QMainWindow):
         self._task_failure_handler: Callable[[str], None] | None = None
         self._task_determinate = False
         self._busy_widget_states: dict[QWidget, bool] = {}
+        self._disk_creation_operation: object | None = None
+        self._disk_creation_target: Path | None = None
+        self._disk_creation_success_handler: Callable[[object], None] | None = None
+        self._disk_creation_adopter: Callable[[Path, str], str] | None = None
+        self._disk_creation_timer = QTimer(self)
+        self._disk_creation_timer.setInterval(75)
+        self._disk_creation_timer.timeout.connect(self._poll_disk_creation)
 
         title_suffix = (
             f" — {self.startup_container.name}" if self.startup_container else ""
@@ -587,6 +596,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(page)
 
     def _show_access_settings(self) -> None:
+        if self._busy:
+            return
         profile = self.repository.get_profile()
         if profile is None or self.session is None or not self.session.is_unlocked:
             self._show_unlock()
@@ -608,6 +619,22 @@ class MainWindow(QMainWindow):
                 self.close()
             return
         request = dialog.request
+        if request.operation == "install_language" and request.language_pack_path:
+            try:
+                language = install_language_pack(request.language_pack_path)
+                self.repository.set_setting("language", language.code)
+            except (OSError, TypeError, ValueError) as error:
+                self._show_error(str(error))
+                return
+            if not self._compact_settings_launch:
+                self._set_dashboard_status(
+                    tr(
+                        "Язык {name} установлен. Clever PGP перезапускается.",
+                        name=language.native_name,
+                    )
+                )
+            QTimer.singleShot(0, self._restart_application)
+            return
         if request.operation == "language" and request.language_code:
             self.repository.set_setting("language", request.language_code)
             if request.language_code == current_language():
@@ -1186,6 +1213,92 @@ class MainWindow(QMainWindow):
                     )
                 )
 
+        if create_as_system_disk:
+            adopter = getattr(
+                self.mount_manager,
+                "adopt_isolated_creation",
+                None,
+            )
+            if hidden_request is not None:
+                starter = getattr(
+                    self.mount_manager,
+                    "begin_create_hidden_and_mount_isolated",
+                    None,
+                )
+                if callable(starter) and callable(adopter):
+                    passwords: list[str | None] = [
+                        hidden_request.outer_password,
+                        hidden_request.hidden_password,
+                    ]
+
+                    def begin_hidden_creation() -> object:
+                        try:
+                            return starter(
+                                target,
+                                passwords[0],
+                                passwords[1],
+                                outer_capacity=data_capacity,
+                                hidden_capacity=hidden_request.hidden_capacity,
+                                outer_label=volume_label,
+                                hidden_label=hidden_request.hidden_label,
+                                file_system=file_system,
+                                context_menu_labels=(
+                                    tr("Открыть зашифрованный диск"),
+                                    tr("Сведения о диске"),
+                                    tr("Настройки доступа"),
+                                    tr("Изменить пароль диска"),
+                                    "",
+                                    tr("Отключить зашифрованный диск"),
+                                ),
+                            )
+                        finally:
+                            passwords[0] = None
+                            passwords[1] = None
+
+                    self._start_isolated_disk_creation(
+                        begin_hidden_creation,
+                        target,
+                        adopter,
+                        created,
+                    )
+                    return
+            else:
+                starter = getattr(
+                    self.mount_manager,
+                    "begin_create_and_mount_isolated",
+                    None,
+                )
+                if callable(starter) and callable(adopter):
+                    if self.session is None:
+                        self._show_unlock()
+                        return
+                    key_buffer = bytearray(self.session.master_key_copy())
+
+                    def begin_ordinary_creation() -> object:
+                        try:
+                            return starter(
+                                target,
+                                bytes(key_buffer),
+                                logical_capacity=data_capacity,
+                                label=volume_label,
+                                file_system=file_system,
+                                algorithm=disk_algorithm,
+                                password=disk_password,
+                                context_menu_labels=(
+                                    self._ordinary_disk_context_labels()
+                                ),
+                            )
+                        finally:
+                            key_buffer[:] = b"\x00" * len(key_buffer)
+
+                    self._start_isolated_disk_creation(
+                        begin_ordinary_creation,
+                        target,
+                        adopter,
+                        created,
+                    )
+                    return
+
         if hidden_request is not None:
             self._start_progress_task(create_hidden_container, created)
         else:
@@ -1467,13 +1580,16 @@ class MainWindow(QMainWindow):
         self.dashboard_status.show()
 
     def _restart_application(self) -> None:
+        if self._busy:
+            return
         command = list(application_command_prefix())
         if not command:
             self._show_error("Не удалось найти команду запуска Clever PGP.")
             return
+        command.extend(("--restart-after-process", str(os.getpid())))
         creation_flags = 0
         if sys.platform == "win32":
-            creation_flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(
+            creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
                 subprocess,
                 "CREATE_NEW_PROCESS_GROUP",
                 0,
@@ -1497,6 +1613,93 @@ class MainWindow(QMainWindow):
         application = QApplication.instance()
         if application is not None:
             application.quit()
+
+    def _start_isolated_disk_creation(
+        self,
+        starter: Callable[[], object],
+        target: Path,
+        adopter: Callable[[Path, str], str],
+        on_success: Callable[[object], None],
+    ) -> None:
+        """Launch a disk helper directly and poll it from the Qt event loop."""
+
+        if self._busy:
+            return
+        self._set_busy(True, determinate=True)
+        self._task_progress(2, "Защита одноразового запроса создания диска")
+        try:
+            operation = starter()
+        except Exception as error:
+            self._set_busy(False)
+            self._show_error(str(error))
+            return
+        required = ("read_progress", "result", "cleanup")
+        if any(not callable(getattr(operation, name, None)) for name in required):
+            self._set_busy(False)
+            self._show_error("Процесс создания диска не поддерживает контроль состояния.")
+            return
+        self._disk_creation_operation = operation
+        self._disk_creation_target = Path(target).expanduser().resolve()
+        self._disk_creation_success_handler = on_success
+        self._disk_creation_adopter = adopter
+        self._task_progress(3, "Запуск изолированного процесса")
+        self._disk_creation_timer.start()
+
+    @Slot()
+    def _poll_disk_creation(self) -> None:
+        operation = self._disk_creation_operation
+        if operation is None:
+            self._disk_creation_timer.stop()
+            return
+        try:
+            current = operation.read_progress()
+            if current is not None:
+                self._task_progress(*current)
+            if not bool(getattr(operation, "finished", False)):
+                return
+            drive = str(operation.result())
+            target = self._disk_creation_target
+            adopter = self._disk_creation_adopter
+            if target is None or adopter is None:
+                raise BioPGPError("Не удалось восстановить состояние созданного диска.")
+            mounted = str(adopter(target, drive))
+            result: object = (target, mounted, None)
+            error: str | None = None
+        except Exception as caught:
+            target = self._disk_creation_target
+            if target is not None and target.is_file():
+                result = (target, None, str(caught))
+                error = None
+            else:
+                result = None
+                error = str(caught) or caught.__class__.__name__
+        self._finish_isolated_disk_creation(result, error)
+
+    def _finish_isolated_disk_creation(
+        self,
+        result: object,
+        error: str | None,
+    ) -> None:
+        self._disk_creation_timer.stop()
+        operation = self._disk_creation_operation
+        handler = self._disk_creation_success_handler
+        self._disk_creation_operation = None
+        self._disk_creation_target = None
+        self._disk_creation_success_handler = None
+        self._disk_creation_adopter = None
+        try:
+            if operation is not None:
+                operation.cleanup()
+        finally:
+            self._set_busy(False)
+        if error is not None:
+            self._show_error(error)
+            return
+        if handler is not None:
+            try:
+                handler(result)
+            except (BioPGPError, OSError, TypeError, ValueError) as caught:
+                self._show_error(str(caught))
 
     def _start_key_task(
         self,
@@ -1701,17 +1904,24 @@ class MainWindow(QMainWindow):
                 except RuntimeError:
                     pass
             self._busy_widget_states.clear()
-        self._tray_unmount_action.setEnabled(
-            not busy and self.mount_manager.mounted_drive is not None
-        )
-        self._tray_open_drive_action.setEnabled(
-            not busy and self.mount_manager.mounted_drive is not None
-        )
+        if busy:
+            for action in (
+                self._tray_show_action,
+                self._tray_open_drive_action,
+                self._tray_unmount_action,
+                self._tray_exit_action,
+            ):
+                action.setEnabled(False)
+        else:
+            self._tray_show_action.setEnabled(True)
+            self._sync_tray_state()
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, not busy)
         if restore_window:
             self.show()
 
     def _lock(self) -> None:
+        if self._busy:
+            return
         self._clear_session()
         self._show_unlock()
         if self.mount_manager.mounted_drive is not None:
@@ -1859,6 +2069,8 @@ class MainWindow(QMainWindow):
             self.session = None
 
     def _show_about(self) -> None:
+        if self._busy:
+            return
         AboutDialog(self).exec()
 
     def _base_page(

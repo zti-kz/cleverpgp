@@ -24,6 +24,24 @@ def main(argv: list[str] | None = None) -> int:
         from cleverpgp.core.disk_creation import run_windows_create_helper
 
         return run_windows_create_helper(Path(arguments[1]))
+    if arguments[:1] == ["--restart-after-process"] and len(arguments) == 2:
+        from cleverpgp.core.process_restart import restart_after_process_exit
+
+        try:
+            process_id = int(arguments[1])
+        except ValueError:
+            return 1
+        return restart_after_process_exit(process_id)
+    if arguments[:1] == ["--purge-local-profile"] and len(arguments) in (1, 2):
+        from cleverpgp.core.profile_purge import purge_local_profile
+
+        return purge_local_profile(
+            Path(arguments[1]) if len(arguments) == 2 else None
+        )
+    if arguments == ["--launch-uninstaller"]:
+        from cleverpgp.core.uninstall_launcher import launch_uninstaller
+
+        return launch_uninstaller()
     if arguments[:1] == ["--runtime-check"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:

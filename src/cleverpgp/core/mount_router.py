@@ -189,6 +189,48 @@ class AutomaticMountManager:
         self._mounted_container = source
         return str(mounted)
 
+    def begin_create_and_mount_isolated(
+        self,
+        container_path: Path,
+        master_key: bytes,
+        **options: object,
+    ) -> object:
+        """Begin fast Windows creation while leaving the Qt loop unblocked."""
+
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый диск Clever PGP."
+            )
+        source = resolve_file_hosted_container_path(container_path)
+        manager = self._system_manager
+        starter = (
+            getattr(manager, "begin_create_and_mount_isolated", None)
+            if manager is not None
+            else None
+        )
+        if not callable(starter):
+            raise MountUnavailableError(
+                "Неблокирующий компонент создания диска недоступен."
+            )
+        return starter(source, master_key, **options)
+
+    def adopt_isolated_creation(self, container_path: Path, drive: str) -> str:
+        manager = self._system_manager
+        adopter = (
+            getattr(manager, "adopt_isolated_creation", None)
+            if manager is not None
+            else None
+        )
+        if not callable(adopter):
+            raise MountUnavailableError(
+                "Канал управления созданным диском недоступен."
+            )
+        source = resolve_file_hosted_container_path(container_path)
+        mounted = str(adopter(source, drive))
+        self._active_manager = manager
+        self._mounted_container = source
+        return mounted
+
     def prepare_system_backend(self) -> None:
         """Preload the Windows bridge before a background disk operation."""
 
@@ -259,6 +301,30 @@ class AutomaticMountManager:
         self._active_manager = manager
         self._mounted_container = source
         return str(mounted)
+
+    def begin_create_hidden_and_mount_isolated(
+        self,
+        container_path: Path,
+        outer_password: str,
+        hidden_password: str,
+        **options: object,
+    ) -> object:
+        if self.mounted_drive is not None:
+            raise MountUnavailableError(
+                "Сначала отключите уже открытый диск Clever PGP."
+            )
+        source = resolve_file_hosted_container_path(container_path)
+        manager = self._system_manager
+        starter = (
+            getattr(manager, "begin_create_hidden_and_mount_isolated", None)
+            if manager is not None
+            else None
+        )
+        if not callable(starter):
+            raise MountUnavailableError(
+                "Неблокирующий компонент скрытого диска недоступен."
+            )
+        return starter(source, outer_password, hidden_password, **options)
 
     def mount_opaque(
         self,

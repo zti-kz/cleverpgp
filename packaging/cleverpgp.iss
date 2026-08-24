@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.13.2"
+  #define AppVersion "0.13.3"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -69,16 +69,15 @@ Source: "{#WinSpdInstaller}"; DestDir: "{tmp}"; DestName: "winspd-cleverpgp.msi"
 Type: files; Name: "{app}\BioPGP.exe"
 Type: files; Name: "{autoprograms}\BioPGP.lnk"
 Type: files; Name: "{autodesktop}\BioPGP.lnk"
+Type: files; Name: "{autoprograms}\Clever PGP.lnk"
 Type: filesandordirs; Name: "{app}\Source"
 
-[UninstallDelete]
-; User containers are deliberately outside this scope. Only the local profile,
-; settings, biometric slot and encrypted profile-key records can be removed.
-Type: filesandordirs; Name: "{localappdata}\CleverPGP"; Check: DeleteLocalProfile
-Type: filesandordirs; Name: "{localappdata}\BioPGP"; Check: DeleteLocalProfile
+[UninstallRun]
+Filename: "{app}\{#AppExecutable}"; Parameters: "--purge-local-profile ""{code:ProfilePathForUninstall}"""; StatusMsg: "Удаляется локальный профиль Clever PGP..."; Flags: runhidden waituntilterminated; RunOnceId: "PurgeCleverPGPProfile"; Check: DeleteLocalProfile
 
 [Icons]
-Name: "{autoprograms}\Clever PGP"; Filename: "{app}\{#AppExecutable}"; WorkingDir: "{app}"
+Name: "{group}\Clever PGP"; Filename: "{app}\{#AppExecutable}"; WorkingDir: "{app}"
+Name: "{group}\Удалить Clever PGP"; Filename: "{app}\{#AppExecutable}"; Parameters: "--launch-uninstaller"; IconFilename: "{app}\{#AppExecutable}"; Comment: "Удалить Clever PGP с этого компьютера"
 Name: "{autodesktop}\Clever PGP"; Filename: "{app}\{#AppExecutable}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
@@ -137,6 +136,20 @@ Filename: "{app}\{#AppExecutable}"; Description: "Запустить Clever PGP"
 var
   RemoveLocalProfile: Boolean;
 
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  UninstallKey: String;
+  LauncherCommand: String;
+begin
+  if CurStep <> ssPostInstall then
+    exit;
+  UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +
+    '{9CA87C0D-5BA5-47E6-A52F-9935E8A51DFB}_is1';
+  LauncherCommand := '"' + ExpandConstant('{app}\{#AppExecutable}') +
+    '" --launch-uninstaller';
+  RegWriteStringValue(HKLM64, UninstallKey, 'UninstallString', LauncherCommand);
+end;
+
 function InitializeUninstall(): Boolean;
 var
   Choice: Integer;
@@ -161,6 +174,28 @@ end;
 function DeleteLocalProfile(): Boolean;
 begin
   Result := RemoveLocalProfile;
+end;
+
+function ProfilePathForUninstall(Param: String): String;
+begin
+  Result := ExpandConstant('{param:PROFILEPATH|}');
+  if Result = '' then
+    Result := ExpandConstant('{localappdata}\CleverPGP');
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if
+    (CurUninstallStep = usPostUninstall) and
+    RemoveLocalProfile and
+    DirExists(ProfilePathForUninstall(''))
+  then
+    MsgBox(
+      'Локальный профиль не удалось удалить полностью. ' +
+      'Закройте все процессы Clever PGP и повторите удаление.',
+      mbError,
+      MB_OK
+    );
 end;
 
 function IsWinFspInstalled: Boolean;

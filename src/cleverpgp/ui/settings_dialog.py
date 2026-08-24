@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -32,6 +34,7 @@ class AccessSettingsRequest:
     current_password: str = ""
     new_password: str = ""
     language_code: str = ""
+    language_pack_path: Path | None = None
 
 
 class AccessSettingsDialog(QDialog):
@@ -127,6 +130,10 @@ class AccessSettingsDialog(QDialog):
         language_button.setIcon(line_icon("language"))
         language_button.clicked.connect(self._request_language_change)
         language_layout.addWidget(language_button)
+        add_language_button = QPushButton("Добавить язык…")
+        add_language_button.setIcon(line_icon("language"))
+        add_language_button.clicked.connect(self._request_language_installation)
+        language_layout.addWidget(add_language_button)
         outer.addWidget(language_card)
 
         mode_card = self._card()
@@ -268,6 +275,21 @@ class AccessSettingsDialog(QDialog):
         self.request = AccessSettingsRequest(
             "language",
             language_code=language_code,
+        )
+        self.accept()
+
+    def _request_language_installation(self) -> None:
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            tr("Добавить язык Clever PGP"),
+            "",
+            tr("Языковой пакет Clever PGP (*.cpg-lang *.json)"),
+        )
+        if not selected:
+            return
+        self.request = AccessSettingsRequest(
+            "install_language",
+            language_pack_path=Path(selected).expanduser().resolve(),
         )
         self.accept()
 
