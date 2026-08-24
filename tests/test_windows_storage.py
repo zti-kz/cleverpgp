@@ -9,22 +9,22 @@ from pathlib import Path
 import pytest
 from nacl import pwhash, secret, utils
 
-from biopgp.core.block_volume import EncryptedBlockVolume
-from biopgp.core.disk_control import DiskControlEndpoint, DiskControlRecord
-from biopgp.core.disk_crypto import (
+from cleverpgp.core.block_volume import EncryptedBlockVolume
+from cleverpgp.core.disk_control import DiskControlEndpoint, DiskControlRecord
+from cleverpgp.core.disk_crypto import (
     AES256_GCM,
     DEFAULT_DISK_ALGORITHM,
     disk_cipher_available,
 )
-from biopgp.core.errors import MountUnavailableError, ValidationError
-from biopgp.core.hidden_volume import HiddenVolumeDescriptor
-from biopgp.core.opaque_volume_header import (
+from cleverpgp.core.errors import MountUnavailableError, ValidationError
+from cleverpgp.core.hidden_volume import HiddenVolumeDescriptor
+from cleverpgp.core.opaque_volume_header import (
     HeaderKdfParameters,
     OpaqueVolumeHeader,
     OpaqueVolumeHeaderStore,
 )
-from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
-from biopgp.core.windows_storage import (
+from cleverpgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
+from cleverpgp.core.windows_storage import (
     WindowsDiskInfo,
     WindowsSystemDiskManager,
     WindowsVolumeInfo,
@@ -106,7 +106,7 @@ def test_prepare_backend_loads_native_bridge_only_once() -> None:
     )
     prepared_library = object()
     with patch(
-        "biopgp.core.windows_storage.WinSpdLibrary",
+        "cleverpgp.core.windows_storage.WinSpdLibrary",
         return_value=prepared_library,
     ) as library_type:
         manager.prepare_backend()
@@ -137,7 +137,7 @@ def test_inspects_volume_by_drive_letter() -> None:
         }
     )
     with patch(
-        "biopgp.core.windows_storage._run_powershell",
+        "cleverpgp.core.windows_storage._run_powershell",
         return_value=raw,
     ) as run_powershell:
         info = inspect_windows_volume("z:\\")
@@ -184,7 +184,7 @@ def test_ntfs_extension_revalidates_identity_before_resize() -> None:
         }
     )
     with patch(
-        "biopgp.core.windows_storage._run_powershell",
+        "cleverpgp.core.windows_storage._run_powershell",
         return_value=raw,
     ) as run_powershell:
         result = extend_cleverpgp_ntfs_partition(
@@ -256,7 +256,7 @@ def test_format_command_revalidates_target_before_destructive_operation() -> Non
     expected_size = 128 * 1024 * 1024
     candidate = disk(7, "CleverPGP", expected_size)
     with patch(
-        "biopgp.core.windows_storage._run_powershell",
+        "cleverpgp.core.windows_storage._run_powershell",
         return_value='{"DriveLetter":"Z"}',
     ) as run_powershell:
         drive = format_ephemeral_cleverpgp_disk(
@@ -317,18 +317,18 @@ def test_system_manager_formats_new_disk_only_through_uac_helper(
         recover_existing=False,
     )
     with (
-        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch("cleverpgp.core.windows_storage.WinSpdLibrary"),
         patch(
-            "biopgp.core.windows_storage.create_windows_block_volume",
+            "cleverpgp.core.windows_storage.create_windows_block_volume",
             side_effect=create_volume,
         ),
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=selected_disk,
         ),
         patch(
-            "biopgp.core.windows_format.run_elevated_windows_format",
+            "cleverpgp.core.windows_format.run_elevated_windows_format",
             return_value="Z:",
         ) as elevated_format,
         patch.object(manager, "_publish_control_record", return_value=None),
@@ -379,18 +379,18 @@ def test_system_manager_removes_unformatted_image_after_uac_failure(
         recover_existing=False,
     )
     with (
-        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch("cleverpgp.core.windows_storage.WinSpdLibrary"),
         patch(
-            "biopgp.core.windows_storage.create_windows_block_volume",
+            "cleverpgp.core.windows_storage.create_windows_block_volume",
             side_effect=create_volume,
         ),
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=selected_disk,
         ),
         patch(
-            "biopgp.core.windows_format.run_elevated_windows_format",
+            "cleverpgp.core.windows_format.run_elevated_windows_format",
             side_effect=MountUnavailableError("UAC cancelled"),
         ),
     ):
@@ -450,22 +450,22 @@ def test_system_manager_formats_outer_with_protection_then_hidden(
         recover_existing=False,
     )
     with (
-        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch("cleverpgp.core.windows_storage.WinSpdLibrary"),
         patch(
-            "biopgp.core.windows_storage.create_hidden_windows_block_volume",
+            "cleverpgp.core.windows_storage.create_hidden_windows_block_volume",
             side_effect=create_hidden,
         ),
         patch(
-            "biopgp.core.windows_storage.list_windows_disks",
+            "cleverpgp.core.windows_storage.list_windows_disks",
             side_effect=[[], []],
         ),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             side_effect=[outer_disk, hidden_disk],
         ),
-        patch("biopgp.core.windows_storage.wait_for_disk_removal") as removed,
+        patch("cleverpgp.core.windows_storage.wait_for_disk_removal") as removed,
         patch(
-            "biopgp.core.windows_format.run_elevated_windows_format",
+            "cleverpgp.core.windows_format.run_elevated_windows_format",
             side_effect=["Y:", "Z:"],
         ) as formatter,
         patch.object(manager, "_publish_control_record", return_value=object()),
@@ -513,19 +513,19 @@ def test_hidden_system_creation_failure_removes_incomplete_image(
         recover_existing=False,
     )
     with (
-        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch("cleverpgp.core.windows_storage.WinSpdLibrary"),
         patch(
-            "biopgp.core.windows_storage.create_hidden_windows_block_volume",
+            "cleverpgp.core.windows_storage.create_hidden_windows_block_volume",
             side_effect=create_hidden,
         ),
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=outer_disk,
         ),
-        patch("biopgp.core.windows_storage.wait_for_disk_removal"),
+        patch("cleverpgp.core.windows_storage.wait_for_disk_removal"),
         patch(
-            "biopgp.core.windows_format.run_elevated_windows_format",
+            "cleverpgp.core.windows_format.run_elevated_windows_format",
             side_effect=MountUnavailableError("format failed"),
         ),
     ):
@@ -574,18 +574,18 @@ def test_hidden_creation_preserves_image_if_safe_unmount_fails(
         recover_existing=False,
     )
     with (
-        patch("biopgp.core.windows_storage.WinSpdLibrary"),
+        patch("cleverpgp.core.windows_storage.WinSpdLibrary"),
         patch(
-            "biopgp.core.windows_storage.create_hidden_windows_block_volume",
+            "cleverpgp.core.windows_storage.create_hidden_windows_block_volume",
             side_effect=create_hidden,
         ),
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=outer_disk,
         ),
         patch(
-            "biopgp.core.windows_format.run_elevated_windows_format",
+            "cleverpgp.core.windows_format.run_elevated_windows_format",
             side_effect=MountUnavailableError("format failed"),
         ),
     ):
@@ -607,7 +607,7 @@ def test_unicode_volume_label_is_encoded_not_interpolated() -> None:
     expected_size = 128 * 1024 * 1024
     candidate = disk(7, "CleverPGP", expected_size)
     with patch(
-        "biopgp.core.windows_storage._run_powershell",
+        "cleverpgp.core.windows_storage._run_powershell",
         return_value='{"DriveLetter":"Z"}',
     ) as run_powershell:
         format_ephemeral_cleverpgp_disk(
@@ -633,12 +633,12 @@ def test_disk_drive_letters_normalizes_powershell_json(
     raw: str,
     expected: list[str],
 ) -> None:
-    with patch("biopgp.core.windows_storage._run_powershell", return_value=raw):
+    with patch("cleverpgp.core.windows_storage._run_powershell", return_value=raw):
         assert disk_drive_letters(7) == expected
 
 
 def test_winspd_driver_is_unavailable_outside_windows() -> None:
-    with patch("biopgp.core.windows_storage.sys.platform", "linux"):
+    with patch("cleverpgp.core.windows_storage.sys.platform", "linux"):
         assert not winspd_driver_available()
 
 
@@ -658,13 +658,13 @@ def test_system_manager_mounts_formatted_volume_and_waits_for_removal(
     system_disk = disk(7, "CleverPGP", 1024 * 1024)
 
     with (
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=system_disk,
         ),
-        patch("biopgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
-        patch("biopgp.core.windows_storage.wait_for_disk_removal") as removed,
+        patch("cleverpgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
+        patch("cleverpgp.core.windows_storage.wait_for_disk_removal") as removed,
     ):
         manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
             process_manager,
@@ -740,12 +740,12 @@ def test_system_manager_mounts_v4_hidden_header_without_forwarding_password(
         recover_existing=False,
     )
     with (
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=system_disk,
         ) as wait_disk,
-        patch("biopgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
+        patch("cleverpgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
         patch.object(manager, "_publish_control_record", return_value=object()),
     ):
         drive = manager.mount_opaque(
@@ -827,7 +827,7 @@ def test_system_manager_disconnects_before_changing_active_v4_password(
     manager._control_record = record
     progress: list[tuple[int, str]] = []
 
-    with patch("biopgp.core.windows_storage.wait_for_disk_removal") as removed:
+    with patch("cleverpgp.core.windows_storage.wait_for_disk_removal") as removed:
         changed = manager.change_opaque_password(
             old_password,
             new_password,
@@ -984,13 +984,13 @@ def test_system_manager_publishes_and_removes_external_control_state(
             type(self).removed = True
 
     with (
-        patch("biopgp.core.windows_storage.list_windows_disks", return_value=[]),
+        patch("cleverpgp.core.windows_storage.list_windows_disks", return_value=[]),
         patch(
-            "biopgp.core.windows_storage.wait_for_new_cleverpgp_disk",
+            "cleverpgp.core.windows_storage.wait_for_new_cleverpgp_disk",
             return_value=system_disk,
         ),
-        patch("biopgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
-        patch("biopgp.core.windows_storage.wait_for_disk_removal"),
+        patch("cleverpgp.core.windows_storage.wait_for_drive_letter", return_value="Z:"),
+        patch("cleverpgp.core.windows_storage.wait_for_disk_removal"),
     ):
         manager = WindowsSystemDiskManager(  # type: ignore[arg-type]
             process_manager,
@@ -1345,11 +1345,11 @@ def test_system_manager_grows_remounts_and_extends_ntfs(
 
     with (
         patch(
-            "biopgp.core.windows_storage.inspect_windows_volume",
+            "cleverpgp.core.windows_storage.inspect_windows_volume",
             side_effect=[original, resized],
         ),
         patch(
-            "biopgp.core.windows_storage.resize_windows_block_volume",
+            "cleverpgp.core.windows_storage.resize_windows_block_volume",
             side_effect=resize_backend,
         ),
         patch.object(manager, "unmount", side_effect=unmount),
@@ -1416,7 +1416,7 @@ def test_system_manager_can_retry_only_ntfs_extension_after_uac_cancel(
 
     with (
         patch(
-            "biopgp.core.windows_storage.inspect_windows_volume",
+            "cleverpgp.core.windows_storage.inspect_windows_volume",
             return_value=info,
         ),
         patch.object(manager, "unmount") as unmount,
@@ -1527,7 +1527,7 @@ def test_system_manager_changes_algorithm_and_restores_mounted_disk(
 
     with (
         patch(
-            "biopgp.core.windows_storage.inspect_windows_volume",
+            "cleverpgp.core.windows_storage.inspect_windows_volume",
             side_effect=[original_info, converted_info],
         ),
         patch.object(manager, "unmount", side_effect=unmount),
@@ -1615,11 +1615,11 @@ def test_system_manager_remounts_original_after_conversion_failure(
 
     with (
         patch(
-            "biopgp.core.windows_storage.inspect_windows_volume",
+            "cleverpgp.core.windows_storage.inspect_windows_volume",
             return_value=info,
         ),
         patch(
-            "biopgp.core.windows_storage.convert_windows_block_volume_algorithm",
+            "cleverpgp.core.windows_storage.convert_windows_block_volume_algorithm",
             side_effect=OSError("conversion failed"),
         ),
         patch.object(manager, "unmount", side_effect=unmount),

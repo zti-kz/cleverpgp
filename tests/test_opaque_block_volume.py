@@ -5,20 +5,20 @@ from pathlib import Path
 import pytest
 from nacl import pwhash
 
-from biopgp.core.block_volume import (
+from cleverpgp.core.block_volume import (
     LOGICAL_BLOCK_SIZE,
     MIN_LOGICAL_CAPACITY,
     BlockIntegrityError,
     BlockVolumeError,
 )
-from biopgp.core.errors import AuthenticationError
-from biopgp.core.hidden_volume import HiddenBlockVolume
-from biopgp.core.opaque_block_volume import (
+from cleverpgp.core.errors import AuthenticationError
+from cleverpgp.core.hidden_volume import HiddenBlockVolume
+from cleverpgp.core.opaque_block_volume import (
     OPAQUE_BLOCK_AAD,
     OpaqueBlockVolume,
     OpaqueCoverBlockVolume,
 )
-from biopgp.core.opaque_volume_header import (
+from cleverpgp.core.opaque_volume_header import (
     OPAQUE_HEADER_MAGIC,
     HeaderKdfParameters,
     OpaqueVolumeHeaderStore,

@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 $ProjectDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PythonWindowed = Join-Path $ProjectDirectory ".venv\Scripts\pythonw.exe"
 
@@ -22,7 +22,7 @@ Set-Item -Path $EncryptVerb -Value "Зашифровать с Clever PGP"
 New-ItemProperty -Path $EncryptVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $EncryptVerb -Name "MultiSelectModel" -Value "Single" -PropertyType String -Force | Out-Null
 $EncryptCommand = New-Item -Path (Join-Path $EncryptVerb "command") -Force
-Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp.shell encrypt `"%1`""
+Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp.shell encrypt `"%1`""
 
 New-Item -Path $EncryptedExtension -Force | Out-Null
 Set-Item -Path $EncryptedExtension -Value "CleverPGP.EncryptedFile"
@@ -36,7 +36,7 @@ $OpenVerb = New-Item -Path (Join-Path $EncryptedType "shell\open") -Force
 Set-Item -Path $OpenVerb.PSPath -Value "Расшифровать с Clever PGP"
 New-ItemProperty -Path $OpenVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $DecryptCommand = New-Item -Path (Join-Path $OpenVerb.PSPath "command") -Force
-Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp.shell decrypt `"%1`""
+Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp.shell decrypt `"%1`""
 
 New-Item -Path $PublicKeyExtension -Force | Out-Null
 Set-Item -Path $PublicKeyExtension -Value "CleverPGP.PublicKey"
@@ -50,7 +50,7 @@ $ImportVerb = New-Item -Path (Join-Path $PublicKeyType "shell\open") -Force
 Set-Item -Path $ImportVerb.PSPath -Value "Импортировать открытый ключ"
 New-ItemProperty -Path $ImportVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $ImportCommand = New-Item -Path (Join-Path $ImportVerb.PSPath "command") -Force
-Set-Item -Path $ImportCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp --import-key `"%1`""
+Set-Item -Path $ImportCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --import-key `"%1`""
 
 New-Item -Path $ContainerExtension -Force | Out-Null
 Set-Item -Path $ContainerExtension -Value "CleverPGP.ContainerFile"
@@ -64,7 +64,7 @@ $MountVerb = New-Item -Path (Join-Path $ContainerType "shell\open") -Force
 Set-Item -Path $MountVerb.PSPath -Value "Подключить зашифрованный диск"
 New-ItemProperty -Path $MountVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $MountCommand = New-Item -Path (Join-Path $MountVerb.PSPath "command") -Force
-Set-Item -Path $MountCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp --container `"%1`""
+Set-Item -Path $MountCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --container `"%1`""
 
 if (Test-Path -LiteralPath $LegacyUnmountVerb) {
     Remove-Item -LiteralPath $LegacyUnmountVerb -Recurse -Force
@@ -87,7 +87,7 @@ New-Item -Path $InfoVerb -Force | Out-Null
 New-ItemProperty -Path $InfoVerb -Name "MUIVerb" -Value "Сведения о диске" -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $InfoVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $InfoCommand = New-Item -Path (Join-Path $InfoVerb "command") -Force
-Set-Item -Path $InfoCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp --disk-info `"%1`""
+Set-Item -Path $InfoCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --disk-info `"%1`""
 
 $UnmountVerb = Join-Path $DriveMenu "shell\Unmount"
 New-Item -Path $UnmountVerb -Force | Out-Null
@@ -95,7 +95,7 @@ New-ItemProperty -Path $UnmountVerb -Name "MUIVerb" -Value "Отключить �
 New-ItemProperty -Path $UnmountVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $UnmountVerb -Name "CommandFlags" -Value 32 -PropertyType DWord -Force | Out-Null
 $UnmountCommand = New-Item -Path (Join-Path $UnmountVerb "command") -Force
-Set-Item -Path $UnmountCommand.PSPath -Value "`"$PythonWindowed`" -m biopgp --unmount `"%1`""
+Set-Item -Path $UnmountCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --unmount `"%1`""
 
 Add-Type -Namespace CleverPGP -Name ShellNotify -MemberDefinition @"
 [System.Runtime.InteropServices.DllImport("shell32.dll")]

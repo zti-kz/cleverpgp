@@ -4,20 +4,20 @@ from pathlib import Path
 
 import pytest
 
-from biopgp.core.block_container import BLOCK_VAULT_STORAGE_FORMAT
-from biopgp.core.block_volume import (
+from cleverpgp.core.block_container import BLOCK_VAULT_STORAGE_FORMAT
+from cleverpgp.core.block_volume import (
     GENERIC_STORAGE_FORMAT,
     MIN_LOGICAL_CAPACITY,
     EncryptedBlockVolume,
 )
-from biopgp.core.errors import InvalidContainerError
-from biopgp.core.mount_router import (
+from cleverpgp.core.errors import InvalidContainerError
+from cleverpgp.core.mount_router import (
     BACKEND_WINDOWS,
     BACKEND_WINFSP,
     AutomaticMountManager,
     detect_container_backend,
 )
-from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
+from cleverpgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 
 MASTER_KEY = bytes(range(32))
 OTHER_KEY = bytes(reversed(range(32)))

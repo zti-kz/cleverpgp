@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from biopgp.localization import set_language
+from cleverpgp.localization import set_language
 
 
 @pytest.fixture(autouse=True)

@@ -98,25 +98,25 @@ magic | version | header_length | canonical JSON header
 
 ## Границы модулей
 
-- `biopgp.core.profile_service` — создание профиля, Argon2id, разблокировка сессии;
-- `biopgp.core.storage` — SQLite и миграция схемы;
-- `biopgp.core.identity` — асимметричная идентичность профиля, `.cpgk` и контакты;
-- `biopgp.core.file_crypto` — версия формата `.cpgp` и потоковая криптография;
-- `biopgp.core.block_volume` — независимое аутентифицированное хранение логических блоков `.cpgv`;
-- `biopgp.core.block_container` — дерево каталогов, экстенты файлов и чередующиеся состояния метаданных;
-- `biopgp.core.container` — прежний компактный исследовательский формат, оставленный только для изолированных тестов и не используемый приложением;
-- `biopgp.core.mount` — адаптер WinFsp/FUSE и жизненный цикл подключённого диска;
-- `biopgp.core.mount_router` — выбор WinFsp или WinSpd по аутентифицированному назначению заголовка после разблокировки;
-- `biopgp.core.winspd` — мост SCSI-команд WinSpd, отдельный фоновый процесс и формат виртуального блочного диска;
-- `biopgp.core.windows_storage` — строгая идентификация диска Windows, форматирование, поиск буквы, увеличение NTFS и безопасное отключение;
-- `biopgp.core.windows_format` — одноразовый аутентифицированный обмен с минимальным UAC-процессом первого форматирования WinSpd-диска;
-- `biopgp.core.windows_resize` — одноразовый обмен с минимальным UAC-процессом для повторно проверяемого расширения NTFS;
-- `biopgp.core.disk_control` — аутентифицированный loopback-канал и защищённое состояние активного виртуального диска;
-- `biopgp.core.windows_shell` — динамическое меню Проводника, ограниченное буквой активного виртуального диска;
-- `biopgp.ui.main_window` — интерфейс без криптографических примитивов;
-- `biopgp.shell` и `biopgp.ui.shell_dialog` — отдельный безопасный процесс для команды Проводника;
-- будущий `biopgp.biometrics` — камера, embedding, liveness и политика совпадения;
-- будущий `biopgp.key_protection` — Windows CNG/DPAPI/TPM и Linux Secret Service/TPM2.
+- `cleverpgp.core.profile_service` — создание профиля, Argon2id, разблокировка сессии;
+- `cleverpgp.core.storage` — SQLite и миграция схемы;
+- `cleverpgp.core.identity` — асимметричная идентичность профиля, `.cpgk` и контакты;
+- `cleverpgp.core.file_crypto` — версия формата `.cpgp` и потоковая криптография;
+- `cleverpgp.core.block_volume` — независимое аутентифицированное хранение логических блоков `.cpgv`;
+- `cleverpgp.core.block_container` — дерево каталогов, экстенты файлов и чередующиеся состояния метаданных;
+- `cleverpgp.core.container` — прежний компактный исследовательский формат, оставленный только для изолированных тестов и не используемый приложением;
+- `cleverpgp.core.mount` — адаптер WinFsp/FUSE и жизненный цикл подключённого диска;
+- `cleverpgp.core.mount_router` — выбор WinFsp или WinSpd по аутентифицированному назначению заголовка после разблокировки;
+- `cleverpgp.core.winspd` — мост SCSI-команд WinSpd, отдельный фоновый процесс и формат виртуального блочного диска;
+- `cleverpgp.core.windows_storage` — строгая идентификация диска Windows, форматирование, поиск буквы, увеличение NTFS и безопасное отключение;
+- `cleverpgp.core.windows_format` — одноразовый аутентифицированный обмен с минимальным UAC-процессом первого форматирования WinSpd-диска;
+- `cleverpgp.core.windows_resize` — одноразовый обмен с минимальным UAC-процессом для повторно проверяемого расширения NTFS;
+- `cleverpgp.core.disk_control` — аутентифицированный loopback-канал и защищённое состояние активного виртуального диска;
+- `cleverpgp.core.windows_shell` — динамическое меню Проводника, ограниченное буквой активного виртуального диска;
+- `cleverpgp.ui.main_window` — интерфейс без криптографических примитивов;
+- `cleverpgp.shell` и `cleverpgp.ui.shell_dialog` — отдельный безопасный процесс для команды Проводника;
+- будущий `cleverpgp.biometrics` — камера, embedding, liveness и политика совпадения;
+- будущий `cleverpgp.key_protection` — Windows CNG/DPAPI/TPM и Linux Secret Service/TPM2.
 
 ## Интеграция с Проводником Windows
 

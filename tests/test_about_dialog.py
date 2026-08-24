@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 
-from biopgp.ui.about_dialog import AboutDialog  # noqa: E402
+from cleverpgp.ui.about_dialog import AboutDialog  # noqa: E402
 
 
 def test_about_dialog_contains_product_and_developer_information() -> None:
@@ -13,7 +13,7 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
 
     assert "Clever PGP" in text
-    assert "Версия 0.13.1" in text
+    assert "Версия 0.13.2" in text
     assert ".cpgp" in text
     assert ".cpgv" in text
     assert "Алмас Оскенбаев" in text

@@ -7,9 +7,9 @@ from unittest.mock import patch
 import pytest
 from nacl import secret, utils
 
-from biopgp.core.block_container import BlockVaultContainer
-from biopgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
-from biopgp.core.mount import (
+from cleverpgp.core.block_container import BlockVaultContainer
+from cleverpgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
+from cleverpgp.core.mount import (
     VaultFuseOperations,
     mount_backend_available,
     mount_fuse_options,
@@ -75,7 +75,7 @@ def test_mount_backend_is_absent_on_clean_test_machine() -> None:
 
 
 def test_windows_mount_is_owned_by_the_current_user() -> None:
-    with patch("biopgp.core.mount.platform.system", return_value="Windows"):
+    with patch("cleverpgp.core.mount.platform.system", return_value="Windows"):
         options = mount_fuse_options("Clever PGP")
 
     assert options["uid"] == -1
@@ -111,19 +111,19 @@ def test_windows_unmount_uses_system_disk_control_when_fuse_marker_is_absent(
 
     drive_checks = iter((True, True, False, False))
     monkeypatch.setattr(
-        "biopgp.core.disk_control.DiskControlStore", FakeControlStore
+        "cleverpgp.core.disk_control.DiskControlStore", FakeControlStore
     )
     monkeypatch.setattr(
-        "biopgp.core.windows_shell.WindowsDriveContextMenu", FakeContextMenu
+        "cleverpgp.core.windows_shell.WindowsDriveContextMenu", FakeContextMenu
     )
     with (
-        patch("biopgp.core.mount.platform.system", return_value="Windows"),
-        patch("biopgp.core.mount.Path.open", side_effect=OSError),
+        patch("cleverpgp.core.mount.platform.system", return_value="Windows"),
+        patch("cleverpgp.core.mount.Path.open", side_effect=OSError),
         patch(
-            "biopgp.core.mount._drive_in_use",
+            "cleverpgp.core.mount._drive_in_use",
             side_effect=lambda _drive: next(drive_checks),
         ),
-        patch("biopgp.core.mount.time.sleep"),
+        patch("cleverpgp.core.mount.time.sleep"),
     ):
         assert unmount_drive("z:\\") == "Z:"
 

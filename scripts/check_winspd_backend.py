@@ -10,8 +10,8 @@ from time import perf_counter
 
 from nacl import secret, utils
 
-from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE
-from biopgp.core.winspd import (
+from cleverpgp.core.block_volume import LOGICAL_BLOCK_SIZE
+from cleverpgp.core.winspd import (
     DEFAULT_MAX_TRANSFER_LENGTH,
     WinSpdLibrary,
     WinSpdProcessManager,

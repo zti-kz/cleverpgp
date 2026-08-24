@@ -9,12 +9,12 @@ from time import perf_counter
 
 from nacl import secret, utils
 
-from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
-from biopgp.core.disk_crypto import (
+from cleverpgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
+from cleverpgp.core.disk_crypto import (
     DEFAULT_DISK_ALGORITHM,
     available_disk_ciphers,
 )
-from biopgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
+from cleverpgp.core.winspd import WINDOWS_BLOCK_STORAGE_FORMAT
 
 MEBIBYTE = 1024 * 1024
 

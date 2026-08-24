@@ -9,14 +9,14 @@ from unittest.mock import Mock
 import pytest
 from nacl import pwhash, secret, utils
 
-from biopgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
-from biopgp.core.errors import OutputExistsError
-from biopgp.core.opaque_block_volume import OpaqueBlockVolume
-from biopgp.core.opaque_volume_header import (
+from cleverpgp.core.block_volume import LOGICAL_BLOCK_SIZE, EncryptedBlockVolume
+from cleverpgp.core.errors import OutputExistsError
+from cleverpgp.core.opaque_block_volume import OpaqueBlockVolume
+from cleverpgp.core.opaque_volume_header import (
     HeaderKdfParameters,
     OpaqueVolumeHeaderStore,
 )
-from biopgp.core.winspd import (
+from cleverpgp.core.winspd import (
     DEFAULT_DISPATCHER_THREADS,
     DEFAULT_MAX_TRANSFER_LENGTH,
     SCSISTAT_GOOD,
@@ -35,7 +35,7 @@ from biopgp.core.winspd import (
     open_windows_block_volume,
     resize_windows_block_volume,
 )
-from biopgp.core.disk_crypto import AES256_GCM, disk_cipher_available
+from cleverpgp.core.disk_crypto import AES256_GCM, disk_cipher_available
 
 
 class UnusedLibrary:

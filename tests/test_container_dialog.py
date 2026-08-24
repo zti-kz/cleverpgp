@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QSlider,
 )
 
-from biopgp.ui.container_dialog import (  # noqa: E402
+from cleverpgp.ui.container_dialog import (  # noqa: E402
     DISK_BACKEND_WINDOWS,
     DISK_BACKEND_WINFSP,
     VOLUME_KIND_HIDDEN,
@@ -23,17 +23,17 @@ from biopgp.ui.container_dialog import (  # noqa: E402
     MEBIBYTE,
     ContainerCreationDialog,
 )
-from biopgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
-from biopgp.core.disk_crypto import (  # noqa: E402
+from cleverpgp.core.block_container import BlockVaultContainer as EncryptedContainer  # noqa: E402
+from cleverpgp.core.disk_crypto import (  # noqa: E402
     AES256_GCM,
     XCHACHA20_POLY1305,
     disk_cipher_available,
 )
-from biopgp.core.winspd import (  # noqa: E402
+from cleverpgp.core.winspd import (  # noqa: E402
     MIN_HIDDEN_WINDOWS_COVER_CAPACITY,
     MIN_WINDOWS_DISK_CAPACITY,
 )
-from biopgp.ui.resize_dialog import ContainerResizeDialog  # noqa: E402
+from cleverpgp.ui.resize_dialog import ContainerResizeDialog  # noqa: E402
 
 
 def test_container_size_is_selected_with_a_slider(
@@ -306,7 +306,7 @@ def test_resize_dialog_uses_one_slider_and_selected_drive_space(
     container_path = tmp_path / "mounted.cpgv"
     container_path.write_bytes(b"container")
     with patch(
-        "biopgp.ui.resize_dialog.shutil.disk_usage",
+        "cleverpgp.ui.resize_dialog.shutil.disk_usage",
         return_value=SimpleNamespace(free=256 * MEBIBYTE),
     ):
         dialog = ContainerResizeDialog(
@@ -337,7 +337,7 @@ def test_resize_dialog_explains_why_exfat_growth_is_disabled(
     container_path = tmp_path / "exfat.cpgv"
     container_path.write_bytes(b"container")
     with patch(
-        "biopgp.ui.resize_dialog.shutil.disk_usage",
+        "cleverpgp.ui.resize_dialog.shutil.disk_usage",
         return_value=SimpleNamespace(free=256 * MEBIBYTE),
     ):
         dialog = ContainerResizeDialog(
@@ -361,7 +361,7 @@ def test_resize_dialog_allows_retry_without_additional_free_space(
     container_path = tmp_path / "pending.cpgv"
     container_path.write_bytes(b"container")
     with patch(
-        "biopgp.ui.resize_dialog.shutil.disk_usage",
+        "cleverpgp.ui.resize_dialog.shutil.disk_usage",
         return_value=SimpleNamespace(free=0),
     ):
         dialog = ContainerResizeDialog(

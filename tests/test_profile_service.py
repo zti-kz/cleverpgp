@@ -3,11 +3,11 @@ from pathlib import Path
 import pytest
 from nacl import pwhash, secret
 
-from biopgp.core.errors import AuthenticationError, ValidationError
-from biopgp.core.models import BiometricProfile
-from biopgp.core.models import UnlockMode
-from biopgp.core.profile_service import KdfParameters, ProfileService
-from biopgp.core.storage import ProfileRepository
+from cleverpgp.core.errors import AuthenticationError, ValidationError
+from cleverpgp.core.models import BiometricProfile
+from cleverpgp.core.models import UnlockMode
+from cleverpgp.core.profile_service import KdfParameters, ProfileService
+from cleverpgp.core.storage import ProfileRepository
 
 
 @pytest.fixture

@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from biopgp.core.disk_control import DiskControlEndpoint
-from biopgp.core.errors import MountUnavailableError
-from biopgp.core.windows_format import (
+from cleverpgp.core.disk_control import DiskControlEndpoint
+from cleverpgp.core.errors import MountUnavailableError
+from cleverpgp.core.windows_format import (
     WindowsFormatExchange,
     run_elevated_windows_format,
     run_windows_format_helper,
 )
-from biopgp.core.windows_storage import WindowsDiskInfo
+from cleverpgp.core.windows_storage import WindowsDiskInfo
 
 
 class FakeProtector:

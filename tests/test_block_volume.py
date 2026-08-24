@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from nacl import secret, utils
 
-from biopgp.core.block_volume import (
+from cleverpgp.core.block_volume import (
     HEADER_AREA_SIZE,
     HEADER_PREFIX,
     LOGICAL_BLOCK_SIZE,
@@ -18,13 +18,13 @@ from biopgp.core.block_volume import (
     EncryptedBlockVolume,
     InvalidBlockVolumeError,
 )
-from biopgp.core.disk_crypto import (
+from cleverpgp.core.disk_crypto import (
     AES256_GCM,
     XCHACHA20_POLY1305,
     disk_cipher_available,
 )
-from biopgp.core.errors import ValidationError
-from biopgp.core.mapped_stream import MappedFileStream
+from cleverpgp.core.errors import ValidationError
+from cleverpgp.core.mapped_stream import MappedFileStream
 
 
 def master_key() -> bytes:
@@ -436,7 +436,7 @@ def test_resize_refuses_shrink_unaligned_size_and_insufficient_space(
         with pytest.raises(ValidationError, match="кратен"):
             volume.resize(3 * 1024 * 1024 + 1)
         with patch(
-            "biopgp.core.block_volume.shutil.disk_usage",
+            "cleverpgp.core.block_volume.shutil.disk_usage",
             return_value=SimpleNamespace(free=0),
         ):
             with pytest.raises(ValidationError, match="Недостаточно свободного места"):
@@ -740,7 +740,7 @@ def test_algorithm_conversion_refuses_wrong_format_and_insufficient_space(
             required_storage_format="ANOTHER-FORMAT",
         )
     with patch(
-        "biopgp.core.block_volume.shutil.disk_usage",
+        "cleverpgp.core.block_volume.shutil.disk_usage",
         return_value=SimpleNamespace(free=0),
     ):
         with pytest.raises(ValidationError, match="свободного места"):

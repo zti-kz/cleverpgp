@@ -6,14 +6,14 @@ from unittest.mock import patch
 
 import pytest
 
-from biopgp.core.disk_control import DiskControlRecord
-from biopgp.core.errors import MountUnavailableError
-from biopgp.core.windows_resize import (
+from cleverpgp.core.disk_control import DiskControlRecord
+from cleverpgp.core.errors import MountUnavailableError
+from cleverpgp.core.windows_resize import (
     WindowsResizeExchange,
     run_elevated_ntfs_extension,
     run_windows_resize_helper,
 )
-from biopgp.core.windows_storage import (
+from cleverpgp.core.windows_storage import (
     WindowsVolumeInfo,
     WindowsVolumeResizeResult,
 )
@@ -99,11 +99,11 @@ def test_elevated_helper_requires_live_control_record_and_exact_disk(
 
     with (
         patch(
-            "biopgp.core.windows_resize.inspect_windows_volume",
+            "cleverpgp.core.windows_resize.inspect_windows_volume",
             return_value=info,
         ) as inspect,
         patch(
-            "biopgp.core.windows_resize.extend_cleverpgp_ntfs_partition",
+            "cleverpgp.core.windows_resize.extend_cleverpgp_ntfs_partition",
             return_value=result,
         ) as extend,
     ):
@@ -143,11 +143,11 @@ def test_elevated_helper_refuses_identity_change_before_partition_command(
 
     with (
         patch(
-            "biopgp.core.windows_resize.inspect_windows_volume",
+            "cleverpgp.core.windows_resize.inspect_windows_volume",
             return_value=volume_info(unique_id="changed"),
         ),
         patch(
-            "biopgp.core.windows_resize.extend_cleverpgp_ntfs_partition",
+            "cleverpgp.core.windows_resize.extend_cleverpgp_ntfs_partition",
         ) as extend,
     ):
         exit_code = run_windows_resize_helper(

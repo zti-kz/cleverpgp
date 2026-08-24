@@ -80,9 +80,9 @@ def main() -> int:
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256):
         icon.addPixmap(draw_icon(size))
-    if not icon.pixmap(256, 256).save(str(ASSETS_DIRECTORY / "biopgp.png"), "PNG"):
+    if not icon.pixmap(256, 256).save(str(ASSETS_DIRECTORY / "cleverpgp.png"), "PNG"):
         raise RuntimeError("Не удалось сохранить PNG-значок Clever PGP.")
-    if not icon.pixmap(256, 256).save(str(ASSETS_DIRECTORY / "biopgp.ico"), "ICO"):
+    if not icon.pixmap(256, 256).save(str(ASSETS_DIRECTORY / "cleverpgp.ico"), "ICO"):
         raise RuntimeError("Не удалось сохранить ICO-значок Clever PGP.")
     application.processEvents()
     return 0

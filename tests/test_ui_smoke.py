@@ -17,23 +17,23 @@ from PySide6.QtWidgets import (  # noqa: E402
     QScrollArea,
 )
 
-from biopgp.core.container import MIN_DATA_CAPACITY  # noqa: E402
-from biopgp.core.block_volume import (  # noqa: E402
+from cleverpgp.core.container import MIN_DATA_CAPACITY  # noqa: E402
+from cleverpgp.core.block_volume import (  # noqa: E402
     EncryptedBlockVolume,
     InvalidBlockVolumeError,
 )
-from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
-from biopgp.core.models import BiometricProfile, UnlockMode  # noqa: E402
-from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
-from biopgp.core.storage import ProfileRepository  # noqa: E402
-from biopgp.ui.main_window import MainWindow  # noqa: E402
-from biopgp.ui import main_window as main_window_module  # noqa: E402
-from biopgp.ui.settings_dialog import AccessSettingsRequest  # noqa: E402
-from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
+from cleverpgp.core.file_crypto import FileCryptoService  # noqa: E402
+from cleverpgp.core.models import BiometricProfile, UnlockMode  # noqa: E402
+from cleverpgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
+from cleverpgp.core.storage import ProfileRepository  # noqa: E402
+from cleverpgp.ui.main_window import MainWindow  # noqa: E402
+from cleverpgp.ui import main_window as main_window_module  # noqa: E402
+from cleverpgp.ui.settings_dialog import AccessSettingsRequest  # noqa: E402
+from cleverpgp.ui.hidden_volume_dialog import (  # noqa: E402
     HiddenVolumeCreationRequest,
     OpaqueVolumeUnlockRequest,
 )
-from biopgp.core.disk_crypto import AES256_GCM, XCHACHA20_POLY1305  # noqa: E402
+from cleverpgp.core.disk_crypto import AES256_GCM, XCHACHA20_POLY1305  # noqa: E402
 
 
 def test_first_window_can_be_created(tmp_path: Path) -> None:
@@ -365,6 +365,46 @@ def test_access_settings_changes_password_without_replacing_session_key(
     changed_session.lock()
     assert "Мастер-пароль успешно изменён" in window.dashboard_status.text()
 
+    window.close()
+    application.processEvents()
+
+
+def test_language_change_is_saved_and_restarts_application(
+    monkeypatch, tmp_path: Path
+) -> None:
+    class LanguageDialog:
+        request = AccessSettingsRequest("language", language_code="en")
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(main_window_module, "AccessSettingsDialog", LanguageDialog)
+    application = QApplication.instance() or QApplication([])
+    repository = ProfileRepository(tmp_path / "profile.sqlite3")
+    repository.initialize()
+    profile_service = ProfileService(
+        repository,
+        KdfParameters(
+            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
+            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
+        ),
+    )
+    password = "correct horse battery staple"
+    profile_service.create_profile("Test", password)
+    window = MainWindow(repository, profile_service, FileCryptoService())
+    window.session = profile_service.unlock_with_password(password)
+    window._show_dashboard()
+    restart_calls: list[bool] = []
+    window._restart_application = lambda: restart_calls.append(True)  # type: ignore[method-assign]
+
+    window._show_access_settings()
+    application.processEvents()
+
+    assert repository.get_setting("language") == "en"
+    assert restart_calls == [True]
     window.close()
     application.processEvents()
 
@@ -1046,11 +1086,18 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
 
         def create_and_mount(
             self,
+            *_args: object,
+            **_options: object,
+        ) -> str:
+            raise AssertionError("Qt worker must use isolated disk creation")
+
+        def create_and_mount_isolated(
+            self,
             container_path: Path,
             master_key: bytes,
             **options: object,
         ) -> str:
-            self.events.append("create")
+            self.events.append("create_isolated")
             progress = options.pop("progress")
             assert callable(progress)
             progress(82, "Ожидание разрешения Windows")
@@ -1126,7 +1173,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
     assert manager.create_call["container_path"] == tmp_path / "automatic-created.cpgv"
     assert manager.create_call["logical_capacity"] == 96 * 1024 * 1024
     assert manager.create_call["file_system"] == "NTFS"
-    assert manager.events == ["prepare", "create"]
+    assert manager.events == ["create_isolated"]
     assert manager.mounted_drive == "Q:"
 
     manager.mounted_drive = None
@@ -1182,6 +1229,13 @@ def test_hidden_disk_creation_uses_dual_password_windows_workflow(
             self.hidden_call: dict[str, object] | None = None
 
         def create_hidden_and_mount(
+            self,
+            *_args: object,
+            **_options: object,
+        ) -> str:
+            raise AssertionError("Qt worker must use isolated hidden creation")
+
+        def create_hidden_and_mount_isolated(
             self,
             path: Path,
             outer_password: str,

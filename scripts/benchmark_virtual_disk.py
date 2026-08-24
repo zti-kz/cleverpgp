@@ -9,8 +9,8 @@ from time import perf_counter, sleep
 
 from nacl import secret, utils
 
-from biopgp.core.block_container import BlockVaultContainer
-from biopgp.core.mount import VaultMountManager, mount_backend_available
+from cleverpgp.core.block_container import BlockVaultContainer
+from cleverpgp.core.mount import VaultMountManager, mount_backend_available
 
 MEBIBYTE = 1024 * 1024
 

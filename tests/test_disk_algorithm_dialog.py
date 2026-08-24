@@ -11,12 +11,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QPushButton  # noqa: E402
 
-from biopgp.core.disk_crypto import (
+from cleverpgp.core.disk_crypto import (
     AES256_GCM,
     XCHACHA20_POLY1305,
     disk_cipher_available,
 )
-from biopgp.ui.disk_algorithm_dialog import DiskAlgorithmChangeDialog
+from cleverpgp.ui.disk_algorithm_dialog import DiskAlgorithmChangeDialog
 
 
 def test_algorithm_dialog_selects_only_an_available_replacement(
@@ -54,7 +54,7 @@ def test_algorithm_dialog_requires_space_for_atomic_replacement(
     container = tmp_path / "large-disk.cpgv"
     container.write_bytes(b"ciphertext")
     with patch(
-        "biopgp.ui.disk_algorithm_dialog.shutil.disk_usage",
+        "cleverpgp.ui.disk_algorithm_dialog.shutil.disk_usage",
         return_value=SimpleNamespace(free=container.stat().st_size - 1),
     ):
         dialog = DiskAlgorithmChangeDialog(container, XCHACHA20_POLY1305)

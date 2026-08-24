@@ -48,7 +48,7 @@ Certum при подписи.
 Для сертификата Certum достаточно указать отпечаток:
 
 ```powershell
-$env:BIOPGP_SIGN_CERT_SHA1 = "40-ЗНАЧНЫЙ-ОТПЕЧАТОК-БЕЗ-ПРОБЕЛОВ"
+$env:CLEVERPGP_SIGN_CERT_SHA1 = "40-ЗНАЧНЫЙ-ОТПЕЧАТОК-БЕЗ-ПРОБЕЛОВ"
 .\build_installer.ps1 -OutputDirectory "E:\Clever\_PGP"
 ```
 
@@ -62,8 +62,8 @@ http://time.certum.pl
 Для сертификата другого центра эти значения можно переопределить:
 
 ```powershell
-$env:BIOPGP_SIGNTOOL = "C:\Program Files (x86)\Windows Kits\10\bin\<версия>\x64\signtool.exe"
-$env:BIOPGP_TIMESTAMP_URL = "АДРЕС_RFC3161_ОТ_ПОСТАВЩИКА"
+$env:CLEVERPGP_SIGNTOOL = "C:\Program Files (x86)\Windows Kits\10\bin\<версия>\x64\signtool.exe"
+$env:CLEVERPGP_TIMESTAMP_URL = "АДРЕС_RFC3161_ОТ_ПОСТАВЩИКА"
 ```
 
 До подписи сборка проверяет срок действия, наличие закрытого ключа, назначение

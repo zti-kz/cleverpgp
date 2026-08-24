@@ -12,12 +12,12 @@ from time import perf_counter
 
 from nacl import secret, utils
 
-from biopgp.core.disk_host import WinSpdHostManager
-from biopgp.core.winspd import (
+from cleverpgp.core.disk_host import WinSpdHostManager
+from cleverpgp.core.winspd import (
     WinSpdLibrary,
     create_windows_block_volume,
 )
-from biopgp.core.windows_storage import (
+from cleverpgp.core.windows_storage import (
     format_ephemeral_cleverpgp_disk,
     list_windows_disks,
     wait_for_disk_removal,

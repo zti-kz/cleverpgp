@@ -8,8 +8,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from biopgp.localization import set_language  # noqa: E402
-from biopgp.ui.disk_password_dialog import (  # noqa: E402
+from cleverpgp.localization import set_language  # noqa: E402
+from cleverpgp.ui.disk_password_dialog import (  # noqa: E402
     DiskPasswordChangeDialog,
 )
 

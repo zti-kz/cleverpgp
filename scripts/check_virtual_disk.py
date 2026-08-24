@@ -6,8 +6,8 @@ from pathlib import Path
 
 from nacl import secret, utils
 
-from biopgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
-from biopgp.core.mount import VaultMountManager
+from cleverpgp.core.container import MIN_DATA_CAPACITY, EncryptedContainer
+from cleverpgp.core.mount import VaultMountManager
 
 
 def main() -> int:

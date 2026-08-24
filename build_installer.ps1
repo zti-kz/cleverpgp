@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
@@ -42,18 +42,18 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.13.1"
-$SignToolPath = $env:BIOPGP_SIGNTOOL
-$SigningCertificateThumbprint = $env:BIOPGP_SIGN_CERT_SHA1
-$ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_SIGN_EXPECTED_NAME)) {
+$AppVersion = "0.13.2"
+$SignToolPath = $env:CLEVERPGP_SIGNTOOL
+$SigningCertificateThumbprint = $env:CLEVERPGP_SIGN_CERT_SHA1
+$ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:CLEVERPGP_SIGN_EXPECTED_NAME)) {
     "Almas Oskenbay"
 } else {
-    $env:BIOPGP_SIGN_EXPECTED_NAME.Trim()
+    $env:CLEVERPGP_SIGN_EXPECTED_NAME.Trim()
 }
-$TimestampUrl = if ([string]::IsNullOrWhiteSpace($env:BIOPGP_TIMESTAMP_URL)) {
+$TimestampUrl = if ([string]::IsNullOrWhiteSpace($env:CLEVERPGP_TIMESTAMP_URL)) {
     "http://time.certum.pl"
 } else {
-    $env:BIOPGP_TIMESTAMP_URL.Trim()
+    $env:CLEVERPGP_TIMESTAMP_URL.Trim()
 }
 $SigningEnabled = -not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)
 $SigningCertificateStoreArguments = @()
@@ -113,7 +113,7 @@ function Assert-TrustedNavimaticsSignature([string]$Path) {
 function Resolve-SignToolPath {
     if (-not [string]::IsNullOrWhiteSpace($SignToolPath)) {
         if (-not (Test-Path -LiteralPath $SignToolPath -PathType Leaf)) {
-            throw "BIOPGP_SIGNTOOL должен указывать на signtool.exe из Windows SDK."
+            throw "CLEVERPGP_SIGNTOOL должен указывать на signtool.exe из Windows SDK."
         }
         return [IO.Path]::GetFullPath($SignToolPath)
     }
@@ -126,7 +126,7 @@ function Resolve-SignToolPath {
         Sort-Object -Property FullName -Descending |
         Select-Object -First 1
     if ($null -eq $DetectedSignTool) {
-        throw "signtool.exe не найден. Установите Windows SDK или задайте BIOPGP_SIGNTOOL."
+        throw "signtool.exe не найден. Установите Windows SDK или задайте CLEVERPGP_SIGNTOOL."
     }
     return $DetectedSignTool.FullName
 }
@@ -157,7 +157,7 @@ function Initialize-CodeSigning {
     $script:SignToolPath = Resolve-SignToolPath
     $NormalizedThumbprint = $SigningCertificateThumbprint.Replace(" ", "").ToUpperInvariant()
     if ($NormalizedThumbprint -notmatch '^[0-9A-F]{40}$') {
-        throw "BIOPGP_SIGN_CERT_SHA1 должен содержать 40-значный отпечаток сертификата."
+        throw "CLEVERPGP_SIGN_CERT_SHA1 должен содержать 40-значный отпечаток сертификата."
     }
     $script:SigningCertificateThumbprint = $NormalizedThumbprint
 
@@ -166,7 +166,7 @@ function Initialize-CodeSigning {
         -not [Uri]::TryCreate($TimestampUrl, [UriKind]::Absolute, [ref]$TimestampUri) -or
         $TimestampUri.Scheme -notin @("http", "https")
     ) {
-        throw "BIOPGP_TIMESTAMP_URL должен содержать полный HTTP(S)-адрес службы RFC 3161."
+        throw "CLEVERPGP_TIMESTAMP_URL должен содержать полный HTTP(S)-адрес службы RFC 3161."
     }
 
     $Stores = @(
@@ -351,7 +351,7 @@ Write-Host "Сборка приложения..."
     --clean `
     --distpath $ApplicationDirectory `
     --workpath $PyInstallerWorkDirectory `
-    (Join-Path $ProjectDirectory "packaging\biopgp.spec")
+    (Join-Path $ProjectDirectory "packaging\cleverpgp.spec")
 if ($LASTEXITCODE -ne 0) { throw "Сборка CleverPGP.exe завершилась ошибкой." }
 
 $BundledApplication = Join-Path $ApplicationDirectory "CleverPGP"
@@ -490,7 +490,7 @@ if (-not (Test-Path -LiteralPath $InnoCompiler -PathType Leaf)) {
     }
 }
 
-$InnoScript = Join-Path $ProjectDirectory "packaging\biopgp.iss"
+$InnoScript = Join-Path $ProjectDirectory "packaging\cleverpgp.iss"
 $CompilerArguments = @(
     "/DAppVersion=$AppVersion",
     "/DAppSourceDirectory=$BundledApplication",

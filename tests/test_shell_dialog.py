@@ -8,10 +8,10 @@ from nacl import pwhash  # noqa: E402
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from biopgp.core.identity import IdentityService, formatted_fingerprint  # noqa: E402
-from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
-from biopgp.core.storage import ProfileRepository  # noqa: E402
-from biopgp.ui.shell_dialog import ShellFileWorker, ShellOperationDialog  # noqa: E402
+from cleverpgp.core.identity import IdentityService, formatted_fingerprint  # noqa: E402
+from cleverpgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
+from cleverpgp.core.storage import ProfileRepository  # noqa: E402
+from cleverpgp.ui.shell_dialog import ShellFileWorker, ShellOperationDialog  # noqa: E402
 
 
 def _profile(

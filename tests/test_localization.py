@@ -17,36 +17,36 @@ from PySide6.QtWidgets import (  # noqa: E402
     QWidget,
 )
 
-from biopgp.core.file_crypto import FileCryptoService  # noqa: E402
-from biopgp.core.identity import IdentityService  # noqa: E402
-from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
-from biopgp.core.storage import ProfileRepository  # noqa: E402
-from biopgp.localization import available_languages, set_language, tr  # noqa: E402
-from biopgp.ui.about_dialog import AboutDialog  # noqa: E402
-from biopgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
-from biopgp.ui.disk_algorithm_dialog import (  # noqa: E402
+from cleverpgp.core.file_crypto import FileCryptoService  # noqa: E402
+from cleverpgp.core.identity import IdentityService  # noqa: E402
+from cleverpgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
+from cleverpgp.core.storage import ProfileRepository  # noqa: E402
+from cleverpgp.localization import available_languages, set_language, tr  # noqa: E402
+from cleverpgp.ui.about_dialog import AboutDialog  # noqa: E402
+from cleverpgp.ui.container_dialog import ContainerCreationDialog  # noqa: E402
+from cleverpgp.ui.disk_algorithm_dialog import (  # noqa: E402
     DiskAlgorithmChangeDialog,
 )
-from biopgp.ui.disk_password_dialog import (  # noqa: E402
+from cleverpgp.ui.disk_password_dialog import (  # noqa: E402
     DiskPasswordChangeDialog,
 )
-from biopgp.ui.main_window import MainWindow  # noqa: E402
-from biopgp.ui import main_window as main_window_module  # noqa: E402
-from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
+from cleverpgp.ui.main_window import MainWindow  # noqa: E402
+from cleverpgp.ui import main_window as main_window_module  # noqa: E402
+from cleverpgp.ui.hidden_volume_dialog import (  # noqa: E402
     HiddenVolumeCreationDialog,
     OpaqueVolumeUnlockDialog,
 )
-from biopgp.ui.key_dialogs import (  # noqa: E402
+from cleverpgp.ui.key_dialogs import (  # noqa: E402
     ContactsDialog,
     PublicKeyImportDialog,
     RecipientSelectionDialog,
 )
-from biopgp.ui.settings_dialog import (  # noqa: E402
+from cleverpgp.ui.settings_dialog import (  # noqa: E402
     AccessSettingsDialog,
     AccessSettingsRequest,
 )
-from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
-from biopgp.core.disk_crypto import XCHACHA20_POLY1305  # noqa: E402
+from cleverpgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
+from cleverpgp.core.disk_crypto import XCHACHA20_POLY1305  # noqa: E402
 
 
 def _dialog_text() -> str:
@@ -197,7 +197,10 @@ def test_language_is_only_saved_from_settings_and_applies_after_restart(
         "AccessSettingsDialog",
         LanguageSettingsDialog,
     )
+    restart_calls: list[bool] = []
+    window._restart_application = lambda: restart_calls.append(True)  # type: ignore[method-assign]
     window._show_access_settings()
+    application.processEvents()
 
     assert repository.get_setting("language") == "en"
     # The live page is intentionally not rebuilt during the current process.
@@ -205,7 +208,8 @@ def test_language_is_only_saved_from_settings_and_applies_after_restart(
         button.text() == "Зашифровать файл"
         for button in window.centralWidget().findChildren(QPushButton)
     )
-    assert "после перезапуска" in window.dashboard_status.text()
+    assert "перезапускается" in window.dashboard_status.text()
+    assert restart_calls == [True]
     window.close()
     application.processEvents()
 

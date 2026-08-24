@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QRect, QSize  # noqa: E402
 from PySide6.QtWidgets import QApplication, QDialog  # noqa: E402
 
-from biopgp.ui.screen_bounds import (  # noqa: E402
+from cleverpgp.ui.screen_bounds import (  # noqa: E402
     bounded_window_size,
     centred_rect,
     fit_window_to_screen,

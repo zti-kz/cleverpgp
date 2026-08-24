@@ -6,8 +6,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton  # noqa: E402
 
-from biopgp.core.models import UnlockMode  # noqa: E402
-from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
+from cleverpgp.core.models import UnlockMode  # noqa: E402
+from cleverpgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
 
 
 def _button(dialog: AccessSettingsDialog, text: str) -> QPushButton:

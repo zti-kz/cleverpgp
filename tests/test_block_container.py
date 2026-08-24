@@ -6,18 +6,18 @@ from pathlib import Path
 import pytest
 from nacl import secret, utils
 
-from biopgp.core.block_container import (
+from cleverpgp.core.block_container import (
     METADATA_BLOCKS,
     METADATA_SLOT_BLOCKS,
     BlockVaultContainer,
 )
-from biopgp.core.block_volume import (
+from cleverpgp.core.block_volume import (
     HEADER_AREA_SIZE,
     HEADER_PREFIX,
     LOGICAL_BLOCK_SIZE,
     PHYSICAL_SLOT_SIZE,
 )
-from biopgp.core.errors import (
+from cleverpgp.core.errors import (
     ContainerEntryNotFoundError,
     ContainerFullError,
     InvalidContainerError,

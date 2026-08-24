@@ -3,8 +3,8 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "biopgp"
-version = "0.13.1"
+name = "cleverpgp"
+version = "0.13.2"
 description = "Local encrypted files and mountable biometric containers"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -26,14 +26,14 @@ packaging = [
 ]
 
 [project.scripts]
-biopgp = "biopgp.app:main"
-biopgp-shell = "biopgp.shell:main"
+cleverpgp = "cleverpgp.app:main"
+cleverpgp-shell = "cleverpgp.shell:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-biopgp = ["locales/*.json"]
+cleverpgp = ["locales/*.json"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

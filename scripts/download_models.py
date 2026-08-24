@@ -10,7 +10,7 @@ PROJECT_DIRECTORY = Path(__file__).resolve().parents[1]
 SOURCE_DIRECTORY = PROJECT_DIRECTORY / "src"
 sys.path.insert(0, str(SOURCE_DIRECTORY))
 
-from biopgp.biometrics.model_assets import MODEL_ASSETS  # noqa: E402
+from cleverpgp.biometrics.model_assets import MODEL_ASSETS  # noqa: E402
 
 
 def digest(path: Path) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from nacl import exceptions, secret, utils
 
-from biopgp.core.disk_crypto import (
+from cleverpgp.core.disk_crypto import (
     AES256_GCM,
     DISK_NONCE_FIELD_SIZE,
     XCHACHA20_POLY1305,

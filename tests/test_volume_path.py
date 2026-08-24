@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from biopgp.core.errors import ValidationError
-from biopgp.core.volume_path import resolve_file_hosted_container_path
+from cleverpgp.core.errors import ValidationError
+from cleverpgp.core.volume_path import resolve_file_hosted_container_path
 
 
 def test_accepts_only_normal_cpgv_file_path(tmp_path: Path) -> None:

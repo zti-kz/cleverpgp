@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from biopgp.core.disk_control import (
+from cleverpgp.core.disk_control import (
     DiskControlEndpoint,
     DiskControlServer,
     DiskControlStore,
     send_disk_control_command,
 )
-from biopgp.core.disk_crypto import AES256_GCM
-from biopgp.core.errors import MountUnavailableError
+from cleverpgp.core.disk_crypto import AES256_GCM
+from cleverpgp.core.errors import MountUnavailableError
 
 
 class FakeProtector:

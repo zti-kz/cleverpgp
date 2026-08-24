@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from biopgp.core.windows_shell import (
+from cleverpgp.core.windows_shell import (
     SYSTEM_DRIVE_MENU_KEY,
     WindowsDriveContextMenu,
     drive_context_menu_values,
@@ -214,7 +214,7 @@ def test_hidden_disk_menu_omits_unsupported_resize_action(tmp_path: Path) -> Non
 
 def test_installer_and_development_menu_include_compact_disk_information() -> None:
     project = Path(__file__).resolve().parents[1]
-    installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
+    installer = (project / "packaging" / "cleverpgp.iss").read_text(encoding="utf-8")
     development = (project / "install_context_menu.ps1").read_text(
         encoding="utf-8"
     )
@@ -226,7 +226,7 @@ def test_installer_and_development_menu_include_compact_disk_information() -> No
 
 def test_public_key_association_imports_from_explorer() -> None:
     project = Path(__file__).resolve().parents[1]
-    installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
+    installer = (project / "packaging" / "cleverpgp.iss").read_text(encoding="utf-8")
     development = (project / "install_context_menu.ps1").read_text(
         encoding="utf-8"
     )
@@ -244,10 +244,10 @@ def test_public_key_association_imports_from_explorer() -> None:
 
 def test_uninstaller_offers_to_keep_or_remove_only_local_profile() -> None:
     project = Path(__file__).resolve().parents[1]
-    installer = (project / "packaging" / "biopgp.iss").read_text(encoding="utf-8")
+    installer = (project / "packaging" / "cleverpgp.iss").read_text(encoding="utf-8")
 
     assert "function InitializeUninstall(): Boolean;" in installer
     assert "MB_YESNOCANCEL" in installer
-    assert 'Name: "{localappdata}\\BioPGP"; Check: DeleteLocalProfile' in installer
+    assert 'Name: "{localappdata}\\CleverPGP"; Check: DeleteLocalProfile' in installer
     assert 'Name: "*.cpgv"' not in installer
     assert 'Name: "*.cpgp"' not in installer

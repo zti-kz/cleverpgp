@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Stop"
 $ProjectDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PythonInstaller = Join-Path $ProjectDirectory "install_python.ps1"
 $VirtualDiskInstaller = Join-Path $ProjectDirectory "install_virtual_disk.ps1"
@@ -34,7 +34,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 & (Join-Path $ProjectDirectory "install_context_menu.ps1")
 
-& $PythonExecutable -c "import cv2, nacl, numpy, PySide6; from refuse import high; import biopgp; print('Clever PGP', biopgp.__version__, '- зависимости проверены')"
+& $PythonExecutable -c "import cv2, nacl, numpy, PySide6; from refuse import high; import cleverpgp; print('Clever PGP', cleverpgp.__version__, '- зависимости проверены')"
 if ($LASTEXITCODE -ne 0) {
     throw "Проверка зависимостей Clever PGP не пройдена."
 }

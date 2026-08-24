@@ -6,11 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-from biopgp.core.disk_control import DiskControlRecord
-from biopgp.core.disk_crypto import XCHACHA20_POLY1305
-from biopgp.core.disk_info import inspect_mounted_cleverpgp_disk
-from biopgp.core.errors import MountUnavailableError
-from biopgp.core.windows_storage import WindowsVolumeInfo
+from cleverpgp.core.disk_control import DiskControlRecord
+from cleverpgp.core.disk_crypto import XCHACHA20_POLY1305
+from cleverpgp.core.disk_info import inspect_mounted_cleverpgp_disk
+from cleverpgp.core.errors import MountUnavailableError
+from cleverpgp.core.windows_storage import WindowsVolumeInfo
 
 
 class FakeControlStore:
@@ -72,12 +72,12 @@ def test_system_disk_information_requires_live_authenticated_record(
     store = FakeControlStore(record)
     usage = SimpleNamespace(total=250 * 1024 * 1024, free=100 * 1024 * 1024)
     with (
-        patch("biopgp.core.disk_info.platform.system", return_value="Windows"),
+        patch("cleverpgp.core.disk_info.platform.system", return_value="Windows"),
         patch(
-            "biopgp.core.disk_info.inspect_windows_volume",
+            "cleverpgp.core.disk_info.inspect_windows_volume",
             return_value=system_volume(),
         ) as inspect,
-        patch("biopgp.core.disk_info.shutil.disk_usage", return_value=usage),
+        patch("cleverpgp.core.disk_info.shutil.disk_usage", return_value=usage),
     ):
         info = inspect_mounted_cleverpgp_disk(
             "z:\\",
@@ -99,10 +99,10 @@ def test_winfsp_disk_information_checks_marker_without_opening_control_file() ->
     store = FakeControlStore(None)
     usage = SimpleNamespace(total=64 * 1024 * 1024, free=20 * 1024 * 1024)
     with (
-        patch("biopgp.core.disk_info.platform.system", return_value="Windows"),
-        patch("biopgp.core.disk_info.Path.exists", return_value=True),
-        patch("biopgp.core.disk_info.Path.open") as open_file,
-        patch("biopgp.core.disk_info.shutil.disk_usage", return_value=usage),
+        patch("cleverpgp.core.disk_info.platform.system", return_value="Windows"),
+        patch("cleverpgp.core.disk_info.Path.exists", return_value=True),
+        patch("cleverpgp.core.disk_info.Path.open") as open_file,
+        patch("cleverpgp.core.disk_info.shutil.disk_usage", return_value=usage),
     ):
         info = inspect_mounted_cleverpgp_disk(
             "Z:",
@@ -117,9 +117,9 @@ def test_winfsp_disk_information_checks_marker_without_opening_control_file() ->
 def test_disk_information_rejects_an_unrelated_drive() -> None:
     store = FakeControlStore(None)
     with (
-        patch("biopgp.core.disk_info.platform.system", return_value="Windows"),
-        patch("biopgp.core.disk_info.Path.exists", return_value=False),
-        patch("biopgp.core.disk_info.shutil.disk_usage") as disk_usage,
+        patch("cleverpgp.core.disk_info.platform.system", return_value="Windows"),
+        patch("cleverpgp.core.disk_info.Path.exists", return_value=False),
+        patch("cleverpgp.core.disk_info.shutil.disk_usage") as disk_usage,
         pytest.raises(MountUnavailableError, match="не является"),
     ):
         inspect_mounted_cleverpgp_disk(

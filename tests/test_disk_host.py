@@ -8,17 +8,17 @@ from unittest.mock import patch
 
 import pytest
 
-from biopgp.core.disk_control import DiskControlEndpoint
-from biopgp.core.disk_host import (
+from cleverpgp.core.disk_control import DiskControlEndpoint
+from cleverpgp.core.disk_host import (
     DecodedDiskHostRequest,
     DiskHostExchange,
     DiskHostRequest,
     WinSpdHostManager,
     run_disk_host,
 )
-from biopgp.core.errors import MountUnavailableError
-from biopgp.core.hidden_volume import HiddenVolumeDescriptor
-from biopgp.core.opaque_volume_header import OpaqueVolumeHeader
+from cleverpgp.core.errors import MountUnavailableError
+from cleverpgp.core.hidden_volume import HiddenVolumeDescriptor
+from cleverpgp.core.opaque_volume_header import OpaqueVolumeHeader
 
 
 class FakeProtector:
@@ -220,8 +220,8 @@ def test_host_manager_passes_only_request_path_to_detached_process(
         command_prefix=("CleverPGP.exe",),
     )
     with (
-        patch("biopgp.core.disk_host.subprocess.Popen", side_effect=FakePopen) as popen,
-        patch("biopgp.core.disk_host.send_disk_control_command", side_effect=control),
+        patch("cleverpgp.core.disk_host.subprocess.Popen", side_effect=FakePopen) as popen,
+        patch("cleverpgp.core.disk_host.send_disk_control_command", side_effect=control),
     ):
         manager.start(tmp_path / "private.cpgv", b"k" * 32)
         manager.stop()
@@ -245,7 +245,7 @@ def test_host_manager_does_not_force_kill_unconfirmed_disk() -> None:
     manager._control_endpoint = endpoint
     manager._process_id = 4321
 
-    with patch("biopgp.core.disk_host.send_disk_control_command"):
+    with patch("cleverpgp.core.disk_host.send_disk_control_command"):
         with pytest.raises(MountUnavailableError, match="безопасное отключение"):
             manager.stop(timeout=0)
 
@@ -357,14 +357,14 @@ def test_detached_host_opens_v4_material_without_password(tmp_path: Path) -> Non
             return None
 
     with (
-        patch("biopgp.core.disk_host.DiskHostExchange", FakeExchange),
+        patch("cleverpgp.core.disk_host.DiskHostExchange", FakeExchange),
         patch(
-            "biopgp.core.disk_host.OpaqueBlockVolume.open_with_header",
+            "cleverpgp.core.disk_host.OpaqueBlockVolume.open_with_header",
             return_value=FakeVolume(),
         ) as opener,
-        patch("biopgp.core.disk_host.WinSpdBlockDevice", FakeDevice),
-        patch("biopgp.core.disk_host.WinSpdLibrary"),
-        patch("biopgp.core.disk_host.DiskControlServer", FakeServer),
+        patch("cleverpgp.core.disk_host.WinSpdBlockDevice", FakeDevice),
+        patch("cleverpgp.core.disk_host.WinSpdLibrary"),
+        patch("cleverpgp.core.disk_host.DiskControlServer", FakeServer),
     ):
         result = run_disk_host(request_path)
 

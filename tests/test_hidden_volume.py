@@ -4,18 +4,18 @@ from pathlib import Path
 
 import pytest
 
-from biopgp.core.block_volume import (
+from cleverpgp.core.block_volume import (
     LOGICAL_BLOCK_SIZE,
     MIN_LOGICAL_CAPACITY,
     BlockIntegrityError,
     BlockVolumeError,
     EncryptedBlockVolume,
 )
-from biopgp.core.hidden_volume import (
+from cleverpgp.core.hidden_volume import (
     HiddenBlockVolume,
     HiddenRegionProtectedVolume,
 )
-from biopgp.core.errors import ValidationError
+from cleverpgp.core.errors import ValidationError
 
 
 MASTER_KEY = b"o" * 32

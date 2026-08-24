@@ -9,7 +9,7 @@ def test_ui_worker_runtime_check_completes(tmp_path) -> None:
     marker = tmp_path / "ui-worker.json"
 
     completed = subprocess.run(
-        [sys.executable, "-m", "biopgp", "--ui-worker-check", str(marker)],
+        [sys.executable, "-m", "cleverpgp", "--ui-worker-check", str(marker)],
         check=False,
         capture_output=True,
         text=True,

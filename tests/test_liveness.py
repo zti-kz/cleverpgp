@@ -1,4 +1,4 @@
-from biopgp.biometrics.liveness import HeadTurnLiveness, LivenessStage
+from cleverpgp.biometrics.liveness import HeadTurnLiveness, LivenessStage
 
 
 def test_head_turn_liveness_flow() -> None:

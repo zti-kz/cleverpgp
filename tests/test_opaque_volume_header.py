@@ -5,9 +5,9 @@ import io
 import pytest
 from nacl import pwhash
 
-from biopgp.core.errors import AuthenticationError, ValidationError
-from biopgp.core.hidden_volume import HiddenVolumeDescriptor
-from biopgp.core.opaque_volume_header import (
+from cleverpgp.core.errors import AuthenticationError, ValidationError
+from cleverpgp.core.hidden_volume import HiddenVolumeDescriptor
+from cleverpgp.core.opaque_volume_header import (
     BANK_SIZE,
     OPAQUE_HEADER_MAGIC,
     OPAQUE_HEADER_RESERVED_SIZE,

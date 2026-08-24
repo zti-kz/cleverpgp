@@ -6,14 +6,14 @@ from pathlib import Path
 import pytest
 from nacl import pwhash
 
-from biopgp.core.errors import ContactExistsError, ValidationError
-from biopgp.core.identity import (
+from cleverpgp.core.errors import ContactExistsError, ValidationError
+from cleverpgp.core.identity import (
     IdentityService,
     decode_public_identity,
     formatted_fingerprint,
 )
-from biopgp.core.profile_service import KdfParameters, ProfileService
-from biopgp.core.storage import ProfileRepository
+from cleverpgp.core.profile_service import KdfParameters, ProfileService
+from cleverpgp.core.storage import ProfileRepository
 
 
 def _profile(tmp_path: Path, name: str) -> tuple[ProfileRepository, ProfileService]:

@@ -27,16 +27,16 @@ def release_versions() -> dict[str, str]:
 
     return {
         "pyproject.toml": project_version,
-        "src/biopgp/__init__.py": _match(
-            "src/biopgp/__init__.py",
+        "src/cleverpgp/__init__.py": _match(
+            "src/cleverpgp/__init__.py",
             r'^__version__\s*=\s*"([^"]+)"\s*$',
         ),
         "build_installer.ps1": _match(
             "build_installer.ps1",
             r'^\$AppVersion\s*=\s*"([^"]+)"\s*$',
         ),
-        "packaging/biopgp.iss": _match(
-            "packaging/biopgp.iss",
+        "packaging/cleverpgp.iss": _match(
+            "packaging/cleverpgp.iss",
             r'^\s*#define\s+AppVersion\s+"([^"]+)"\s*$',
         ),
         "packaging/version_info.txt": _match(

@@ -6,15 +6,15 @@ from pathlib import Path
 import pytest
 from nacl import pwhash, secret, utils
 
-from biopgp.core.errors import (
+from cleverpgp.core.errors import (
     CryptographicIdentityError,
     InvalidEncryptedFileError,
     OutputExistsError,
 )
-from biopgp.core.file_crypto import FileCryptoService
-from biopgp.core.identity import IdentityService
-from biopgp.core.profile_service import KdfParameters, ProfileService
-from biopgp.core.storage import ProfileRepository
+from cleverpgp.core.file_crypto import FileCryptoService
+from cleverpgp.core.identity import IdentityService
+from cleverpgp.core.profile_service import KdfParameters, ProfileService
+from cleverpgp.core.storage import ProfileRepository
 
 
 def _profile(

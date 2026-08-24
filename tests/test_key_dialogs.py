@@ -14,10 +14,10 @@ from PySide6.QtWidgets import (  # noqa: E402
     QPushButton,
 )
 
-from biopgp.core.models import Contact  # noqa: E402
-from biopgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
-from biopgp.core.storage import ProfileRepository  # noqa: E402
-from biopgp.ui.key_dialogs import (  # noqa: E402
+from cleverpgp.core.models import Contact  # noqa: E402
+from cleverpgp.core.profile_service import KdfParameters, ProfileService  # noqa: E402
+from cleverpgp.core.storage import ProfileRepository  # noqa: E402
+from cleverpgp.ui.key_dialogs import (  # noqa: E402
     ContactsDialog,
     PublicKeyImportDialog,
     RecipientSelectionDialog,

@@ -4,10 +4,10 @@ import numpy as np
 import pytest
 from nacl import pwhash, secret, utils
 
-from biopgp.biometrics.service import BiometricService
-from biopgp.core.errors import AuthenticationError
-from biopgp.core.profile_service import KdfParameters, ProfileService
-from biopgp.core.storage import ProfileRepository
+from cleverpgp.biometrics.service import BiometricService
+from cleverpgp.core.errors import AuthenticationError
+from cleverpgp.core.profile_service import KdfParameters, ProfileService
+from cleverpgp.core.storage import ProfileRepository
 
 
 class MemoryProtector:
@@ -71,7 +71,7 @@ def test_dpapi_round_trip_on_windows() -> None:
 
     if sys.platform != "win32":
         pytest.skip("Windows-only DPAPI test")
-    from biopgp.biometrics.key_protection import WindowsDpapiProtector
+    from cleverpgp.biometrics.key_protection import WindowsDpapiProtector
 
     protector = WindowsDpapiProtector()
     plaintext = utils.random(32)

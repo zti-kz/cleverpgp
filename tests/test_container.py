@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from nacl import secret, utils
 
-from biopgp.core.container import (
+from cleverpgp.core.container import (
     CONTAINER_SUFFIX,
     DATABASE_RESERVE,
     HEADER_AREA_SIZE,
@@ -15,14 +15,14 @@ from biopgp.core.container import (
     PREFIX,
     EncryptedContainer,
 )
-from biopgp.core.errors import (
+from cleverpgp.core.errors import (
     ContainerDirectoryNotEmptyError,
     ContainerEntryExistsError,
     ContainerFullError,
     InvalidContainerError,
     ValidationError,
 )
-from biopgp.core import container as container_module
+from cleverpgp.core import container as container_module
 
 
 def master_key() -> bytes:

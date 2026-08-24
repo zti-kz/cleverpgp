@@ -6,10 +6,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QProgressBar  # noqa: E402
 
-from biopgp.core.disk_info import MountedDiskInfo  # noqa: E402
-from biopgp.core.disk_crypto import XCHACHA20_POLY1305  # noqa: E402
-from biopgp.localization import set_language  # noqa: E402
-from biopgp.ui.disk_info_dialog import DiskInfoDialog  # noqa: E402
+from cleverpgp.core.disk_info import MountedDiskInfo  # noqa: E402
+from cleverpgp.core.disk_crypto import XCHACHA20_POLY1305  # noqa: E402
+from cleverpgp.localization import set_language  # noqa: E402
+from cleverpgp.ui.disk_info_dialog import DiskInfoDialog  # noqa: E402
 
 
 def mounted_info() -> MountedDiskInfo:
