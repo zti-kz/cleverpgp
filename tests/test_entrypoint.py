@@ -26,6 +26,18 @@ def test_explicit_explorer_file_actions_are_dispatched() -> None:
     ]
 
 
+def test_secure_delete_action_opens_confirmation_dialog(tmp_path: Path) -> None:
+    source = tmp_path / "remove me.txt"
+    with patch(
+        "cleverpgp.ui.secure_delete_dialog.run_secure_delete_dialog",
+        return_value=6,
+    ) as secure_delete:
+        result = main(["--secure-delete", str(source)])
+
+    assert result == 6
+    secure_delete.assert_called_once_with(source)
+
+
 def test_direct_encrypted_file_is_dispatched_to_decryption(tmp_path: Path) -> None:
     encrypted = tmp_path / "report with spaces.txt.cpgp"
     with patch("cleverpgp.shell.main", return_value=0) as shell_main:
@@ -139,6 +151,17 @@ def test_public_key_extension_is_opened_directly(tmp_path: Path) -> None:
 
     assert result == 0
     application_main.assert_called_once_with(public_key_path=public_key.resolve())
+
+
+def test_private_key_extension_is_opened_with_password_import(tmp_path: Path) -> None:
+    private_key = tmp_path / "alice.cpgx"
+    with patch("cleverpgp.app.main", return_value=0) as application_main:
+        result = main([str(private_key)])
+
+    assert result == 0
+    application_main.assert_called_once_with(
+        private_key_path=private_key.resolve()
+    )
 
 
 def test_old_container_extension_is_not_registered_for_direct_open(tmp_path: Path) -> None:

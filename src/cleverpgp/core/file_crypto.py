@@ -23,6 +23,7 @@ from cleverpgp.core.errors import (
 )
 from cleverpgp.core.identity import (
     IdentityService,
+    UnlockedCryptographicIdentity,
     identity_fingerprint,
     public_identity_from_contact,
 )
@@ -90,7 +91,7 @@ class FileCryptoService:
 
         self._report_progress(progress, 2, "Проверка исходного файла")
         source, target = self._validate_paths(source_path, target_path, overwrite)
-        if source.suffix.casefold() in {".cpgp", ".cpgv", ".cpgk"}:
+        if source.suffix.casefold() in {".cpgp", ".cpgv", ".cpgk", ".cpgx"}:
             raise ValidationError(
                 "Этот файл уже защищён или является служебным файлом Clever PGP. "
                 "Повторное шифрование не требуется."
@@ -303,43 +304,67 @@ class FileCryptoService:
         overwrite: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Path:
+        self._validate_master_key(master_key)
+        identity_service = self._identity_service()
+        identity = identity_service.ensure_unlocked(master_key)
+        try:
+            return self.encrypt_file_with_identity(
+                source_path,
+                target_path,
+                identity,
+                recipients=recipients,
+                overwrite=overwrite,
+                progress=progress,
+            )
+        finally:
+            identity.lock()
+            del master_key
+
+    def encrypt_file_with_identity(
+        self,
+        source_path: Path,
+        target_path: Path,
+        identity: UnlockedCryptographicIdentity,
+        *,
+        recipients: Iterable[PublicIdentity | Contact] = (),
+        overwrite: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> Path:
+        """Encrypt and sign for one or more public-key recipients."""
+
+        if not identity.is_unlocked:
+            raise CryptographicIdentityError("Цифровой ключ заблокирован.")
         self._report_progress(progress, 2, "Проверка исходного файла")
         source, target = self._validate_paths(source_path, target_path, overwrite)
-        if source.suffix.casefold() in {".cpgp", ".cpgv", ".cpgk"}:
+        if source.suffix.casefold() in {".cpgp", ".cpgv", ".cpgk", ".cpgx"}:
             raise ValidationError(
                 "Этот файл уже защищён или является служебным файлом Clever PGP. "
                 "Повторное шифрование не требуется."
             )
-        self._validate_master_key(master_key)
-        identity_service = self._identity_service()
 
         file_key = bindings.crypto_secretstream_xchacha20poly1305_keygen()
         signing_secret_key: bytes | None = None
-        identity = identity_service.ensure_unlocked(master_key)
-        try:
-            sender = identity.public_identity
-            selected_recipients = self._normalize_recipients(sender, recipients)
-            slots = tuple(
-                _RecipientSlot(
-                    recipient.fingerprint,
-                    public.SealedBox(
-                        public.PublicKey(recipient.encryption_public_key)
-                    ).encrypt(file_key),
-                )
-                for recipient in selected_recipients
+        sender = identity.public_identity
+        selected_recipients = self._normalize_recipients(sender, recipients)
+        slots = tuple(
+            _RecipientSlot(
+                recipient.fingerprint,
+                public.SealedBox(
+                    public.PublicKey(recipient.encryption_public_key)
+                ).encrypt(file_key),
             )
-            state = bindings.crypto_secretstream_xchacha20poly1305_state()
-            stream_header = bindings.crypto_secretstream_xchacha20poly1305_init_push(
-                state,
-                file_key,
-            )
-            header = self._encode_header(stream_header, slots, sender)
-            prefix = PREFIX.pack(MAGIC, FORMAT_VERSION, len(header))
-            associated_data = prefix + header
-            source_size = source.stat().st_size
-            signing_secret_key = identity.signing_secret_key_copy()
-        finally:
-            identity.lock()
+            for recipient in selected_recipients
+        )
+        state = bindings.crypto_secretstream_xchacha20poly1305_state()
+        stream_header = bindings.crypto_secretstream_xchacha20poly1305_init_push(
+            state,
+            file_key,
+        )
+        header = self._encode_header(stream_header, slots, sender)
+        prefix = PREFIX.pack(MAGIC, FORMAT_VERSION, len(header))
+        associated_data = prefix + header
+        source_size = source.stat().st_size
+        signing_secret_key = identity.signing_secret_key_copy()
 
         temporary_path: Path | None = None
         try:
@@ -367,7 +392,6 @@ class FileCryptoService:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             del file_key
-            del master_key
             if signing_secret_key is not None:
                 del signing_secret_key
 
@@ -397,13 +421,37 @@ class FileCryptoService:
         overwrite: bool = False,
         progress: ProgressCallback | None = None,
     ) -> DecryptedFileResult:
-        self._report_progress(progress, 2, "Проверка зашифрованного файла")
-        source, target = self._validate_paths(source_path, target_path, overwrite)
         self._validate_master_key(master_key)
         identity_service = self._identity_service()
-
-        temporary_path: Path | None = None
         identity = identity_service.ensure_unlocked(master_key)
+        try:
+            return self.decrypt_file_with_identity(
+                source_path,
+                target_path,
+                identity,
+                overwrite=overwrite,
+                progress=progress,
+            )
+        finally:
+            identity.lock()
+            del master_key
+
+    def decrypt_file_with_identity(
+        self,
+        source_path: Path,
+        target_path: Path,
+        identity: UnlockedCryptographicIdentity,
+        *,
+        overwrite: bool = False,
+        progress: ProgressCallback | None = None,
+    ) -> DecryptedFileResult:
+        """Decrypt a recipient file with an explicitly unlocked private key."""
+
+        if not identity.is_unlocked:
+            raise CryptographicIdentityError("Цифровой ключ заблокирован.")
+        self._report_progress(progress, 2, "Проверка зашифрованного файла")
+        source, target = self._validate_paths(source_path, target_path, overwrite)
+        temporary_path: Path | None = None
         try:
             encrypted_size = source.stat().st_size
             with source.open("rb") as source_stream:
@@ -423,7 +471,7 @@ class FileCryptoService:
                 )
                 if slot is None:
                     raise InvalidEncryptedFileError(
-                        "Файл не зашифрован для открытого ключа текущего профиля."
+                        "Файл не зашифрован для выбранного цифрового ключа."
                     )
                 encryption_private_key = identity.encryption_private_key_copy()
                 try:
@@ -440,19 +488,15 @@ class FileCryptoService:
                     raise InvalidEncryptedFileError(
                         "Ключевой слот содержит ключ неправильной длины."
                     )
-
                 state = bindings.crypto_secretstream_xchacha20poly1305_state()
                 try:
                     bindings.crypto_secretstream_xchacha20poly1305_init_pull(
-                        state,
-                        stream_header,
-                        file_key,
+                        state, stream_header, file_key
                     )
                 except (ValueError, RuntimeError) as error:
                     raise InvalidEncryptedFileError(
                         "Некорректный криптографический заголовок файла."
                     ) from error
-
                 temporary_path, target_stream = self._temporary_output(target)
                 self._report_progress(progress, 5, "Проверка ключа файла")
                 with target_stream:
@@ -468,10 +512,8 @@ class FileCryptoService:
                     self._report_progress(progress, 97, "Сохранение результата")
                     target_stream.flush()
                     os.fsync(target_stream.fileno())
-
             sender_is_self, sender_is_known = self._sender_trust(
-                sender,
-                identity.public_identity,
+                sender, identity.public_identity
             )
             os.replace(temporary_path, target)
             temporary_path = None
@@ -483,10 +525,8 @@ class FileCryptoService:
                 sender_is_self=sender_is_self,
             )
         finally:
-            identity.lock()
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
-            del master_key
             if "file_key" in locals():
                 del file_key
 
@@ -505,6 +545,31 @@ class FileCryptoService:
         if not candidate.exists():
             return candidate
         return candidate.with_name(candidate.stem + ".decrypted" + candidate.suffix)
+
+    @staticmethod
+    def protection_mode(source_path: Path) -> str:
+        """Return ``password`` or ``keys`` without decrypting the file."""
+
+        source = Path(source_path).expanduser().resolve()
+        if not source.is_file():
+            raise ValidationError("Зашифрованный файл не найден.")
+        with source.open("rb") as stream:
+            raw = stream.read(PREFIX.size)
+        if len(raw) != PREFIX.size:
+            raise InvalidEncryptedFileError("Повреждён заголовок файла.")
+        try:
+            magic, version, _header_size = PREFIX.unpack(raw)
+        except struct.error as error:
+            raise InvalidEncryptedFileError("Повреждён заголовок файла.") from error
+        if magic != MAGIC:
+            raise InvalidEncryptedFileError("Это не файл Clever PGP.")
+        if version == PASSWORD_FORMAT_VERSION:
+            return "password"
+        if version == FORMAT_VERSION:
+            return "keys"
+        raise InvalidEncryptedFileError(
+            f"Версия формата {version} не поддерживается."
+        )
 
     def _identity_service(self) -> IdentityService:
         if self.repository is None:

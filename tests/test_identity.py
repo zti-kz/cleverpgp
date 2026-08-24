@@ -138,7 +138,7 @@ def test_schema_two_profile_is_upgraded_without_replacement(tmp_path: Path) -> N
     repository.initialize()
 
     assert repository.get_profile() == original_profile
-    assert repository.get_setting("schema_version") == "3"
+    assert repository.get_setting("schema_version") == "4"
     with sqlite3.connect(repository.path) as connection:
         tables = {
             str(row[0])
@@ -146,4 +146,4 @@ def test_schema_two_profile_is_upgraded_without_replacement(tmp_path: Path) -> N
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-    assert {"cryptographic_identity", "contact"} <= tables
+    assert {"cryptographic_identity", "contact", "user_key"} <= tables

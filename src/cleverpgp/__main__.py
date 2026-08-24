@@ -128,6 +128,16 @@ def main(argv: list[str] | None = None) -> int:
         from cleverpgp.shell import main as shell_main
 
         return shell_main(["decrypt", arguments[1]])
+    if arguments[:1] == ["--secure-delete"] and len(arguments) == 2:
+        from cleverpgp.ui.secure_delete_dialog import run_secure_delete_dialog
+
+        return run_secure_delete_dialog(Path(arguments[1]))
+    if arguments[:1] == ["--import-private-key"] and len(arguments) == 2:
+        from cleverpgp.app import main as application_main
+
+        return application_main(
+            private_key_path=Path(arguments[1]).expanduser().resolve()
+        )
     if (
         len(arguments) == 1
         and Path(arguments[0]).suffix.lower() == ".cpgp"
@@ -188,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     ):
         return application_main(
             public_key_path=Path(arguments[0]).expanduser().resolve()
+        )
+    if (
+        len(arguments) == 1
+        and Path(arguments[0]).suffix.lower() == ".cpgx"
+    ):
+        return application_main(
+            private_key_path=Path(arguments[0]).expanduser().resolve()
         )
     return application_main()
 

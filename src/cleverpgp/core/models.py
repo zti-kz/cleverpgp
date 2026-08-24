@@ -70,3 +70,19 @@ class Contact:
     encryption_public_key: bytes
     signing_public_key: bytes
     created_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class UserKey:
+    """Password-protected local encryption and signing key pair."""
+
+    key_id: str
+    display_name: str
+    fingerprint: str
+    encryption_public_key: bytes
+    signing_public_key: bytes
+    kdf_salt: bytes
+    kdf_opslimit: int
+    kdf_memlimit: int
+    encrypted_private_bundle: bytes
+    created_at: str

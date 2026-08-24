@@ -160,11 +160,6 @@ class IdentityService:
         return self.add_contact(read_public_identity(source_path))
 
     def add_contact(self, public_identity: PublicIdentity) -> Contact:
-        profile = self.repository.get_profile()
-        if profile is None:
-            raise ProfileNotFoundError(
-                "Сначала создайте защищённый профиль Clever PGP."
-            )
         display_name = _validate_display_name(public_identity.display_name)
         expected_fingerprint = identity_fingerprint(
             public_identity.encryption_public_key,
@@ -185,6 +180,13 @@ class IdentityService:
         ):
             raise ValidationError(
                 "Это открытый ключ текущего профиля, а не нового контакта."
+            )
+        if any(
+            hmac.compare_digest(expected_fingerprint, key.fingerprint)
+            for key in self.repository.list_user_keys()
+        ):
+            raise ValidationError(
+                "Это ваш локальный ключ, а не ключ нового получателя."
             )
         contact = Contact(
             contact_id=str(uuid4()),
@@ -384,6 +386,33 @@ def read_public_identity(source_path: Path) -> PublicIdentity:
     return decode_public_identity(source.read_bytes())
 
 
+def encode_public_identity(
+    identity: PublicIdentity,
+    signing_seed: bytes,
+) -> bytes:
+    """Return a self-signed, shareable public-key bundle."""
+
+    if len(signing_seed) != bindings.crypto_sign_SEEDBYTES:
+        raise ValidationError("Некорректный закрытый ключ подписи.")
+    signing_key = signing.SigningKey(signing_seed)
+    if not hmac.compare_digest(
+        bytes(signing_key.verify_key), identity.signing_public_key
+    ):
+        raise CryptographicIdentityError(
+            "Закрытый ключ подписи не соответствует открытому ключу."
+        )
+    payload = _public_bundle_payload(identity)
+    signature = signing_key.sign(
+        PUBLIC_BUNDLE_SIGNATURE_DOMAIN + _canonical_json(payload)
+    ).signature
+    return PUBLIC_KEY_MAGIC + _canonical_json(
+        {
+            **payload,
+            "self_signature": base64.b64encode(signature).decode("ascii"),
+        }
+    )
+
+
 def _public_bundle_payload(identity: PublicIdentity) -> dict[str, object]:
     expected = identity_fingerprint(
         identity.encryption_public_key,
@@ -472,6 +501,7 @@ __all__ = [
     "SIGNATURE_ALGORITHM",
     "UnlockedCryptographicIdentity",
     "decode_public_identity",
+    "encode_public_identity",
     "formatted_fingerprint",
     "identity_fingerprint",
     "public_identity_from_contact",

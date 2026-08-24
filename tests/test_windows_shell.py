@@ -246,11 +246,14 @@ def test_file_menu_uses_explicit_actions_and_excludes_cleverpgp_formats() -> Non
     )
 
     for source in (installer, development):
-        assert "--encrypt-file" in source
-        assert "--decrypt-file" in source
+        assert "--shell encrypt" in source
+        assert "--shell decrypt" in source
+        assert "--secure-delete" in source
+        assert "Безвозвратно удалить файл" in source
         assert "NOT System.FileExtension:=.cpgp" in source
         assert "NOT System.FileExtension:=.cpgv" in source
         assert "NOT System.FileExtension:=.cpgk" in source
+        assert "NOT System.FileExtension:=.cpgx" in source
 
 
 def test_public_key_association_imports_from_explorer() -> None:

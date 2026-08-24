@@ -79,7 +79,7 @@ from cleverpgp.ui.hidden_volume_dialog import (
     OpaqueVolumeUnlockDialog,
 )
 from cleverpgp.ui.icons import line_icon
-from cleverpgp.ui.key_dialogs import ContactsDialog, RecipientSelectionDialog
+from cleverpgp.ui.key_manager_dialog import KeyManagerDialog
 from cleverpgp.ui.password_generator import add_password_generator_action
 from cleverpgp.ui.resize_dialog import ContainerResizeDialog
 from cleverpgp.ui.settings_dialog import AccessSettingsDialog
@@ -495,8 +495,12 @@ class MainWindow(QMainWindow):
         decrypt_button = QPushButton("Расшифровать файл .cpgp")
         decrypt_button.setIcon(line_icon("file_open"))
         decrypt_button.clicked.connect(self._decrypt_file)
+        keys_button = QPushButton("Цифровые ключи и получатели")
+        keys_button.setIcon(line_icon("key"))
+        keys_button.clicked.connect(self._show_contacts)
         file_layout.addWidget(encrypt_button)
         file_layout.addWidget(decrypt_button)
+        file_layout.addWidget(keys_button)
 
         info = QLabel(
             "Файл обрабатывается локально. Для каждого файла создаётся новый случайный "
@@ -912,22 +916,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _show_contacts(self) -> None:
-        if self.session is None or not self.session.is_unlocked:
-            self._show_unlock()
-            return
-        key_buffer = bytearray(self.session.master_key_copy())
-        try:
-            dialog = ContactsDialog(
-                self.repository,
-                bytes(key_buffer),
-                self,
-            )
-            dialog.exec()
-        except BioPGPError as error:
-            self._show_error(str(error))
-        finally:
-            for index in range(len(key_buffer)):
-                key_buffer[index] = 0
+        KeyManagerDialog(self.repository, self).exec()
 
     def _run_file_operation(
         self,
@@ -1356,6 +1345,29 @@ class MainWindow(QMainWindow):
         self._mount_container(Path(source_name))
 
     def _mount_container(self, source: Path) -> None:
+        if (
+            not self._direct_container_launch
+            and self.mount_manager.mounted_drive is not None
+        ):
+            command = [
+                *application_command_prefix(),
+                "--container",
+                str(source.expanduser().resolve()),
+            ]
+            creation_flags = (
+                subprocess.CREATE_NO_WINDOW
+                if sys.platform == "win32"
+                else 0
+            )
+            subprocess.Popen(
+                command,
+                close_fds=True,
+                creationflags=creation_flags,
+            )
+            self._set_dashboard_status(
+                "Открытие дополнительного зашифрованного диска запущено."
+            )
+            return
         # Local and portable disks follow the same rule: authenticate only
         # with the password stored in that disk's own key slot.
         self._prompt_opaque_volume_password(source)

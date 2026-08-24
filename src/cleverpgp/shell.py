@@ -13,7 +13,9 @@ from cleverpgp.localization import set_language, tr
 from cleverpgp.ui.screen_bounds import install_screen_bounds
 from cleverpgp.ui.shell_dialog import ShellOperationDialog
 
-_PROTECTED_CLEVERPGP_EXTENSIONS = frozenset({".cpgp", ".cpgv", ".cpgk"})
+_PROTECTED_CLEVERPGP_EXTENSIONS = frozenset(
+    {".cpgp", ".cpgv", ".cpgk", ".cpgx"}
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

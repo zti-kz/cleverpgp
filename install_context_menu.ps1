@@ -8,10 +8,13 @@ if (-not (Test-Path -LiteralPath $PythonWindowed -PathType Leaf)) {
 
 $ClassesRoot = "HKCU:\Software\Classes"
 $EncryptVerb = Join-Path $ClassesRoot "*\shell\CleverPGP.Encrypt"
+$SecureDeleteVerb = Join-Path $ClassesRoot "*\shell\CleverPGP.SecureDelete"
 $EncryptedExtension = Join-Path $ClassesRoot ".cpgp"
 $EncryptedType = Join-Path $ClassesRoot "CleverPGP.EncryptedFile"
 $PublicKeyExtension = Join-Path $ClassesRoot ".cpgk"
 $PublicKeyType = Join-Path $ClassesRoot "CleverPGP.PublicKey"
+$PrivateKeyExtension = Join-Path $ClassesRoot ".cpgx"
+$PrivateKeyType = Join-Path $ClassesRoot "CleverPGP.PrivateKey"
 $ContainerExtension = Join-Path $ClassesRoot ".cpgv"
 $ContainerType = Join-Path $ClassesRoot "CleverPGP.ContainerFile"
 $LegacyUnmountVerb = Join-Path $ClassesRoot "Drive\shell\CleverPGP.Unmount"
@@ -21,9 +24,16 @@ New-Item -Path $EncryptVerb -Force | Out-Null
 Set-Item -Path $EncryptVerb -Value "Зашифровать с Clever PGP"
 New-ItemProperty -Path $EncryptVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $EncryptVerb -Name "MultiSelectModel" -Value "Single" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $EncryptVerb -Name "AppliesTo" -Value "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $EncryptVerb -Name "AppliesTo" -Value "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk AND NOT System.FileExtension:=.cpgx" -PropertyType String -Force | Out-Null
 $EncryptCommand = New-Item -Path (Join-Path $EncryptVerb "command") -Force
-Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --encrypt-file `"%1`""
+Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --shell encrypt `"%1`""
+
+New-Item -Path $SecureDeleteVerb -Force | Out-Null
+Set-Item -Path $SecureDeleteVerb -Value "Безвозвратно удалить файл — Clever PGP"
+New-ItemProperty -Path $SecureDeleteVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $SecureDeleteVerb -Name "MultiSelectModel" -Value "Single" -PropertyType String -Force | Out-Null
+$SecureDeleteCommand = New-Item -Path (Join-Path $SecureDeleteVerb "command") -Force
+Set-Item -Path $SecureDeleteCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --secure-delete `"%1`""
 
 New-Item -Path $EncryptedExtension -Force | Out-Null
 Set-Item -Path $EncryptedExtension -Value "CleverPGP.EncryptedFile"
@@ -37,7 +47,7 @@ $OpenVerb = New-Item -Path (Join-Path $EncryptedType "shell\open") -Force
 Set-Item -Path $OpenVerb.PSPath -Value "Расшифровать с Clever PGP"
 New-ItemProperty -Path $OpenVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $DecryptCommand = New-Item -Path (Join-Path $OpenVerb.PSPath "command") -Force
-Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --decrypt-file `"%1`""
+Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --shell decrypt `"%1`""
 
 New-Item -Path $PublicKeyExtension -Force | Out-Null
 Set-Item -Path $PublicKeyExtension -Value "CleverPGP.PublicKey"
@@ -52,6 +62,19 @@ Set-Item -Path $ImportVerb.PSPath -Value "Импортировать откры�
 New-ItemProperty -Path $ImportVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $ImportCommand = New-Item -Path (Join-Path $ImportVerb.PSPath "command") -Force
 Set-Item -Path $ImportCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --import-key `"%1`""
+
+New-Item -Path $PrivateKeyExtension -Force | Out-Null
+Set-Item -Path $PrivateKeyExtension -Value "CleverPGP.PrivateKey"
+New-ItemProperty -Path $PrivateKeyExtension -Name "Content Type" -Value "application/x-clever-pgp-private-key" -PropertyType String -Force | Out-Null
+New-Item -Path $PrivateKeyType -Force | Out-Null
+Set-Item -Path $PrivateKeyType -Value "Защищённый закрытый ключ Clever PGP"
+$PrivateKeyIcon = New-Item -Path (Join-Path $PrivateKeyType "DefaultIcon") -Force
+Set-Item -Path $PrivateKeyIcon.PSPath -Value $PythonWindowed
+$PrivateImportVerb = New-Item -Path (Join-Path $PrivateKeyType "shell\open") -Force
+Set-Item -Path $PrivateImportVerb.PSPath -Value "Импортировать закрытый ключ"
+New-ItemProperty -Path $PrivateImportVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
+$PrivateImportCommand = New-Item -Path (Join-Path $PrivateImportVerb.PSPath "command") -Force
+Set-Item -Path $PrivateImportCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --import-private-key `"%1`""
 
 New-Item -Path $ContainerExtension -Force | Out-Null
 Set-Item -Path $ContainerExtension -Value "CleverPGP.ContainerFile"

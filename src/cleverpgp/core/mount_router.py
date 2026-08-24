@@ -44,16 +44,20 @@ class AutomaticMountManager:
         *,
         system_manager: object | None = None,
         winfsp_manager: VaultMountManager | None = None,
+        recover_existing: bool = True,
     ) -> None:
         if system_manager is None and platform.system() == "Windows":
             from cleverpgp.core.windows_storage import WindowsSystemDiskManager
 
-            system_manager = WindowsSystemDiskManager()
+            system_manager = WindowsSystemDiskManager(
+                recover_existing=recover_existing
+            )
         self._system_manager = system_manager
         self._winfsp_manager = winfsp_manager or VaultMountManager()
         self._active_manager: object | None = None
         self._mounted_container: Path | None = None
-        self._recover_active_manager()
+        if recover_existing:
+            self._recover_active_manager()
 
     @property
     def mounted_drive(self) -> str | None:

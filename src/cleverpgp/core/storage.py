@@ -11,10 +11,11 @@ from cleverpgp.core.models import (
     Contact,
     CryptographicIdentity,
     Profile,
+    UserKey,
     UnlockMode,
 )
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class ProfileRepository:
@@ -75,6 +76,19 @@ class ProfileRepository:
                     fingerprint TEXT NOT NULL UNIQUE,
                     encryption_public_key BLOB NOT NULL UNIQUE,
                     signing_public_key BLOB NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS user_key (
+                    key_id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    encryption_public_key BLOB NOT NULL UNIQUE,
+                    signing_public_key BLOB NOT NULL UNIQUE,
+                    kdf_salt BLOB NOT NULL,
+                    kdf_opslimit INTEGER NOT NULL,
+                    kdf_memlimit INTEGER NOT NULL,
+                    encrypted_private_bundle BLOB NOT NULL,
                     created_at TEXT NOT NULL
                 );
                 """
@@ -346,6 +360,86 @@ class ProfileRepository:
                 "Контакт с таким открытым ключом уже существует."
             ) from error
 
+    def save_user_key(self, key: UserKey) -> None:
+        try:
+            with self._connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO user_key(
+                        key_id, display_name, fingerprint,
+                        encryption_public_key, signing_public_key,
+                        kdf_salt, kdf_opslimit, kdf_memlimit,
+                        encrypted_private_bundle, created_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        key.key_id,
+                        key.display_name,
+                        key.fingerprint,
+                        key.encryption_public_key,
+                        key.signing_public_key,
+                        key.kdf_salt,
+                        key.kdf_opslimit,
+                        key.kdf_memlimit,
+                        key.encrypted_private_bundle,
+                        key.created_at,
+                    ),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ContactExistsError(
+                "Такой цифровой ключ уже сохранён в Clever PGP."
+            ) from error
+
+    def list_user_keys(self) -> tuple[UserKey, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT key_id, display_name, fingerprint,
+                       encryption_public_key, signing_public_key,
+                       kdf_salt, kdf_opslimit, kdf_memlimit,
+                       encrypted_private_bundle, created_at
+                FROM user_key
+                ORDER BY display_name COLLATE NOCASE, created_at
+                """
+            ).fetchall()
+        return tuple(self._user_key_from_row(row) for row in rows)
+
+    def get_user_key(self, key_id: str) -> UserKey | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT key_id, display_name, fingerprint,
+                       encryption_public_key, signing_public_key,
+                       kdf_salt, kdf_opslimit, kdf_memlimit,
+                       encrypted_private_bundle, created_at
+                FROM user_key WHERE key_id = ?
+                """,
+                (key_id,),
+            ).fetchone()
+        return None if row is None else self._user_key_from_row(row)
+
+    def get_user_key_by_fingerprint(self, fingerprint: str) -> UserKey | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT key_id, display_name, fingerprint,
+                       encryption_public_key, signing_public_key,
+                       kdf_salt, kdf_opslimit, kdf_memlimit,
+                       encrypted_private_bundle, created_at
+                FROM user_key WHERE fingerprint = ?
+                """,
+                (fingerprint,),
+            ).fetchone()
+        return None if row is None else self._user_key_from_row(row)
+
+    def delete_user_key(self, key_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM user_key WHERE key_id = ?",
+                (key_id,),
+            )
+        return cursor.rowcount == 1
+
     def list_contacts(self) -> tuple[Contact, ...]:
         with self._connect() as connection:
             rows = connection.execute(
@@ -397,6 +491,21 @@ class ProfileRepository:
                 (contact_id,),
             )
         return cursor.rowcount == 1
+
+    @staticmethod
+    def _user_key_from_row(row: sqlite3.Row) -> UserKey:
+        return UserKey(
+            key_id=str(row["key_id"]),
+            display_name=str(row["display_name"]),
+            fingerprint=str(row["fingerprint"]),
+            encryption_public_key=bytes(row["encryption_public_key"]),
+            signing_public_key=bytes(row["signing_public_key"]),
+            kdf_salt=bytes(row["kdf_salt"]),
+            kdf_opslimit=int(row["kdf_opslimit"]),
+            kdf_memlimit=int(row["kdf_memlimit"]),
+            encrypted_private_bundle=bytes(row["encrypted_private_bundle"]),
+            created_at=str(row["created_at"]),
+        )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:

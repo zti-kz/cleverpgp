@@ -73,7 +73,9 @@ def test_file_round_trip_is_signed(
     assert result.sender.display_name == "Алмас"
 
 
-@pytest.mark.parametrize("extension", [".cpgp", ".cpgv", ".cpgk", ".CPGP"])
+@pytest.mark.parametrize(
+    "extension", [".cpgp", ".cpgv", ".cpgk", ".cpgx", ".CPGP"]
+)
 def test_cleverpgp_formats_are_not_encrypted_again(
     tmp_path: Path,
     crypto: tuple[FileCryptoService, bytes],

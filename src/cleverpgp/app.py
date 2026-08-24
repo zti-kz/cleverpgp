@@ -19,6 +19,7 @@ from cleverpgp.single_instance import SingleApplicationInstance
 from cleverpgp.ui.main_window import MainWindow
 from cleverpgp.ui.icons import line_icon
 from cleverpgp.ui.key_dialogs import PublicKeyImportDialog
+from cleverpgp.ui.key_manager_dialog import KeyManagerDialog
 from cleverpgp.ui.screen_bounds import fit_window_to_screen, install_screen_bounds
 
 if TYPE_CHECKING:
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
 def default_mount_manager(
     *,
     force_system_disk: bool = False,
+    recover_existing: bool = True,
 ) -> VaultMountManager | WindowsSystemDiskManager | AutomaticMountManager:
     if (
         force_system_disk
@@ -35,8 +37,8 @@ def default_mount_manager(
     ):
         from cleverpgp.core.windows_storage import WindowsSystemDiskManager
 
-        return WindowsSystemDiskManager()
-    return AutomaticMountManager()
+        return WindowsSystemDiskManager(recover_existing=recover_existing)
+    return AutomaticMountManager(recover_existing=recover_existing)
 
 
 def main(
@@ -45,6 +47,7 @@ def main(
     startup_action: str | None = None,
     startup_drive: str | None = None,
     public_key_path: Path | None = None,
+    private_key_path: Path | None = None,
 ) -> int:
     application = QApplication(sys.argv)
     application.setApplicationName(APP_NAME)
@@ -56,6 +59,7 @@ def main(
         container_path is None
         and startup_action is None
         and public_key_path is None
+        and private_key_path is None
     )
     instance: SingleApplicationInstance | None = None
     # Unit tests replace QApplication with a mock. The identity check keeps
@@ -79,6 +83,14 @@ def main(
         dialog.show()
         fit_window_to_screen(dialog)
         return application.exec()
+    if private_key_path is not None:
+        dialog = KeyManagerDialog(
+            repository,
+            import_private_path=private_key_path,
+        )
+        dialog.show()
+        fit_window_to_screen(dialog)
+        return application.exec()
 
     profile_service = ProfileService(repository)
     window = MainWindow(
@@ -86,7 +98,8 @@ def main(
         profile_service,
         FileCryptoService(repository),
         mount_manager=default_mount_manager(
-            force_system_disk=startup_action in {"resize", "algorithm"}
+            force_system_disk=startup_action in {"resize", "algorithm"},
+            recover_existing=container_path is None,
         ),
         startup_container=container_path,
         startup_action=startup_action,

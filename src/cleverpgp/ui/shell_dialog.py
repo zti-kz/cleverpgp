@@ -5,11 +5,14 @@ from typing import Literal
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -17,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from cleverpgp.core.file_crypto import FileCryptoService
+from cleverpgp.core.portable_keys import PortableKeyService
 from cleverpgp.core.storage import ProfileRepository
 from cleverpgp.localization import localize_widget_tree, set_language, tr
 from cleverpgp.ui.adaptive import scrollable_dialog_layout
@@ -40,6 +44,9 @@ class ShellFileWorker(QObject):
         target: Path,
         password: str,
         overwrite: bool,
+        protection_mode: str = "password",
+        key_id: str | None = None,
+        recipient_ids: tuple[str, ...] = (),
     ) -> None:
         super().__init__()
         self.repository = repository
@@ -51,12 +58,46 @@ class ShellFileWorker(QObject):
         self.target = target
         self.password = password
         self.overwrite = overwrite
+        self.protection_mode = protection_mode
+        self.key_id = key_id
+        self.recipient_ids = recipient_ids
 
     @Slot()
     def run(self) -> None:
         try:
             service = FileCryptoService(self.repository)
-            if self.operation == "encrypt":
+            if self.protection_mode == "keys":
+                if not self.key_id:
+                    raise ValueError("Выберите цифровой ключ.")
+                key_service = PortableKeyService(self.repository)
+                contacts_by_id = {
+                    contact.contact_id: contact
+                    for contact in self.repository.list_contacts()
+                }
+                recipients = tuple(
+                    contacts_by_id[contact_id]
+                    for contact_id in self.recipient_ids
+                    if contact_id in contacts_by_id
+                )
+                with key_service.unlock_key(self.key_id, self.password) as identity:
+                    if self.operation == "encrypt":
+                        result = service.encrypt_file_with_identity(
+                            self.source,
+                            self.target,
+                            identity,
+                            recipients=recipients,
+                            overwrite=self.overwrite,
+                            progress=self._report_progress,
+                        )
+                    else:
+                        result = service.decrypt_file_with_identity(
+                            self.source,
+                            self.target,
+                            identity,
+                            overwrite=self.overwrite,
+                            progress=self._report_progress,
+                        ).path
+            elif self.operation == "encrypt":
                 result = service.encrypt_file_with_password(
                     self.source,
                     self.target,
@@ -100,6 +141,11 @@ class ShellOperationDialog(QDialog):
         self.worker: ShellFileWorker | None = None
         self.running = False
         self.operation_succeeded: bool | None = None
+        self.protection_mode = (
+            "password"
+            if operation == "encrypt"
+            else self.file_crypto.protection_mode(self.source)
+        )
 
         action_name = tr("Шифрование" if operation == "encrypt" else "Расшифрование")
         self.setWindowTitle(f"{action_name} — Clever PGP")
@@ -142,6 +188,45 @@ class ShellOperationDialog(QDialog):
         layout.addWidget(QLabel("Результат:"))
         layout.addLayout(target_row)
 
+        self.mode_combo: QComboBox | None = None
+        if self.operation == "encrypt":
+            self.mode_combo = QComboBox()
+            self.mode_combo.addItem("Паролем файла", "password")
+            self.mode_combo.addItem("Цифровыми ключами получателей", "keys")
+            self.mode_combo.currentIndexChanged.connect(self._mode_changed)
+            layout.addWidget(QLabel("Способ защиты"))
+            layout.addWidget(self.mode_combo)
+        else:
+            mode_label = QLabel(
+                "Способ защиты: пароль файла"
+                if self.protection_mode == "password"
+                else "Способ защиты: цифровой ключ получателя"
+            )
+            mode_label.setObjectName("muted")
+            layout.addWidget(mode_label)
+
+        self.key_label = QLabel("Ваш цифровой ключ")
+        self.key_combo = QComboBox()
+        for key in self.repository.list_user_keys():
+            self.key_combo.addItem(
+                f"{key.display_name} — {key.fingerprint[:16]}", key.key_id
+            )
+        self.recipient_label = QLabel("Дополнительные получатели")
+        self.recipient_list = QListWidget()
+        self.recipient_list.setMaximumHeight(150)
+        for contact in self.repository.list_contacts():
+            item = QListWidgetItem(
+                f"{contact.display_name} — {contact.fingerprint[:16]}"
+            )
+            item.setData(Qt.ItemDataRole.UserRole, contact.contact_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.recipient_list.addItem(item)
+        layout.addWidget(self.key_label)
+        layout.addWidget(self.key_combo)
+        layout.addWidget(self.recipient_label)
+        layout.addWidget(self.recipient_list)
+
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText("Пароль файла — не менее 12 символов")
@@ -158,6 +243,7 @@ class ShellOperationDialog(QDialog):
                 self.password_input,
                 self.password_repeat_input,
             )
+        self._mode_changed()
 
         note = QLabel(
             "Оригинальный файл останется без изменений. "
@@ -234,6 +320,18 @@ class ShellOperationDialog(QDialog):
             self.status.show()
             return
         if (
+            self.protection_mode == "keys"
+            and self.key_combo.currentData() is None
+        ):
+            self.status.setObjectName("error")
+            self.status.setText(
+                tr("Сначала создайте или импортируйте цифровой ключ.")
+            )
+            self.status.show()
+            return
+        if (
+            self.protection_mode == "password"
+            and
             self.password_repeat_input is not None
             and password != self.password_repeat_input.text()
         ):
@@ -284,6 +382,14 @@ class ShellOperationDialog(QDialog):
             self.target,
             password,
             overwrite,
+            self.protection_mode,
+            (
+                str(self.key_combo.currentData())
+                if self.protection_mode == "keys"
+                and self.key_combo.currentData() is not None
+                else None
+            ),
+            self._selected_recipient_ids(),
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -348,6 +454,31 @@ class ShellOperationDialog(QDialog):
             return
         super().reject()
 
+    def _mode_changed(self) -> None:
+        if self.mode_combo is not None:
+            self.protection_mode = str(self.mode_combo.currentData())
+        keys = self.protection_mode == "keys"
+        self.key_label.setVisible(keys)
+        self.key_combo.setVisible(keys)
+        show_recipients = keys and self.operation == "encrypt"
+        self.recipient_label.setVisible(show_recipients)
+        self.recipient_list.setVisible(show_recipients)
+        self.password_input.setPlaceholderText(
+            "Пароль выбранного цифрового ключа"
+            if keys
+            else "Пароль файла — не менее 12 символов"
+        )
+        if self.password_repeat_input is not None:
+            self.password_repeat_input.setVisible(not keys)
+
+    def _selected_recipient_ids(self) -> tuple[str, ...]:
+        return tuple(
+            str(item.data(Qt.ItemDataRole.UserRole))
+            for index in range(self.recipient_list.count())
+            if (item := self.recipient_list.item(index)).checkState()
+            == Qt.CheckState.Checked
+        )
+
 
 SHELL_STYLESHEET = """
 QDialog {
@@ -390,6 +521,14 @@ QLineEdit {
     padding: 0 12px;
 }
 QLineEdit:focus { border-color: #38bdf8; }
+QComboBox, QListWidget {
+    background: #0f172a;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    color: #f9fafb;
+    padding: 8px 12px;
+}
+QListWidget::item { padding: 7px; }
 QPushButton {
     background: #263449;
     border: 1px solid #475569;

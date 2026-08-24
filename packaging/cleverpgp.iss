@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.14.0"
+  #define AppVersion "0.15.0"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -88,8 +88,12 @@ Root: HKLM; Subkey: "Software\Classes\.bpgv"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: ""; ValueData: "Зашифровать файл — Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"
-Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk"
-Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --encrypt-file ""%1"""
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk AND NOT System.FileExtension:=.cpgx"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell encrypt ""%1"""
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete"; ValueType: string; ValueName: ""; ValueData: "Безвозвратно удалить файл — Clever PGP"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --secure-delete ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgp"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.EncryptedFile"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.cpgp"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile"; ValueType: string; ValueName: ""; ValueData: "Зашифрованный файл Clever PGP"; Flags: uninsdeletekey
@@ -97,7 +101,7 @@ Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\DefaultIcon"; Valu
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell"; ValueType: string; ValueName: ""; ValueData: "open"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: ""; ValueData: "Расшифровать файл — Clever PGP"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --decrypt-file ""%1"""
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell decrypt ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.PublicKey"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp-public-key"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey"; ValueType: string; ValueName: ""; ValueData: "Открытый ключ Clever PGP"; Flags: uninsdeletekey
@@ -105,6 +109,13 @@ Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\DefaultIcon"; ValueTyp
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\shell\open"; ValueType: string; ValueName: ""; ValueData: "Импортировать открытый ключ"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --import-key ""%1"""
+Root: HKLM; Subkey: "Software\Classes\.cpgx"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.PrivateKey"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\.cpgx"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp-private-key"; Flags: uninsdeletevalue
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PrivateKey"; ValueType: string; ValueName: ""; ValueData: "Защищённый закрытый ключ Clever PGP"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PrivateKey\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExecutable},0"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PrivateKey\shell\open"; ValueType: string; ValueName: ""; ValueData: "Импортировать закрытый ключ"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PrivateKey\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.PrivateKey\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --import-private-key ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgv"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.ContainerFile"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.cpgv"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp-container"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.ContainerFile"; ValueType: string; ValueName: ""; ValueData: "Зашифрованный диск Clever PGP"; Flags: uninsdeletekey
