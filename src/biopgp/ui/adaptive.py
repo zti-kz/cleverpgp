@@ -60,10 +60,16 @@ class ResponsiveBox(QWidget):
         self._breakpoint = max(1, int(breakpoint))
         self._align_last_right = align_last_right
         self._widgets = tuple(widgets)
+        self.setMinimumSize(0, 0)
         self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
         self._box.setContentsMargins(0, 0, 0, 0)
         self._box.setSpacing(spacing)
         for widget in self._widgets:
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
             self._box.addWidget(widget, 1)
         self._vertical: bool | None = None
         self._apply_direction(False)

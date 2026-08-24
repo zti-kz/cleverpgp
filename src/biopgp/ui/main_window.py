@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
+    QAbstractButton,
+    QAbstractSpinBox,
     QApplication,
     QComboBox,
     QDialog,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSlider,
     QSizePolicy,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -54,7 +57,6 @@ from biopgp.core.windows_storage import (
 )
 from biopgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY
 from biopgp.localization import (
-    available_languages,
     current_language,
     localize_widget_tree,
     set_language,
@@ -154,6 +156,7 @@ class MainWindow(QMainWindow):
         self._task_success_handler: Callable[[object], None] | None = None
         self._task_failure_handler: Callable[[str], None] | None = None
         self._task_determinate = False
+        self._busy_widget_states: dict[QWidget, bool] = {}
 
         title_suffix = (
             f" — {self.startup_container.name}" if self.startup_container else ""
@@ -595,6 +598,7 @@ class MainWindow(QMainWindow):
                 and self._startup_drive is not None
                 else None
             ),
+            selected_language=current_language(),
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.request is None:
@@ -602,6 +606,17 @@ class MainWindow(QMainWindow):
                 self.close()
             return
         request = dialog.request
+        if request.operation == "language" and request.language_code:
+            self.repository.set_setting("language", request.language_code)
+            message = (
+                "Язык интерфейса сохранён. Он будет применён после "
+                "перезапуска Clever PGP."
+            )
+            if self._compact_settings_launch:
+                self._show_compact_settings_result(message)
+            else:
+                self._set_dashboard_status(message)
+            return
         if request.operation == "face":
             if self._compact_settings_launch:
                 self._enroll_face(
@@ -1003,6 +1018,22 @@ class MainWindow(QMainWindow):
         create_as_system_disk = self._uses_windows_system_disk or (
             self._automatically_selects_disk_backend and dialog.system_disk
         )
+        if create_as_system_disk:
+            prepare = getattr(
+                self.mount_manager,
+                (
+                    "prepare_system_backend"
+                    if self._automatically_selects_disk_backend
+                    else "prepare_backend"
+                ),
+                None,
+            )
+            if callable(prepare):
+                try:
+                    prepare()
+                except (BioPGPError, OSError) as error:
+                    self._show_error(str(error))
+                    return
         hidden_request: HiddenVolumeCreationRequest | None = None
         if getattr(dialog, "hidden_volume", False):
             try:
@@ -1522,6 +1553,9 @@ class MainWindow(QMainWindow):
         self._task_thread.finished.connect(self._task_finished)
         self._task_thread.finished.connect(self._task_thread.deleteLater)
         self._task_thread.start()
+        # Paint a started state immediately. The worker repeats this signal
+        # from its own thread, while the operation itself reports 3% and above.
+        self._task_progress(2, "Операция запущена")
 
     @Slot(object)
     def _task_succeeded(self, result: object) -> None:
@@ -1590,9 +1624,28 @@ class MainWindow(QMainWindow):
         if hasattr(self, "dashboard_status") and busy:
             self.dashboard_status.hide()
         central = self.centralWidget()
-        if central is not None:
-            for button in central.findChildren(QPushButton):
-                button.setEnabled(not busy)
+        if busy:
+            self._busy_widget_states.clear()
+            if central is not None:
+                interactive: set[QWidget] = set()
+                for widget_type in (
+                    QAbstractButton,
+                    QAbstractSpinBox,
+                    QComboBox,
+                    QLineEdit,
+                    QSlider,
+                ):
+                    interactive.update(central.findChildren(widget_type))
+                for widget in interactive:
+                    self._busy_widget_states[widget] = widget.isEnabled()
+                    widget.setEnabled(False)
+        else:
+            for widget, was_enabled in self._busy_widget_states.items():
+                try:
+                    widget.setEnabled(was_enabled)
+                except RuntimeError:
+                    pass
+            self._busy_widget_states.clear()
         self._tray_unmount_action.setEnabled(
             not busy and self.mount_manager.mounted_drive is not None
         )
@@ -1781,24 +1834,6 @@ class MainWindow(QMainWindow):
         controls = QHBoxLayout(header_controls)
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(8)
-        language_selector = QComboBox()
-        language_selector.setObjectName("languageSelector")
-        language_selector.setMinimumWidth(100)
-        language_selector.setMaximumWidth(132)
-        language_selector.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Fixed,
-        )
-        language_selector.setToolTip(tr("Язык интерфейса"))
-        language_selector.setAccessibleName(tr("Язык интерфейса"))
-        for language in available_languages():
-            language_selector.addItem(language.native_name, language.code)
-        selected_index = language_selector.findData(current_language())
-        language_selector.setCurrentIndex(max(0, selected_index))
-        language_selector.currentIndexChanged.connect(
-            lambda _index: self._change_language(language_selector.currentData())
-        )
-        controls.addWidget(language_selector, 0, Qt.AlignmentFlag.AlignTop)
         if self.session is not None and self.session.is_unlocked:
             settings_button = QPushButton()
             settings_button.setObjectName("headerIconButton")
@@ -1884,29 +1919,6 @@ class MainWindow(QMainWindow):
 
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self, "Clever PGP", tr(message))
-
-    def _change_language(self, code: str) -> None:
-        if not code or code == current_language():
-            return
-        set_language(code)
-        self.repository.set_setting("language", code)
-        self._retranslate_tray()
-        if self._compact_settings_launch and self.session is not None:
-            if self._compact_result_message is not None:
-                self._show_compact_settings_result(
-                    self._compact_result_message,
-                    error=self._compact_result_error,
-                )
-            else:
-                QTimer.singleShot(0, self._show_access_settings)
-            return
-        if self.session is not None and self.session.is_unlocked:
-            self._show_dashboard()
-        elif self.repository.has_profile():
-            self._show_unlock()
-        else:
-            self._show_profile_creation()
-
 
 STYLESHEET = """
 QMainWindow, QWidget {

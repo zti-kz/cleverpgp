@@ -128,6 +128,9 @@ def run_ui_worker(marker: Path) -> int:
     from biopgp.ui.main_window import BackgroundTaskThread
 
     application = QApplication.instance() or QApplication([])
+    # ctypes loading of the native bridge is deliberately kept on the main
+    # thread. The same preflight is used by the real creation dialog.
+    library = WinSpdLibrary()
     event_loop = QEventLoop()
     timeout_timer = QTimer()
     timeout_timer.setSingleShot(True)
@@ -135,7 +138,6 @@ def run_ui_worker(marker: Path) -> int:
 
     def operation(report_progress):
         report_progress(3, "loading disk component")
-        library = WinSpdLibrary()
         with tempfile.TemporaryDirectory(
             prefix="cleverpgp-ui-worker-check-"
         ) as directory:

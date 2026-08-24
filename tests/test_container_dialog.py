@@ -112,6 +112,7 @@ def test_creation_dialog_keeps_action_bar_visible_when_content_scrolls() -> None
         winfsp_backend_available=True,
         hidden_volume_available=True,
     )
+    assert dialog.width() >= 1000
     dialog.resize(700, 520)
     dialog.show()
     application.processEvents()
@@ -123,8 +124,11 @@ def test_creation_dialog_keeps_action_bar_visible_when_content_scrolls() -> None
         if button.objectName() == "primary"
     )
     assert scroll is not None
-    assert scroll.viewportMargins().right() >= 12
-    assert scroll.viewportMargins().bottom() >= 10
+    assert scroll.viewportMargins().right() >= 24
+    assert scroll.viewportMargins().bottom() >= 12
+    assert scroll.horizontalScrollBar().maximum() == 0
+    assert dialog.top_options._vertical
+    assert dialog.bottom_options._vertical
     assert scroll.verticalScrollBar().maximum() > 0
     assert create.isVisible()
     assert create.geometry().bottom() <= dialog.height()

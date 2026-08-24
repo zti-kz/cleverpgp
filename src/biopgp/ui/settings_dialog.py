@@ -15,7 +15,12 @@ from PySide6.QtWidgets import (
 )
 
 from biopgp.core.models import UnlockMode
-from biopgp.localization import localize_widget_tree, tr
+from biopgp.localization import (
+    available_languages,
+    current_language,
+    localize_widget_tree,
+    tr,
+)
 from biopgp.ui.adaptive import scrollable_dialog_layout
 from biopgp.ui.icons import line_icon
 
@@ -26,6 +31,7 @@ class AccessSettingsRequest:
     unlock_mode: UnlockMode | None = None
     current_password: str = ""
     new_password: str = ""
+    language_code: str = ""
 
 
 class AccessSettingsDialog(QDialog):
@@ -37,6 +43,7 @@ class AccessSettingsDialog(QDialog):
         *,
         biometric_enrolled: bool,
         drive: str | None = None,
+        selected_language: str | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -47,7 +54,11 @@ class AccessSettingsDialog(QDialog):
         self.setMinimumWidth(420)
         self.resize(760, 760)
         self.setStyleSheet(SETTINGS_STYLESHEET)
-        self._build_ui(current_mode, drive=drive)
+        self._build_ui(
+            current_mode,
+            drive=drive,
+            selected_language=selected_language or current_language(),
+        )
         localize_widget_tree(self)
 
     def _build_ui(
@@ -55,6 +66,7 @@ class AccessSettingsDialog(QDialog):
         current_mode: UnlockMode,
         *,
         drive: str | None,
+        selected_language: str,
     ) -> None:
         outer = scrollable_dialog_layout(self)
         outer.setContentsMargins(30, 26, 30, 28)
@@ -88,6 +100,34 @@ class AccessSettingsDialog(QDialog):
         scope_note.setObjectName("muted")
         scope_note.setWordWrap(True)
         outer.addWidget(scope_note)
+
+        language_card = self._card()
+        language_layout = QVBoxLayout(language_card)
+        language_layout.setContentsMargins(18, 16, 18, 18)
+        language_layout.setSpacing(10)
+        language_layout.addWidget(
+            self._section_title("Язык интерфейса", "language")
+        )
+        language_note = QLabel(
+            "Выбранный язык будет использован после следующего запуска "
+            "Clever PGP. Текущие операции при этом не прерываются."
+        )
+        language_note.setObjectName("muted")
+        language_note.setWordWrap(True)
+        language_layout.addWidget(language_note)
+        self.language_input = QComboBox()
+        self.language_input.setObjectName("languageSelector")
+        for language in available_languages():
+            self.language_input.addItem(language.native_name, language.code)
+        self.language_input.setCurrentIndex(
+            max(0, self.language_input.findData(selected_language))
+        )
+        language_layout.addWidget(self.language_input)
+        language_button = QPushButton("Сохранить язык")
+        language_button.setIcon(line_icon("language"))
+        language_button.clicked.connect(self._request_language_change)
+        language_layout.addWidget(language_button)
+        outer.addWidget(language_card)
 
         mode_card = self._card()
         mode_layout = QVBoxLayout(mode_card)
@@ -217,6 +257,18 @@ class AccessSettingsDialog(QDialog):
 
     def _request_face_enrollment(self) -> None:
         self.request = AccessSettingsRequest("face")
+        self.accept()
+
+    def _request_language_change(self) -> None:
+        language_code = str(self.language_input.currentData() or "")
+        supported = {language.code for language in available_languages()}
+        if language_code not in supported:
+            self._show_error("Неизвестный язык интерфейса.")
+            return
+        self.request = AccessSettingsRequest(
+            "language",
+            language_code=language_code,
+        )
         self.accept()
 
     def _request_password_change(self) -> None:

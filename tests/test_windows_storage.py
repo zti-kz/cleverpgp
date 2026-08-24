@@ -99,6 +99,23 @@ def mounted_volume(
     )
 
 
+def test_prepare_backend_loads_native_bridge_only_once() -> None:
+    manager = WindowsSystemDiskManager(
+        process_manager=FakeProcessManager(),
+        recover_existing=False,
+    )
+    prepared_library = object()
+    with patch(
+        "biopgp.core.windows_storage.WinSpdLibrary",
+        return_value=prepared_library,
+    ) as library_type:
+        manager.prepare_backend()
+        manager.prepare_backend()
+
+    library_type.assert_called_once_with()
+    assert manager._prepared_library is prepared_library
+
+
 def test_inspects_volume_by_drive_letter() -> None:
     raw = json.dumps(
         {

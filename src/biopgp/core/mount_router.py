@@ -161,6 +161,14 @@ class AutomaticMountManager:
         self._mounted_container = source
         return str(mounted)
 
+    def prepare_system_backend(self) -> None:
+        """Preload the Windows bridge before a background disk operation."""
+
+        manager = self._system_manager
+        prepare = getattr(manager, "prepare_backend", None)
+        if callable(prepare):
+            prepare()
+
     def create_hidden_and_mount(
         self,
         container_path: Path,

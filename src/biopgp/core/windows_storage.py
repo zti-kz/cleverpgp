@@ -585,8 +585,15 @@ class WindowsSystemDiskManager:
         self._drive: str | None = None
         self._container_path: Path | None = None
         self._context_menu_labels: tuple[str, ...] | None = None
+        self._prepared_library: WinSpdLibrary | None = None
         if recover_existing:
             self._recover_existing_control_record()
+
+    def prepare_backend(self) -> None:
+        """Load the native WinSpd bridge on the calling UI thread once."""
+
+        if self._prepared_library is None:
+            self._prepared_library = WinSpdLibrary()
 
     @property
     def mounted_drive(self) -> str | None:
@@ -684,7 +691,7 @@ class WindowsSystemDiskManager:
             )
         if progress is not None:
             progress(3, "Проверка компонента виртуального диска")
-        library = WinSpdLibrary()
+        library = self._prepared_library or WinSpdLibrary()
 
         def creation_progress(completed: int, total: int) -> None:
             if progress is not None:
@@ -799,7 +806,7 @@ class WindowsSystemDiskManager:
             raise MountUnavailableError(
                 "Сначала отключите уже открытый виртуальный диск Clever PGP."
             )
-        library = WinSpdLibrary()
+        library = self._prepared_library or WinSpdLibrary()
         if progress is not None:
             progress(2, "Проверка параметров скрытого диска")
         headers: HiddenWindowsVolumeHeaders = create_hidden_windows_block_volume(

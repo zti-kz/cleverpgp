@@ -38,6 +38,10 @@ class FakeSystemManager:
         self.opaque_mount_calls: list[dict[str, object]] = []
         self.password_change_calls: list[dict[str, object]] = []
         self.unmount_calls = 0
+        self.prepare_calls = 0
+
+    def prepare_backend(self) -> None:
+        self.prepare_calls += 1
 
     def mount(
         self,
@@ -221,6 +225,18 @@ def test_system_container_routes_to_windows_manager(tmp_path: Path) -> None:
     assert system.mount_calls[0]["context_menu_labels"] == labels
     assert not winfsp.mount_calls
     assert progress_events[0][0] == 3
+
+
+def test_prepares_system_backend_before_background_creation() -> None:
+    system = FakeSystemManager()
+    manager = AutomaticMountManager(
+        system_manager=system,
+        winfsp_manager=FakeWinFspManager(),  # type: ignore[arg-type]
+    )
+
+    manager.prepare_system_backend()
+
+    assert system.prepare_calls == 1
 
 
 def test_block_vault_routes_to_winfsp_manager(tmp_path: Path) -> None:

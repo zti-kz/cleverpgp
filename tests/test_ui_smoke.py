@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QCloseEvent  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QApplication,
+    QComboBox,
     QDialog,
     QLabel,
     QPushButton,
@@ -122,10 +123,13 @@ def test_portable_disk_can_open_by_password_without_local_profile(
     )
     window.show()
     deadline = time.monotonic() + 5
-    while manager.mounted_drive is None and time.monotonic() < deadline:
+    while (
+        manager.mounted_drive is None or window._busy
+    ) and time.monotonic() < deadline:
         application.processEvents()
         time.sleep(0.01)
 
+    assert not window._busy
     assert manager.mounted_drive == "P:"
     assert not repository.has_profile()
     manager.mounted_drive = None
@@ -203,10 +207,11 @@ def test_portable_password_links_current_profile_for_future_face_unlock(
     window.session = session
     window._prompt_opaque_volume_password(source.resolve())
     deadline = time.monotonic() + 5
-    while manager.mounted_drive is None and time.monotonic() < deadline:
+    while window._busy and time.monotonic() < deadline:
         application.processEvents()
         time.sleep(0.01)
 
+    assert not window._busy
     assert manager.mounted_drive == "P:"
     with EncryptedBlockVolume.open(source, local_profile_key):
         pass
@@ -641,6 +646,8 @@ def test_progress_task_displays_percentage_and_stage(tmp_path: Path) -> None:
         return "done"
 
     window._start_progress_task(operation, lambda _result: None)
+    assert window.dashboard_progress.value() >= 2
+    assert not window.centralWidget().findChildren(QComboBox)
     deadline = time.monotonic() + 5
     saw_percentage = False
     while window._busy and time.monotonic() < deadline:
@@ -1032,6 +1039,10 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
         def __init__(self) -> None:
             self.mounted_drive: str | None = None
             self.create_call: dict[str, object] | None = None
+            self.events: list[str] = []
+
+        def prepare_system_backend(self) -> None:
+            self.events.append("prepare")
 
         def create_and_mount(
             self,
@@ -1039,6 +1050,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
             master_key: bytes,
             **options: object,
         ) -> str:
+            self.events.append("create")
             progress = options.pop("progress")
             assert callable(progress)
             progress(82, "Ожидание разрешения Windows")
@@ -1114,6 +1126,7 @@ def test_automatic_manager_creates_selected_fast_windows_disk(
     assert manager.create_call["container_path"] == tmp_path / "automatic-created.cpgv"
     assert manager.create_call["logical_capacity"] == 96 * 1024 * 1024
     assert manager.create_call["file_system"] == "NTFS"
+    assert manager.events == ["prepare", "create"]
     assert manager.mounted_drive == "Q:"
 
     manager.mounted_drive = None

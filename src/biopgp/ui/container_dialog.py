@@ -10,12 +10,12 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -33,6 +33,7 @@ from biopgp.core.disk_crypto import (
 )
 from biopgp.core.winspd import MIN_HIDDEN_WINDOWS_COVER_CAPACITY
 from biopgp.localization import localize_widget_tree, tr
+from biopgp.ui.adaptive import ResponsiveBox
 from biopgp.ui.icons import line_icon
 
 MEBIBYTE = 1024 * 1024
@@ -101,9 +102,9 @@ class ContainerCreationDialog(QDialog):
         self._capacity_choices = [self._minimum_capacity, self._selected_capacity]
         self._current_path: Path | None = None
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
-        self.setMinimumSize(420, 320)
+        self.setMinimumSize(560, 360)
         self.resize(
-            820,
+            1100,
             920
             if self._hidden_volume_available
             else 880
@@ -177,9 +178,14 @@ class ContainerCreationDialog(QDialog):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         # Keep transient Windows scrollbars away from controls and wrapped
         # text on compact displays.
-        scroll.setViewportMargins(0, 0, 12, 10)
+        scroll.setViewportMargins(0, 0, 24, 12)
         body = QWidget()
         body.setObjectName("dialogBody")
+        body.setMinimumSize(0, 0)
+        body.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
         outer = QVBoxLayout(body)
         outer.setContentsMargins(28, 20, 28, 10)
         outer.setSpacing(12)
@@ -198,6 +204,7 @@ class ContainerCreationDialog(QDialog):
 
         title = QLabel("Создание защищённого контейнера")
         title.setObjectName("title")
+        title.setWordWrap(True)
         subtitle = QLabel(
             "После подключения контейнер появится в Проводнике как обычный диск. "
             "Файлы внутри шифруются автоматически."
@@ -208,12 +215,6 @@ class ContainerCreationDialog(QDialog):
         outer.addWidget(subtitle)
 
         top_option_cards: list[QFrame] = []
-        options_grid = QGridLayout()
-        options_grid.setHorizontalSpacing(12)
-        options_grid.setVerticalSpacing(10)
-        options_grid.setColumnStretch(0, 1)
-        options_grid.setColumnStretch(1, 1)
-
         if self._allow_backend_choice:
             backend_card = QFrame()
             backend_card.setObjectName("backendCard")
@@ -315,18 +316,26 @@ class ContainerCreationDialog(QDialog):
             format_layout.addWidget(self.file_system_input)
             format_layout.addWidget(self.file_system_description)
 
-        if len(top_option_cards) == 1:
-            options_grid.addWidget(top_option_cards[0], 0, 0, 1, 2)
-        else:
-            for column, card in enumerate(top_option_cards):
-                options_grid.addWidget(card, 0, column)
-        bottom_row = 1 if top_option_cards else 0
-        if self.format_card is None:
-            options_grid.addWidget(algorithm_card, bottom_row, 0, 1, 2)
-        else:
-            options_grid.addWidget(algorithm_card, bottom_row, 0)
-            options_grid.addWidget(self.format_card, bottom_row, 1)
-        outer.addLayout(options_grid)
+        if top_option_cards:
+            self.top_options = ResponsiveBox(
+                top_option_cards,
+                breakpoint=900,
+                spacing=12,
+            )
+            self.top_options.setObjectName("topDiskOptions")
+            outer.addWidget(self.top_options)
+        bottom_cards = (
+            (algorithm_card, self.format_card)
+            if self.format_card is not None
+            else (algorithm_card,)
+        )
+        self.bottom_options = ResponsiveBox(
+            bottom_cards,
+            breakpoint=900,
+            spacing=12,
+        )
+        self.bottom_options.setObjectName("bottomDiskOptions")
+        outer.addWidget(self.bottom_options)
 
         path_title = QLabel("Где сохранить контейнер")
         path_title.setObjectName("fieldTitle")
@@ -374,6 +383,7 @@ class ContainerCreationDialog(QDialog):
         size_header = QHBoxLayout()
         size_caption = QLabel("Ёмкость зашифрованного диска")
         size_caption.setObjectName("fieldTitle")
+        size_caption.setWordWrap(True)
         self.size_value = QLabel()
         self.size_value.setObjectName("sizeValue")
         size_header.addWidget(size_caption)
@@ -385,6 +395,7 @@ class ContainerCreationDialog(QDialog):
             "Перемещайте ползунок, чтобы выбрать ёмкость диска."
         )
         slider_instruction.setObjectName("muted")
+        slider_instruction.setWordWrap(True)
         size_layout.addWidget(slider_instruction)
 
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
@@ -488,6 +499,19 @@ class ContainerCreationDialog(QDialog):
         if self._hidden_volume_available:
             self.volume_kind_input.currentIndexChanged.connect(
                 self._update_volume_kind
+            )
+        # Long translated entries must not define the minimum dialog width.
+        # They remain fully available in the drop-down, while the selected
+        # value is elided by Qt on genuinely small screens.
+        for combo in self.findChildren(QComboBox):
+            combo.setMinimumWidth(0)
+            combo.setMinimumContentsLength(12)
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
             )
         localize_widget_tree(self)
         if self._system_disk or self._allow_backend_choice:

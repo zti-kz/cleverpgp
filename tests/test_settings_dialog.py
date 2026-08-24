@@ -31,11 +31,32 @@ def test_settings_dialog_uses_title_bar_for_closing() -> None:
     assert "Закрыть" not in button_texts
     assert "Отмена" not in button_texts
     assert button_texts == {
+        "Сохранить язык",
         "Применить режим",
         "Обновить данные лица",
         "Изменить мастер-пароль",
     }
 
+    dialog.close()
+    application.processEvents()
+
+
+def test_language_is_saved_as_a_restart_request() -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = AccessSettingsDialog(
+        UnlockMode.PASSWORD_OR_FACE,
+        biometric_enrolled=True,
+        selected_language="ru",
+    )
+    dialog.language_input.setCurrentIndex(
+        dialog.language_input.findData("en")
+    )
+
+    _button(dialog, "Сохранить язык").click()
+
+    assert dialog.request is not None
+    assert dialog.request.operation == "language"
+    assert dialog.request.language_code == "en"
     dialog.close()
     application.processEvents()
 

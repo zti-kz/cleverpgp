@@ -9,6 +9,7 @@ from nacl import pwhash  # noqa: E402
 from PySide6.QtWidgets import (  # noqa: E402
     QAbstractButton,
     QApplication,
+    QDialog,
     QLabel,
     QComboBox,
     QLineEdit,
@@ -30,6 +31,7 @@ from biopgp.ui.disk_password_dialog import (  # noqa: E402
     DiskPasswordChangeDialog,
 )
 from biopgp.ui.main_window import MainWindow  # noqa: E402
+from biopgp.ui import main_window as main_window_module  # noqa: E402
 from biopgp.ui.hidden_volume_dialog import (  # noqa: E402
     HiddenVolumeCreationDialog,
     OpaqueVolumeUnlockDialog,
@@ -39,7 +41,10 @@ from biopgp.ui.key_dialogs import (  # noqa: E402
     PublicKeyImportDialog,
     RecipientSelectionDialog,
 )
-from biopgp.ui.settings_dialog import AccessSettingsDialog  # noqa: E402
+from biopgp.ui.settings_dialog import (  # noqa: E402
+    AccessSettingsDialog,
+    AccessSettingsRequest,
+)
 from biopgp.ui.shell_dialog import ShellOperationDialog  # noqa: E402
 from biopgp.core.disk_crypto import XCHACHA20_POLY1305  # noqa: E402
 
@@ -154,7 +159,10 @@ def test_new_disk_backend_choice_is_localized() -> None:
     )
 
 
-def test_header_language_selector_applies_and_saves_language(tmp_path) -> None:
+def test_language_is_only_saved_from_settings_and_applies_after_restart(
+    monkeypatch,
+    tmp_path,
+) -> None:
     application = QApplication.instance() or QApplication([])
     repository = ProfileRepository(tmp_path / "profile.sqlite3")
     repository.initialize()
@@ -166,24 +174,38 @@ def test_header_language_selector_applies_and_saves_language(tmp_path) -> None:
             memlimit=pwhash.argon2id.MEMLIMIT_MIN,
         ),
     )
+    password = "correct horse battery staple"
+    profiles.create_profile("Test", password)
     window = MainWindow(repository, profiles, FileCryptoService())
-    selector = window.centralWidget().findChild(QComboBox, "languageSelector")
+    window.session = profiles.unlock_with_password(password)
+    window._show_dashboard()
 
-    assert selector is not None
-    selector.setCurrentIndex(selector.findData("en"))
-    application.processEvents()
+    assert window.centralWidget().findChild(QComboBox, "languageSelector") is None
+
+    class LanguageSettingsDialog:
+        request = AccessSettingsRequest("language", language_code="en")
+
+        def __init__(self, *_args: object, **kwargs: object) -> None:
+            assert kwargs["selected_language"] == "ru"
+
+        @staticmethod
+        def exec() -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(
+        main_window_module,
+        "AccessSettingsDialog",
+        LanguageSettingsDialog,
+    )
+    window._show_access_settings()
 
     assert repository.get_setting("language") == "en"
+    # The live page is intentionally not rebuilt during the current process.
     assert any(
-        button.text() == "Create protected profile"
+        button.text() == "Зашифровать файл"
         for button in window.centralWidget().findChildren(QPushButton)
     )
-    about_button = next(
-        button
-        for button in window.centralWidget().findChildren(QPushButton)
-        if button.toolTip() == "About"
-    )
-    assert about_button.text() == ""
+    assert "после перезапуска" in window.dashboard_status.text()
     window.close()
     application.processEvents()
 
