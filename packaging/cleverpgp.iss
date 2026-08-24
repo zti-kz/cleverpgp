@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.13.8"
+  #define AppVersion "0.13.9"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -85,7 +85,7 @@ Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Unmount"; ValueType:
 Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\.bpgp"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\.bpgv"; ValueType: none; Flags: deletekey
-Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: ""; ValueData: "Зашифровать с Clever PGP"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: ""; ValueData: "Зашифровать файл — Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk"
@@ -94,7 +94,8 @@ Root: HKLM; Subkey: "Software\Classes\.cpgp"; ValueType: string; ValueName: ""; 
 Root: HKLM; Subkey: "Software\Classes\.cpgp"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile"; ValueType: string; ValueName: ""; ValueData: "Зашифрованный файл Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: ""; ValueData: "Расшифровать с Clever PGP"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell"; ValueType: string; ValueName: ""; ValueData: "open"
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: ""; ValueData: "Расшифровать файл — Clever PGP"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --decrypt-file ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.PublicKey"; Flags: uninsdeletevalue
@@ -162,11 +163,42 @@ begin
   );
 end;
 
+procedure RemoveLegacyShellEntries;
+begin
+  RegDeleteKeyIncludingSubkeys(
+    HKCU,
+    'Software\Classes\*\shell\BioPGP.Encrypt'
+  );
+  RegDeleteKeyIncludingSubkeys(
+    HKCU,
+    'Software\Classes\BioPGP.EncryptedFile'
+  );
+  RegDeleteKeyIncludingSubkeys(
+    HKCU,
+    'Software\Classes\BioPGP.ContainerFile'
+  );
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.bpgp');
+  RegDeleteKeyIncludingSubkeys(HKCU, 'Software\Classes\.bpgv');
+  RegDeleteKeyIncludingSubkeys(
+    HKLM64,
+    'Software\Classes\*\shell\BioPGP.Encrypt'
+  );
+  RegDeleteKeyIncludingSubkeys(
+    HKLM32,
+    'Software\Classes\*\shell\BioPGP.Encrypt'
+  );
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   UninstallKey: String;
   LauncherCommand: String;
 begin
+  if CurStep = ssInstall then
+  begin
+    RemoveLegacyShellEntries;
+    exit;
+  end;
   if CurStep <> ssPostInstall then
     exit;
   UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' +

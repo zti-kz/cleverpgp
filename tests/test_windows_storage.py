@@ -443,7 +443,7 @@ def test_system_manager_removes_unformatted_image_after_uac_failure(
     assert not container_path.exists()
 
 
-def test_system_manager_formats_outer_with_protection_then_hidden(
+def test_system_manager_formats_automatically_bounded_outer_then_hidden(
     tmp_path: Path,
 ) -> None:
     container_path = tmp_path / "new-hidden-system.cpgv"
@@ -521,7 +521,7 @@ def test_system_manager_formats_outer_with_protection_then_hidden(
     assert len(process_manager.starts) == 2
     assert process_manager.starts[0]["master_key"] is None
     assert process_manager.starts[0]["opaque_header"] is headers.outer
-    assert process_manager.starts[0]["protection_header"] is headers.hidden
+    assert process_manager.starts[0]["protection_header"] is None
     assert process_manager.starts[1]["opaque_header"] is headers.hidden
     assert process_manager.starts[1]["protection_header"] is None
     assert formatter.call_count == 2

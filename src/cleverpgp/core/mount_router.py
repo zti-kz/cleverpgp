@@ -348,10 +348,8 @@ class AutomaticMountManager:
             if "Неверный пароль" in str(portable_error):
                 raise
         else:
-            ordinary_options = dict(options)
-            ordinary_options.pop("hidden_protection_password", None)
             try:
-                return self.mount(source, portable_key, **ordinary_options)
+                return self.mount(source, portable_key, **options)
             finally:
                 del portable_key
 

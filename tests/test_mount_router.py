@@ -352,7 +352,6 @@ def test_hidden_creation_and_password_mount_route_only_to_windows(
     opened = manager.mount_opaque(
         container_path,
         "hidden correct horse battery staple",
-        hidden_protection_password=None,
     )
 
     assert opened == "O:"

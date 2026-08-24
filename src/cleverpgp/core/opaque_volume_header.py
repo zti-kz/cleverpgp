@@ -17,8 +17,8 @@ from cleverpgp.core.block_volume import LOGICAL_BLOCK_SIZE
 from cleverpgp.core.errors import AuthenticationError, ValidationError
 from cleverpgp.core.hidden_volume import HiddenVolumeDescriptor
 
-OPAQUE_FORMAT_VERSION = 4
-OPAQUE_HEADER_MAGIC = b"CPGPHDR4"
+OPAQUE_FORMAT_VERSION = 6
+OPAQUE_HEADER_MAGIC = b"CPGPHDR6"
 OPAQUE_HEADER_RESERVED_SIZE = 128 * 1024
 ROLE_AREA_SIZE = OPAQUE_HEADER_RESERVED_SIZE // 2
 BANK_COUNT = 2
@@ -59,6 +59,7 @@ class OpaqueVolumeHeader:
     created_at: str
     hidden_key: bytes | None = None
     hidden_descriptor: HiddenVolumeDescriptor | None = None
+    outer_projection_block_count: int | None = None
 
     @property
     def projection_volume_id(self) -> bytes:
@@ -90,6 +91,13 @@ class OpaqueVolumeHeader:
             raise ValidationError("Некорректный ключ внешнего диска.")
         if not isinstance(self.cover_block_count, int) or self.cover_block_count <= 0:
             raise ValidationError("Некорректное число блоков внешнего диска.")
+        if self.outer_projection_block_count is not None and (
+            self.role != "outer"
+            or not isinstance(self.outer_projection_block_count, int)
+            or self.outer_projection_block_count <= 0
+            or self.outer_projection_block_count > self.cover_block_count
+        ):
+            raise ValidationError("Некорректный размер внешней области диска.")
         if not isinstance(self.label, str) or not self.label.strip():
             raise ValidationError("В заголовке отсутствует название диска.")
         if len(self.label) > 31:
@@ -200,6 +208,14 @@ class OpaqueVolumeHeaderStore:
             outer.cover_volume_id != hidden_header.cover_volume_id
             or not hmac.compare_digest(outer.cover_key, hidden_header.cover_key)
             or outer.cover_block_count != hidden_header.cover_block_count
+            or (
+                outer.outer_projection_block_count is not None
+                and (
+                    hidden_header.hidden_descriptor is None
+                    or hidden_header.hidden_descriptor.region_start_block
+                    < outer.outer_projection_block_count
+                )
+            )
         ):
             raise ValidationError(
                 "Скрытый заголовок не относится к выбранному внешнему диску."
@@ -578,6 +594,7 @@ class OpaqueVolumeHeaderStore:
             "hidden": hidden,
             "label": header.label,
             "logical_block_size": LOGICAL_BLOCK_SIZE,
+            "outer_projection_block_count": header.outer_projection_block_count,
             "role": header.role,
             "storage_format": header.storage_format,
         }
@@ -665,6 +682,11 @@ class OpaqueVolumeHeaderStore:
             created_at=str(metadata["created_at"]),
             hidden_key=hidden_key,
             hidden_descriptor=descriptor,
+            outer_projection_block_count=(
+                int(metadata["outer_projection_block_count"])
+                if metadata.get("outer_projection_block_count") is not None
+                else None
+            ),
         )
 
     def _derive_key(self, password: bytes, salt: bytes) -> bytes:

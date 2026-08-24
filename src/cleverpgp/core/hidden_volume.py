@@ -480,6 +480,135 @@ class HiddenBlockVolume:
             raise InvalidBlockVolumeError("Скрытый том уже закрыт.")
 
 
+class ProtectedOuterVolume:
+    """Expose only the authenticated writable part of an outer projection.
+
+    The remaining physical blocks are never presented to Windows.  Protection
+    therefore does not depend on another password, a user-facing switch, or a
+    best-effort overlap check after a write has already reached the disk.
+    """
+
+    def __init__(
+        self,
+        cover: BlockVolume,
+        block_count: int,
+        *,
+        owns_cover: bool = False,
+    ) -> None:
+        if (
+            not isinstance(block_count, int)
+            or block_count <= 0
+            or block_count > cover.block_count
+        ):
+            raise ValidationError("Некорректный размер внешней области диска.")
+        self._cover = cover
+        self._block_count = block_count
+        self._owns_cover = owns_cover
+        self._closed = False
+        self._lock = threading.RLock()
+
+    @property
+    def path(self) -> Path:
+        return self._cover.path
+
+    @property
+    def block_count(self) -> int:
+        return self._block_count
+
+    @property
+    def logical_capacity(self) -> int:
+        return self.block_count * LOGICAL_BLOCK_SIZE
+
+    @property
+    def label(self) -> str:
+        return self._cover.label
+
+    @property
+    def volume_id(self) -> bytes:
+        return self._cover.volume_id
+
+    @property
+    def storage_format(self) -> str | None:
+        return self._cover.storage_format
+
+    @property
+    def damage_prevented(self) -> bool:
+        return False
+
+    def read_blocks(
+        self,
+        block_address: int,
+        block_count: int,
+        *,
+        context: bytes = b"",
+    ) -> bytes:
+        with self._lock:
+            self._ensure_open()
+            self._validate_range(block_address, block_count)
+            return self._cover.read_blocks(
+                block_address,
+                block_count,
+                context=context,
+            )
+
+    def write_blocks(
+        self,
+        block_address: int,
+        data: bytes,
+        *,
+        context: bytes = b"",
+    ) -> None:
+        payload = bytes(data)
+        if not payload or len(payload) % LOGICAL_BLOCK_SIZE:
+            raise ValidationError(
+                "Запись должна содержать целое число логических блоков."
+            )
+        with self._lock:
+            self._ensure_open()
+            self._validate_range(
+                block_address,
+                len(payload) // LOGICAL_BLOCK_SIZE,
+            )
+            self._cover.write_blocks(
+                block_address,
+                payload,
+                context=context,
+            )
+
+    def flush(self) -> None:
+        with self._lock:
+            self._ensure_open()
+            self._cover.flush()
+
+    def resize(self, logical_capacity: int, **_: object) -> None:
+        del logical_capacity
+        raise ValidationError("Размер этого диска нельзя изменить.")
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            if self._owns_cover:
+                self._cover.close()
+            self._closed = True
+
+    def _validate_range(self, block_address: int, block_count: int) -> None:
+        if (
+            not isinstance(block_address, int)
+            or not isinstance(block_count, int)
+            or block_address < 0
+            or block_count <= 0
+            or block_address + block_count > self.block_count
+        ):
+            raise ValidationError(
+                "Запрошенный диапазон выходит за границы внешнего диска."
+            )
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise InvalidBlockVolumeError("Внешний диск уже закрыт.")
+
+
 class HiddenRegionProtectedVolume:
     """Outer view that rejects writes capable of damaging a hidden region.
 
@@ -625,4 +754,5 @@ __all__ = [
     "HiddenBlockVolume",
     "HiddenRegionProtectedVolume",
     "HiddenVolumeDescriptor",
+    "ProtectedOuterVolume",
 ]

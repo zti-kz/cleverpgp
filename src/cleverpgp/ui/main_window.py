@@ -1473,10 +1473,7 @@ class MainWindow(QMainWindow):
                     self._close_background_window()
             return
         request = dialog.request
-        passwords: list[str | None] = [
-            request.password,
-            request.hidden_protection_password,
-        ]
+        passwords: list[str | None] = [request.password]
         profile_key = (
             bytearray(self.session.master_key_copy())
             if self.session is not None and self.session.is_unlocked
@@ -1501,12 +1498,11 @@ class MainWindow(QMainWindow):
                     except BioPGPError:
                         # Linking is an optional convenience. The manager still
                         # performs the authoritative password authentication,
-                        # including for opaque hidden v4 disks.
+                        # including for opaque hidden v6 disks.
                         pass
                 return opener(
                     source,
                     passwords[0],
-                    hidden_protection_password=passwords[1],
                     context_menu_labels=(
                         tr("Открыть зашифрованный диск"),
                         tr("Сведения о диске"),
@@ -1519,7 +1515,6 @@ class MainWindow(QMainWindow):
                 )
             finally:
                 passwords[0] = None
-                passwords[1] = None
                 if profile_key is not None:
                     profile_key[:] = b"\x00" * len(profile_key)
 

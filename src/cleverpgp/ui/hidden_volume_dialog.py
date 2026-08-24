@@ -6,7 +6,6 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -42,7 +41,6 @@ class HiddenVolumeCreationRequest:
 @dataclass(frozen=True, slots=True)
 class OpaqueVolumeUnlockRequest:
     password: str
-    hidden_protection_password: str | None
 
 
 class HiddenVolumeCreationDialog(QDialog):
@@ -284,7 +282,7 @@ class HiddenVolumeCreationDialog(QDialog):
 
 
 class OpaqueVolumeUnlockDialog(QDialog):
-    """Ask for a v4 volume password without exposing which role it selects."""
+    """Ask for a v6 volume password without exposing which role it selects."""
 
     def __init__(self, source: Path, parent: object = None) -> None:
         super().__init__(parent)
@@ -292,7 +290,7 @@ class OpaqueVolumeUnlockDialog(QDialog):
         self.request: OpaqueVolumeUnlockRequest | None = None
         self.setWindowTitle("Разблокировка диска — Clever PGP")
         self.setMinimumWidth(420)
-        self.resize(640, 470)
+        self.resize(640, 350)
         self.setStyleSheet(HIDDEN_DIALOG_STYLESHEET)
         self._build_ui()
 
@@ -316,26 +314,6 @@ class OpaqueVolumeUnlockDialog(QDialog):
         )
         self.password.returnPressed.connect(self.accept)
         layout.addWidget(self.password)
-
-        self.protect_hidden = QCheckBox(
-            "Защитить скрытую область при записи на внешний диск"
-        )
-        self.protect_hidden.toggled.connect(self._toggle_protection)
-        layout.addWidget(self.protect_hidden)
-        self.protection_password = HiddenVolumeCreationDialog._password_input(
-            "Дополнительный пароль защиты"
-        )
-        self.protection_password.hide()
-        layout.addWidget(self.protection_password)
-
-        note = QLabel(
-            "Основной пароль определяет, какой диск откроется. Если вы открываете "
-            "внешний диск скрытого контейнера для записи, включите защиту и "
-            "укажите пароль скрытого диска, чтобы случайно не повредить его."
-        )
-        note.setObjectName("muted")
-        note.setWordWrap(True)
-        layout.addWidget(note)
 
         self.error_label = QLabel()
         self.error_label.setObjectName("error")
@@ -362,15 +340,7 @@ class OpaqueVolumeUnlockDialog(QDialog):
         try:
             password = self.password.text()
             HiddenVolumeCreationDialog._validate_password(password)
-            protection: str | None = None
-            if self.protect_hidden.isChecked():
-                protection = self.protection_password.text()
-                HiddenVolumeCreationDialog._validate_password(protection)
-                if hmac.compare_digest(password.encode(), protection.encode()):
-                    raise ValueError(
-                        "Основной и дополнительный пароли должны отличаться."
-                    )
-            self.request = OpaqueVolumeUnlockRequest(password, protection)
+            self.request = OpaqueVolumeUnlockRequest(password)
         except ValueError as error:
             self.error_label.setText(tr(str(error)))
             self.error_label.show()
@@ -380,15 +350,7 @@ class OpaqueVolumeUnlockDialog(QDialog):
     def reject(self) -> None:
         self.request = None
         self.password.clear()
-        self.protection_password.clear()
         super().reject()
-
-    def _toggle_protection(self, enabled: bool) -> None:
-        self.protection_password.setVisible(enabled)
-        if enabled:
-            self.protection_password.setFocus()
-        else:
-            self.protection_password.clear()
 
 
 HIDDEN_DIALOG_STYLESHEET = """

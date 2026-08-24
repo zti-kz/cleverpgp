@@ -74,7 +74,6 @@ def test_portable_disk_can_open_by_password_without_local_profile(
     class UnlockDialog:
         request = OpaqueVolumeUnlockRequest(
             password="correct portable disk password",
-            hidden_protection_password=None,
         )
 
         def __init__(self, selected: Path, parent: object = None) -> None:
@@ -155,7 +154,6 @@ def test_portable_password_links_current_profile_for_future_face_unlock(
     class UnlockDialog:
         request = OpaqueVolumeUnlockRequest(
             password=disk_password,
-            hidden_protection_password=None,
         )
 
         def __init__(self, selected: Path, parent: object = None) -> None:
@@ -1457,7 +1455,6 @@ def test_opaque_disk_falls_back_to_compact_password_dialog(
     class UnlockDialog:
         request = OpaqueVolumeUnlockRequest(
             "outer correct horse battery staple",
-            "hidden correct horse battery staple",
         )
 
         def __init__(self, selected: Path, parent: object = None) -> None:
@@ -1533,7 +1530,7 @@ def test_opaque_disk_falls_back_to_compact_password_dialog(
 
     assert manager.opaque_call is not None
     assert manager.opaque_call["password"].startswith("outer")
-    assert manager.opaque_call["hidden_protection_password"].startswith("hidden")
+    assert "hidden_protection_password" not in manager.opaque_call
     assert manager.opaque_call["context_menu_labels"][3] == (
         "Изменить пароль диска"
     )

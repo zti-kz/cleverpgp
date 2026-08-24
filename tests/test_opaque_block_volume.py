@@ -11,7 +11,7 @@ from cleverpgp.core.block_volume import (
     BlockIntegrityError,
     BlockVolumeError,
 )
-from cleverpgp.core.errors import AuthenticationError
+from cleverpgp.core.errors import AuthenticationError, ValidationError
 from cleverpgp.core.hidden_volume import HiddenBlockVolume
 from cleverpgp.core.opaque_block_volume import (
     OPAQUE_BLOCK_AAD,
@@ -123,6 +123,39 @@ def test_authenticated_header_opens_without_forwarding_password(
     assert reopened.role == "outer"
     reopened.write_blocks(3, b"direct" + bytes(LOGICAL_BLOCK_SIZE - 6))
     assert reopened.read_blocks(3, 1).startswith(b"direct")
+    reopened.close()
+
+
+def test_outer_projection_is_automatically_bounded_by_authenticated_header(
+    tmp_path: Path,
+    header_store: OpaqueVolumeHeaderStore,
+) -> None:
+    visible_blocks = MIN_LOGICAL_CAPACITY // LOGICAL_BLOCK_SIZE
+    session = OpaqueBlockVolume.create_outer(
+        tmp_path / "bounded.cpgv",
+        OUTER_PASSWORD,
+        logical_capacity=4 * MIN_LOGICAL_CAPACITY,
+        outer_projection_block_count=visible_blocks,
+        label="Outer private disk",
+        storage_format=STORAGE_FORMAT,
+        header_store=header_store,
+    )
+
+    assert session.block_count == visible_blocks
+    session.write_blocks(visible_blocks - 1, b"a" * LOGICAL_BLOCK_SIZE)
+    with pytest.raises(ValidationError, match="границы внешнего диска"):
+        session.write_blocks(visible_blocks, b"b" * LOGICAL_BLOCK_SIZE)
+    path = session.path
+    session.close()
+
+    reopened = OpaqueBlockVolume.open(
+        path,
+        OUTER_PASSWORD,
+        header_store=header_store,
+    )
+    assert reopened.block_count == visible_blocks
+    with pytest.raises(ValidationError, match="границы внешнего диска"):
+        reopened.read_blocks(visible_blocks, 1)
     reopened.close()
 
 

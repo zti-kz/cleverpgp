@@ -57,20 +57,18 @@ def test_hidden_creation_rejects_same_or_mismatched_passwords() -> None:
     application.processEvents()
 
 
-def test_opaque_unlock_can_request_hidden_region_protection(
+def test_opaque_unlock_only_requests_the_selected_disk_password(
     tmp_path: Path,
 ) -> None:
     application = QApplication.instance() or QApplication([])
     dialog = OpaqueVolumeUnlockDialog(tmp_path / "private.cpgv")
     dialog.password.setText("outer correct horse battery staple")
-    dialog.protect_hidden.setChecked(True)
-    dialog.protection_password.setText("hidden correct horse battery staple")
 
     dialog.accept()
 
     assert dialog.request is not None
     assert dialog.request.password.startswith("outer")
-    assert dialog.request.hidden_protection_password is not None
-    assert not dialog.protection_password.isHidden()
+    assert not hasattr(dialog, "protect_hidden")
+    assert not hasattr(dialog, "protection_password")
     dialog.close()
     application.processEvents()

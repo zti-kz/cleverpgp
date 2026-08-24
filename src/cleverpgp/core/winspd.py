@@ -374,7 +374,7 @@ def create_hidden_windows_block_volume(
     header_store: OpaqueVolumeHeaderStore | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> HiddenWindowsVolumeHeaders:
-    """Prepare both v4 partition views before either filesystem is formatted."""
+    """Prepare both v6 partition views before either filesystem is formatted."""
 
     if outer_capacity < MIN_WINDOWS_DISK_CAPACITY:
         raise ValidationError(
@@ -386,6 +386,15 @@ def create_hidden_windows_block_volume(
         )
     store = header_store or OpaqueVolumeHeaderStore()
     target = resolve_file_hosted_container_path(path)
+    cover_blocks = outer_capacity // LOGICAL_BLOCK_SIZE
+    region_blocks = HiddenBlockVolume.required_region_blocks(hidden_capacity)
+    region_start = cover_blocks - region_blocks
+    minimum_outer_blocks = MIN_WINDOWS_DISK_CAPACITY // LOGICAL_BLOCK_SIZE
+    if region_start < minimum_outer_blocks:
+        raise ValidationError(
+            "После размещения скрытого диска внешнему диску должно оставаться "
+            "не менее 32 МБ."
+        )
     outer = None
     created = False
     try:
@@ -395,6 +404,7 @@ def create_hidden_windows_block_volume(
             logical_capacity=outer_capacity,
             label=outer_label,
             storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
+            outer_projection_block_count=region_start,
             overwrite=overwrite,
             header_store=store,
             progress=(
@@ -407,17 +417,8 @@ def create_hidden_windows_block_volume(
             ),
         )
         created = True
-        cover_blocks = outer.block_count
         outer.close()
         outer = None
-        region_blocks = HiddenBlockVolume.required_region_blocks(hidden_capacity)
-        region_start = cover_blocks - region_blocks
-        minimum_outer_blocks = MIN_WINDOWS_DISK_CAPACITY // LOGICAL_BLOCK_SIZE
-        if region_start < minimum_outer_blocks:
-            raise ValidationError(
-                "После размещения скрытого диска внешнему диску должно оставаться "
-                "не менее 32 МБ."
-            )
 
         OpaqueBlockVolume.add_hidden_in_verified_free_region(
             target,
@@ -454,7 +455,6 @@ def create_hidden_windows_block_volume(
         with OpaqueBlockVolume.open_with_header(
             target,
             outer_header,
-            protected_hidden_descriptor=hidden_header.hidden_descriptor,
         ) as protected_outer:
             initialize_windows_partition(protected_outer, library)
             if protected_outer.damage_prevented:

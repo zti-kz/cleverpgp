@@ -901,7 +901,7 @@ class WindowsSystemDiskManager:
         progress: Callable[[int, str], None] | None = None,
         header_store: OpaqueVolumeHeaderStore | None = None,
     ) -> str:
-        """Create, format, and leave the hidden v4 projection mounted."""
+        """Create, format, and leave the hidden v6 projection mounted."""
 
         if self.mounted_drive is not None:
             raise MountUnavailableError(
@@ -939,7 +939,7 @@ class WindowsSystemDiskManager:
                 None,
                 device_name=None,
                 opaque_header=headers.outer,
-                protection_header=headers.hidden,
+                protection_header=None,
                 progress=(
                     None
                     if progress is None
@@ -949,9 +949,18 @@ class WindowsSystemDiskManager:
                     )
                 ),
             )
+            outer_blocks = getattr(
+                headers.outer,
+                "outer_projection_block_count",
+                None,
+            ) or getattr(headers.outer, "cover_block_count", None)
             active_disk = wait_for_new_cleverpgp_disk(
                 outer_before,
-                expected_size=outer_capacity,
+                expected_size=(
+                    outer_blocks * LOGICAL_BLOCK_SIZE
+                    if outer_blocks is not None
+                    else outer_capacity
+                ),
             )
             endpoint = getattr(self._process_manager, "control_endpoint", None)
             if endpoint is None:
@@ -1200,12 +1209,11 @@ class WindowsSystemDiskManager:
         container_path: Path,
         password: str,
         *,
-        hidden_protection_password: str | None = None,
         context_menu_labels: tuple[str, ...] | None = None,
         progress: Callable[[int, str], None] | None = None,
         header_store: OpaqueVolumeHeaderStore | None = None,
     ) -> str:
-        """Authenticate a portable v5 disk or an opaque v4 disk locally."""
+        """Authenticate a portable v5 disk or an opaque v6 disk locally."""
 
         source = resolve_file_hosted_container_path(container_path)
         if not source.is_file():
@@ -1246,15 +1254,9 @@ class WindowsSystemDiskManager:
                 password,
                 progress=unlock_progress,
             )
-            protection = (
-                store.unlock(stream, hidden_protection_password)
-                if hidden_protection_password is not None
-                else None
-            )
         return self.mount_authenticated_opaque(
             source,
             selected,
-            protection_header=protection,
             context_menu_labels=context_menu_labels,
             progress=(
                 None
@@ -1294,7 +1296,11 @@ class WindowsSystemDiskManager:
             logical_capacity = descriptor.hidden_block_count * LOGICAL_BLOCK_SIZE
         else:
             logical_capacity = (
-                selected_header.cover_block_count * LOGICAL_BLOCK_SIZE
+                (
+                    selected_header.outer_projection_block_count
+                    or selected_header.cover_block_count
+                )
+                * LOGICAL_BLOCK_SIZE
             )
 
         before = list_windows_disks()

@@ -27,6 +27,7 @@ from cleverpgp.core.hidden_volume import (
     HiddenBlockVolume,
     HiddenRegionProtectedVolume,
     HiddenVolumeDescriptor,
+    ProtectedOuterVolume,
 )
 from cleverpgp.core.mapped_stream import MappedFileStream
 from cleverpgp.core.opaque_volume_header import (
@@ -42,7 +43,7 @@ ProgressCallback = Callable[[int, int], None]
 
 
 class OpaqueCoverBlockVolume:
-    """Authenticated outer block array whose metadata lives in a v4 header."""
+    """Authenticated outer block array whose metadata lives in a v6 header."""
 
     def __init__(
         self,
@@ -198,7 +199,7 @@ class OpaqueCoverBlockVolume:
     def resize(self, logical_capacity: int, **_: object) -> None:
         del logical_capacity
         raise ValidationError(
-            "Изменение размера формата v4 будет включено после защиты "
+            "Изменение размера скрытого формата будет включено после защиты "
             "границ скрытого диска."
         )
 
@@ -388,7 +389,7 @@ class OpaqueVolumeSession:
 
 
 class OpaqueBlockVolume:
-    """Creates and opens v4 cover/hidden projections by their passwords."""
+    """Creates and opens v6 cover/hidden projections by their passwords."""
 
     @classmethod
     def create_outer(
@@ -399,6 +400,7 @@ class OpaqueBlockVolume:
         logical_capacity: int,
         label: str = "Clever PGP",
         storage_format: str,
+        outer_projection_block_count: int | None = None,
         overwrite: bool = False,
         header_store: OpaqueVolumeHeaderStore | None = None,
         progress: ProgressCallback | None = None,
@@ -410,6 +412,12 @@ class OpaqueBlockVolume:
             raise ValidationError("Название диска должно быть не длиннее 31 символа.")
         if not storage_format or len(storage_format) > 63:
             raise ValidationError("Некорректное назначение блочного хранилища.")
+        if outer_projection_block_count is not None and (
+            not isinstance(outer_projection_block_count, int)
+            or outer_projection_block_count <= 0
+            or outer_projection_block_count > block_count
+        ):
+            raise ValidationError("Некорректный размер внешней области диска.")
         if target.exists() and not overwrite:
             raise OutputExistsError(f"Контейнер уже существует: {target}")
         if not target.parent.is_dir():
@@ -432,6 +440,7 @@ class OpaqueBlockVolume:
             label=clean_label,
             storage_format=storage_format,
             created_at=datetime.now(UTC).isoformat(),
+            outer_projection_block_count=outer_projection_block_count,
         )
         temporary_path: Path | None = None
         try:
@@ -490,7 +499,13 @@ class OpaqueBlockVolume:
 
         stream = target.open("r+b")
         cover = OpaqueCoverBlockVolume(target, stream, header)
-        return OpaqueVolumeSession("outer", cover, cover)
+        selected: BlockVolume = cover
+        if header.outer_projection_block_count is not None:
+            selected = ProtectedOuterVolume(
+                cover,
+                header.outer_projection_block_count,
+            )
+        return OpaqueVolumeSession("outer", cover, selected)
 
     @classmethod
     def open(
@@ -529,7 +544,12 @@ class OpaqueBlockVolume:
             cover = OpaqueCoverBlockVolume(source, stream, header)
             if header.role == "outer":
                 selected: BlockVolume = cover
-                if protected_hidden_descriptor is not None:
+                if header.outer_projection_block_count is not None:
+                    selected = ProtectedOuterVolume(
+                        cover,
+                        header.outer_projection_block_count,
+                    )
+                elif protected_hidden_descriptor is not None:
                     selected = HiddenRegionProtectedVolume(
                         cover,
                         protected_hidden_descriptor,
@@ -631,6 +651,8 @@ class OpaqueBlockVolume:
         if session.role != "outer":
             session.close()
             raise ValidationError("Требуется пароль внешнего диска.")
+        if isinstance(session._selected, ProtectedOuterVolume):
+            return session
         try:
             hidden_header = store.unlock(
                 session._cover._stream,

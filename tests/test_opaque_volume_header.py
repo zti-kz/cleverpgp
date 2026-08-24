@@ -48,6 +48,7 @@ def outer_header() -> OpaqueVolumeHeader:
         label="Outer research disk",
         storage_format="CLEVERPGP-WINDOWS-BLOCK-V1",
         created_at="2026-08-23T03:00:00+00:00",
+        outer_projection_block_count=3000,
     )
 
 
