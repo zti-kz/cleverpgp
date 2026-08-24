@@ -81,6 +81,11 @@ class FileCryptoService:
     ) -> Path:
         self._report_progress(progress, 2, "Проверка исходного файла")
         source, target = self._validate_paths(source_path, target_path, overwrite)
+        if source.suffix.casefold() in {".cpgp", ".cpgv", ".cpgk"}:
+            raise ValidationError(
+                "Этот файл уже защищён или является служебным файлом Clever PGP. "
+                "Повторное шифрование не требуется."
+            )
         self._validate_master_key(master_key)
         identity_service = self._identity_service()
 

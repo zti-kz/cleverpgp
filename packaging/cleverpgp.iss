@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.13.7"
+  #define AppVersion "0.13.8"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -82,19 +82,21 @@ Root: HKLM; Subkey: "Software\Classes\*\shell\BioPGP.Encrypt"; ValueType: none; 
 Root: HKLM; Subkey: "Software\Classes\BioPGP.EncryptedFile"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\BioPGP.ContainerFile"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Unmount"; ValueType: none; Flags: deletekey
+Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\.bpgp"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\.bpgv"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: ""; ValueData: "Зашифровать с Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"
-Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell encrypt ""%1"""
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --encrypt-file ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgp"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.EncryptedFile"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.cpgp"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile"; ValueType: string; ValueName: ""; ValueData: "Зашифрованный файл Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: ""; ValueData: "Расшифровать с Clever PGP"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell decrypt ""%1"""
+Root: HKLM; Subkey: "Software\Classes\CleverPGP.EncryptedFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --decrypt-file ""%1"""
 Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: ""; ValueData: "CleverPGP.PublicKey"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\.cpgk"; ValueType: string; ValueName: "Content Type"; ValueData: "application/x-clever-pgp-public-key"; Flags: uninsdeletevalue
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.PublicKey"; ValueType: string; ValueName: ""; ValueData: "Открытый ключ Clever PGP"; Flags: uninsdeletekey
@@ -109,21 +111,6 @@ Root: HKLM; Subkey: "Software\Classes\CleverPGP.ContainerFile\DefaultIcon"; Valu
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.ContainerFile\shell\open"; ValueType: string; ValueName: ""; ValueData: "Подключить зашифрованный диск"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.ContainerFile\shell\open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\CleverPGP.ContainerFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --container ""%1"""
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu"; ValueType: string; ValueName: "MUIVerb"; ValueData: "Clever PGP"; Flags: uninsdeletekey
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu"; ValueType: string; ValueName: "AppliesTo"; ValueData: "System.Volume.FileSystem:=""FUSE"""
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu"; ValueType: string; ValueName: "SubCommands"; ValueData: ""
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Open"; ValueType: string; ValueName: "MUIVerb"; ValueData: "Открыть зашифрованный диск"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Open"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Open\command"; ValueType: string; ValueName: ""; ValueData: """{sys}\explorer.exe"" ""%1"""
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Info"; ValueType: string; ValueName: "MUIVerb"; ValueData: "Сведения о диске"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Info"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Info\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --disk-info ""%1"""
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount"; ValueType: string; ValueName: "MUIVerb"; ValueData: "Отключить зашифрованный диск"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount"; ValueType: dword; ValueName: "CommandFlags"; ValueData: "$00000020"
-Root: HKLM; Subkey: "Software\Classes\Drive\shell\CleverPGP.Menu\shell\Unmount\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --unmount ""%1"""
-
 [Run]
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winfsp-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinFspInstalled
 Filename: "{sys}\msiexec.exe"; Parameters: "/i ""{tmp}\winspd-cleverpgp.msi"" /passive /norestart"; StatusMsg: "Устанавливается компонент виртуального диска..."; Flags: waituntilterminated; Check: not IsWinSpdInstalled

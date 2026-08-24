@@ -21,8 +21,9 @@ New-Item -Path $EncryptVerb -Force | Out-Null
 Set-Item -Path $EncryptVerb -Value "Зашифровать с Clever PGP"
 New-ItemProperty -Path $EncryptVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $EncryptVerb -Name "MultiSelectModel" -Value "Single" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $EncryptVerb -Name "AppliesTo" -Value "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk" -PropertyType String -Force | Out-Null
 $EncryptCommand = New-Item -Path (Join-Path $EncryptVerb "command") -Force
-Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp.shell encrypt `"%1`""
+Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --encrypt-file `"%1`""
 
 New-Item -Path $EncryptedExtension -Force | Out-Null
 Set-Item -Path $EncryptedExtension -Value "CleverPGP.EncryptedFile"
@@ -36,7 +37,7 @@ $OpenVerb = New-Item -Path (Join-Path $EncryptedType "shell\open") -Force
 Set-Item -Path $OpenVerb.PSPath -Value "Расшифровать с Clever PGP"
 New-ItemProperty -Path $OpenVerb.PSPath -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 $DecryptCommand = New-Item -Path (Join-Path $OpenVerb.PSPath "command") -Force
-Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp.shell decrypt `"%1`""
+Set-Item -Path $DecryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --decrypt-file `"%1`""
 
 New-Item -Path $PublicKeyExtension -Force | Out-Null
 Set-Item -Path $PublicKeyExtension -Value "CleverPGP.PublicKey"
@@ -66,36 +67,11 @@ New-ItemProperty -Path $MountVerb.PSPath -Name "Icon" -Value $PythonWindowed -Pr
 $MountCommand = New-Item -Path (Join-Path $MountVerb.PSPath "command") -Force
 Set-Item -Path $MountCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --container `"%1`""
 
-if (Test-Path -LiteralPath $LegacyUnmountVerb) {
-    Remove-Item -LiteralPath $LegacyUnmountVerb -Recurse -Force
+foreach ($LegacyDriveVerb in @($LegacyUnmountVerb, $DriveMenu)) {
+    if (Test-Path -LiteralPath $LegacyDriveVerb) {
+        Remove-Item -LiteralPath $LegacyDriveVerb -Recurse -Force
+    }
 }
-New-Item -Path $DriveMenu -Force | Out-Null
-New-ItemProperty -Path $DriveMenu -Name "MUIVerb" -Value "Clever PGP" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $DriveMenu -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $DriveMenu -Name "AppliesTo" -Value 'System.Volume.FileSystem:="FUSE"' -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $DriveMenu -Name "SubCommands" -Value "" -PropertyType String -Force | Out-Null
-
-$OpenDriveVerb = Join-Path $DriveMenu "shell\Open"
-New-Item -Path $OpenDriveVerb -Force | Out-Null
-New-ItemProperty -Path $OpenDriveVerb -Name "MUIVerb" -Value "Открыть зашифрованный диск" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $OpenDriveVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
-$OpenDriveCommand = New-Item -Path (Join-Path $OpenDriveVerb "command") -Force
-Set-Item -Path $OpenDriveCommand.PSPath -Value "`"$env:SystemRoot\explorer.exe`" `"%1`""
-
-$InfoVerb = Join-Path $DriveMenu "shell\Info"
-New-Item -Path $InfoVerb -Force | Out-Null
-New-ItemProperty -Path $InfoVerb -Name "MUIVerb" -Value "Сведения о диске" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $InfoVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
-$InfoCommand = New-Item -Path (Join-Path $InfoVerb "command") -Force
-Set-Item -Path $InfoCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --disk-info `"%1`""
-
-$UnmountVerb = Join-Path $DriveMenu "shell\Unmount"
-New-Item -Path $UnmountVerb -Force | Out-Null
-New-ItemProperty -Path $UnmountVerb -Name "MUIVerb" -Value "Отключить зашифрованный диск" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $UnmountVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $UnmountVerb -Name "CommandFlags" -Value 32 -PropertyType DWord -Force | Out-Null
-$UnmountCommand = New-Item -Path (Join-Path $UnmountVerb "command") -Force
-Set-Item -Path $UnmountCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --unmount `"%1`""
 
 Add-Type -Namespace CleverPGP -Name ShellNotify -MemberDefinition @"
 [System.Runtime.InteropServices.DllImport("shell32.dll")]

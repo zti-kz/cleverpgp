@@ -338,6 +338,14 @@ def create_windows_block_volume(
     if logical_capacity < MIN_WINDOWS_DISK_CAPACITY:
         raise ValidationError("Виртуальный зашифрованный диск должен быть не меньше 32 МБ.")
     target = resolve_file_hosted_container_path(path)
+    # A new ordinary image is intentionally exposed as a RAW disk.  Windows
+    # otherwise assigns a drive letter to the empty MBR partition and opens
+    # its own "format this disk" prompt before Clever PGP can format it.  The
+    # elevated formatting helper creates the partition, formats it without an
+    # access path, and assigns the drive letter only after the file system is
+    # ready.  ``library`` stays in the signature because loading it validates
+    # the installed WinSpd runtime before the large image is created.
+    del library
     volume = EncryptedBlockVolume.create(
         target,
         master_key,
@@ -349,13 +357,7 @@ def create_windows_block_volume(
         storage_format=WINDOWS_BLOCK_STORAGE_FORMAT,
         progress=progress,
     )
-    try:
-        initialize_windows_partition(volume, library)
-        return volume
-    except Exception:
-        volume.close()
-        target.unlink(missing_ok=True)
-        raise
+    return volume
 
 
 def create_hidden_windows_block_volume(

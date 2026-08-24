@@ -109,6 +109,11 @@ def winspd_driver_available() -> bool:
 
 
 def _run_powershell(script: str, *, timeout: float = 30.0) -> str:
+    creation_flags = (
+        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if sys.platform == "win32"
+        else 0
+    )
     result = subprocess.run(
         [
             _powershell_executable(),
@@ -124,6 +129,7 @@ def _run_powershell(script: str, *, timeout: float = 30.0) -> str:
         capture_output=True,
         text=True,
         timeout=timeout,
+        creationflags=creation_flags,
     )
     if result.returncode:
         message = result.stderr.strip() or result.stdout.strip()
@@ -438,8 +444,10 @@ def format_new_cleverpgp_disk(
         raise ValueError("Test file system must be NTFS or exFAT.")
     if disk.size != expected_size or disk.number < 0:
         raise MountUnavailableError("Параметры временного диска изменились.")
-    if disk.partition_style.upper() != "MBR":
-        raise MountUnavailableError("Ожидалась таблица разделов MBR Clever PGP.")
+    if disk.partition_style.upper() not in ("RAW", "MBR"):
+        raise MountUnavailableError(
+            "Ожидался новый или подготовленный диск Clever PGP."
+        )
     if disk.is_boot or disk.is_system:
         raise MountUnavailableError(
             "Системный или загрузочный диск Windows форматировать запрещено."
@@ -482,18 +490,24 @@ if ([String]$disk.SerialNumber -ne $expectedSerial) {{ throw 'Disk serial change
 if ([String]$disk.UniqueId -ne $expectedUnique) {{ throw 'Disk identity changed.' }}
 if ([String]$disk.BusType -ne $expectedBus) {{ throw 'Disk bus changed.' }}
 if ($disk.FriendlyName -notmatch 'CleverPGP|WinSpd') {{ throw 'Disk identity changed.' }}
-if ($disk.PartitionStyle -ne 'MBR') {{ throw 'Expected an MBR test disk.' }}
+if ($disk.PartitionStyle -notin @('RAW', 'MBR')) {{ throw 'Expected a RAW or MBR Clever PGP disk.' }}
 if ([Boolean]$disk.IsBoot -or [Boolean]$disk.IsSystem) {{ throw 'System disk is forbidden.' }}
-$partitions = @(Get-Partition -DiskNumber {disk.number} | Where-Object {{ $_.Type -ne 'Reserved' }})
-if ($partitions.Count -ne 1) {{ throw 'Expected exactly one data partition.' }}
-$partition = $partitions[0]
+$partitions = @(Get-Partition -DiskNumber {disk.number} -ErrorAction SilentlyContinue | Where-Object {{ $_.Type -ne 'Reserved' }})
+if ($disk.PartitionStyle -eq 'RAW') {{
+    if ($partitions.Count -ne 0) {{ throw 'A RAW disk unexpectedly contains partitions.' }}
+    Initialize-Disk -Number {disk.number} -PartitionStyle MBR -Confirm:$false | Out-Null
+    $partition = New-Partition -DiskNumber {disk.number} -UseMaximumSize -Offset 1048576 -MbrType IFS
+}} else {{
+    if ($partitions.Count -ne 1) {{ throw 'Expected exactly one data partition.' }}
+    $partition = $partitions[0]
+}}
 if ([UInt64]$partition.Offset -ne [UInt64]1048576) {{ throw 'Unexpected partition offset.' }}
+$partition | Format-Volume -FileSystem {normalized_file_system} -NewFileSystemLabel $label -AllocationUnitSize 4096 -Force -Confirm:$false | Out-Null
+$partition = Get-Partition -DiskNumber {disk.number} -PartitionNumber $partition.PartitionNumber
 if (-not $partition.DriveLetter) {{
     $partition | Add-PartitionAccessPath -AssignDriveLetter
     $partition = Get-Partition -DiskNumber {disk.number} -PartitionNumber $partition.PartitionNumber
 }}
-$partition | Format-Volume -FileSystem {normalized_file_system} -NewFileSystemLabel $label -AllocationUnitSize 4096 -Force -Confirm:$false | Out-Null
-$partition = Get-Partition -DiskNumber {disk.number} -PartitionNumber $partition.PartitionNumber
 if (-not $partition.DriveLetter) {{ throw 'Windows did not assign a drive letter.' }}
 [PSCustomObject]@{{ DriveLetter = [String]$partition.DriveLetter }} | ConvertTo-Json -Compress
 """

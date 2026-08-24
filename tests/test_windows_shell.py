@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from cleverpgp.core.windows_shell import (
+    CONTAINER_OPEN_VERB_KEY,
     SYSTEM_DRIVE_MENU_KEY,
     WindowsDriveContextMenu,
     drive_context_menu_values,
@@ -91,6 +92,12 @@ class FakeRegistry:
             raise OSError("Key has children")
         del self.keys[subkey]
 
+    def DeleteValue(self, key: FakeKey, name: str) -> None:
+        try:
+            del self.keys[key.path][name]
+        except KeyError as error:
+            raise FileNotFoundError(name) from error
+
 
 def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> None:
     executable = tmp_path / "CleverPGP.exe"
@@ -141,6 +148,7 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
     assert "--change-disk-algorithm" in str(algorithm_command)
     assert "%1" in str(algorithm_command)
     assert "cmd.exe" not in str(algorithm_command).lower()
+    assert not any(r"\shell\Open" in item.subkey for item in values)
 
 
 def test_context_menu_registers_and_removes_only_its_own_tree(
@@ -174,6 +182,7 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
         'System.ItemPathDisplay:="Y:\\' + '"'
     )
     assert notifications == [True]
+    assert registry.keys[CONTAINER_OPEN_VERB_KEY]["LegacyDisable"][1] == ""
 
     menu.remove()
 
@@ -183,6 +192,7 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
         for key in registry.keys
     )
     assert r"Software\Classes\Drive\shell\Unrelated" in registry.keys
+    assert "LegacyDisable" not in registry.keys[CONTAINER_OPEN_VERB_KEY]
     assert notifications == [True, True]
 
 
@@ -212,7 +222,23 @@ def test_hidden_disk_menu_omits_unsupported_resize_action(tmp_path: Path) -> Non
     assert any("\\Unmount" in value.subkey for value in values)
 
 
-def test_installer_and_development_menu_include_compact_disk_information() -> None:
+def test_disk_management_menu_is_created_only_for_an_active_drive() -> None:
+    project = Path(__file__).resolve().parents[1]
+    installer = (project / "packaging" / "cleverpgp.iss").read_text(encoding="utf-8")
+    development = (project / "install_context_menu.ps1").read_text(
+        encoding="utf-8"
+    )
+    runtime = (project / "src" / "cleverpgp" / "core" / "windows_shell.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'Subkey: "Software\\Classes\\Drive\\shell\\CleverPGP.Menu"; ValueType: none; Flags: deletekey' in installer
+    assert "$LegacyDriveVerb" in development
+    assert "--disk-info" in runtime
+    assert r"\shell\Open" not in runtime
+
+
+def test_file_menu_uses_explicit_actions_and_excludes_cleverpgp_formats() -> None:
     project = Path(__file__).resolve().parents[1]
     installer = (project / "packaging" / "cleverpgp.iss").read_text(encoding="utf-8")
     development = (project / "install_context_menu.ps1").read_text(
@@ -220,8 +246,11 @@ def test_installer_and_development_menu_include_compact_disk_information() -> No
     )
 
     for source in (installer, development):
-        assert "Сведения о диске" in source
-        assert "--disk-info" in source
+        assert "--encrypt-file" in source
+        assert "--decrypt-file" in source
+        assert "NOT System.FileExtension:=.cpgp" in source
+        assert "NOT System.FileExtension:=.cpgv" in source
+        assert "NOT System.FileExtension:=.cpgk" in source
 
 
 def test_public_key_association_imports_from_explorer() -> None:

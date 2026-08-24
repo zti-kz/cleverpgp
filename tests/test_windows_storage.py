@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,6 +29,7 @@ from cleverpgp.core.windows_storage import (
     WindowsDiskInfo,
     WindowsSystemDiskManager,
     WindowsVolumeInfo,
+    _run_powershell,
     disk_drive_letters,
     extend_cleverpgp_ntfs_partition,
     format_ephemeral_cleverpgp_disk,
@@ -56,6 +58,20 @@ class FakeProcessManager:
     def stop(self) -> None:
         self.running = False
         self.stopped = True
+
+
+def test_powershell_storage_commands_are_hidden_on_windows() -> None:
+    completed = SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+    with (
+        patch("cleverpgp.core.windows_storage.sys.platform", "win32"),
+        patch(
+            "cleverpgp.core.windows_storage.subprocess.run",
+            return_value=completed,
+        ) as run,
+    ):
+        assert _run_powershell("Get-Disk") == "ok"
+
+    assert run.call_args.kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW
 
 
 def disk(
@@ -273,11 +289,32 @@ def test_format_command_revalidates_target_before_destructive_operation() -> Non
     assert "$disk.FriendlyName -ne $expectedFriendly" in script
     assert "$disk.SerialNumber -ne $expectedSerial" in script
     assert "$disk.UniqueId -ne $expectedUnique" in script
-    assert "$disk.PartitionStyle -ne 'MBR'" in script
+    assert "$disk.PartitionStyle -notin @('RAW', 'MBR')" in script
     assert "$disk.IsBoot -or [Boolean]$disk.IsSystem" in script
     assert "$partition.Offset -ne [UInt64]1048576" in script
     assert script.index("Get-Disk -Number 7") < script.index("Format-Volume")
     assert script.index("$partition.Offset") < script.index("Format-Volume")
+    assert script.index("Format-Volume") < script.index("Add-PartitionAccessPath")
+
+
+def test_format_command_initializes_raw_disk_before_formatting() -> None:
+    expected_size = 128 * 1024 * 1024
+    candidate = disk(7, "CleverPGP", expected_size, "RAW")
+    with patch(
+        "cleverpgp.core.windows_storage._run_powershell",
+        return_value='{"DriveLetter":"Z"}',
+    ) as run_powershell:
+        assert format_ephemeral_cleverpgp_disk(
+            candidate,
+            expected_size=expected_size,
+            file_system="NTFS",
+        ) == "Z:"
+
+    script = run_powershell.call_args.args[0]
+    assert "Initialize-Disk -Number 7 -PartitionStyle MBR" in script
+    assert "New-Partition -DiskNumber 7 -UseMaximumSize -Offset 1048576" in script
+    assert script.index("Initialize-Disk") < script.index("Format-Volume")
+    assert script.index("Format-Volume") < script.index("Add-PartitionAccessPath")
 
 
 def test_refuses_new_disk_marked_as_boot_or_system() -> None:

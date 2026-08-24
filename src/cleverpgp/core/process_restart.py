@@ -30,7 +30,7 @@ def restart_after_process_exit(
             subprocess,
             "CREATE_NEW_PROCESS_GROUP",
             0,
-        )
+        ) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         subprocess.Popen(
             command,

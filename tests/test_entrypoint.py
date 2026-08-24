@@ -14,6 +14,18 @@ def test_shell_mode_is_dispatched_to_shell_entrypoint() -> None:
     shell_main.assert_called_once_with(["encrypt", "report.txt"])
 
 
+def test_explicit_explorer_file_actions_are_dispatched() -> None:
+    with patch("cleverpgp.shell.main", side_effect=[4, 5]) as shell_main:
+        encrypt_result = main(["--encrypt-file", "report with spaces.txt"])
+        decrypt_result = main(["--decrypt-file", "report with spaces.txt.cpgp"])
+
+    assert (encrypt_result, decrypt_result) == (4, 5)
+    assert shell_main.call_args_list == [
+        ((["encrypt", "report with spaces.txt"],), {}),
+        ((["decrypt", "report with spaces.txt.cpgp"],), {}),
+    ]
+
+
 def test_direct_encrypted_file_is_dispatched_to_decryption(tmp_path: Path) -> None:
     encrypted = tmp_path / "report with spaces.txt.cpgp"
     with patch("cleverpgp.shell.main", return_value=0) as shell_main:

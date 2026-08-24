@@ -10,6 +10,7 @@ from cleverpgp.core.errors import (
     CryptographicIdentityError,
     InvalidEncryptedFileError,
     OutputExistsError,
+    ValidationError,
 )
 from cleverpgp.core.file_crypto import FileCryptoService
 from cleverpgp.core.identity import IdentityService
@@ -70,6 +71,23 @@ def test_file_round_trip_is_signed(
     assert result.sender_is_self
     assert result.sender_is_known
     assert result.sender.display_name == "Алмас"
+
+
+@pytest.mark.parametrize("extension", [".cpgp", ".cpgv", ".cpgk", ".CPGP"])
+def test_cleverpgp_formats_are_not_encrypted_again(
+    tmp_path: Path,
+    crypto: tuple[FileCryptoService, bytes],
+    extension: str,
+) -> None:
+    service, master_key = crypto
+    source = tmp_path / f"protected{extension}"
+    target = tmp_path / f"protected{extension}.cpgp"
+    source.write_bytes(b"already protected")
+
+    with pytest.raises(ValidationError, match="Повторное шифрование"):
+        service.encrypt_file(source, target, master_key)
+
+    assert not target.exists()
 
 
 def test_multi_recipient_file_opens_for_sender_and_recipient(tmp_path: Path) -> None:

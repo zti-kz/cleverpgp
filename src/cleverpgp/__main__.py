@@ -120,6 +120,14 @@ def main(argv: list[str] | None = None) -> int:
         from cleverpgp.shell import main as shell_main
 
         return shell_main(arguments[1:])
+    if arguments[:1] == ["--encrypt-file"] and len(arguments) == 2:
+        from cleverpgp.shell import main as shell_main
+
+        return shell_main(["encrypt", arguments[1]])
+    if arguments[:1] == ["--decrypt-file"] and len(arguments) == 2:
+        from cleverpgp.shell import main as shell_main
+
+        return shell_main(["decrypt", arguments[1]])
     if (
         len(arguments) == 1
         and Path(arguments[0]).suffix.lower() == ".cpgp"

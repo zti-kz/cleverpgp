@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ctypes
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -12,6 +11,9 @@ from cleverpgp.core.errors import MountUnavailableError
 
 SYSTEM_DRIVE_MENU_KEY = (
     r"Software\Classes\Drive\shell\CleverPGP.SystemMenu"
+)
+CONTAINER_OPEN_VERB_KEY = (
+    r"Software\Classes\CleverPGP.ContainerFile\shell\open"
 )
 _SHELL_ASSOCIATIONS_CHANGED = 0x08000000
 _SHELL_NOTIFY_IDLIST = 0x0000
@@ -54,8 +56,10 @@ def drive_context_menu_values(
         raise ValueError("Application command prefix must not be empty.")
     icon = f"{Path(icon_path).resolve()},0"
     applies_to = f'System.ItemPathDisplay:="{normalized_drive}\\' + '"'
-    explorer = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "explorer.exe"
-    open_command = subprocess.list2cmdline([str(explorer), "%1"])
+    # ``open_label`` is retained in the request protocol for compatibility
+    # with already published background hosts, but an attached drive is
+    # already open.  Its menu therefore contains only management operations.
+    del open_label
     unmount_command = subprocess.list2cmdline(
         [*prefix, "--unmount", "%1"]
     )
@@ -74,7 +78,6 @@ def drive_context_menu_values(
     info_command = subprocess.list2cmdline(
         [*prefix, "--disk-info", "%1"]
     )
-    open_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Open"
     info_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Info"
     settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
     password_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Password"
@@ -86,9 +89,6 @@ def drive_context_menu_values(
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "Icon", icon),
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "AppliesTo", applies_to),
         RegistryValue(SYSTEM_DRIVE_MENU_KEY, "SubCommands", ""),
-        RegistryValue(open_key, "MUIVerb", open_label),
-        RegistryValue(open_key, "Icon", icon),
-        RegistryValue(open_key + r"\command", "", open_command),
         RegistryValue(info_key, "MUIVerb", info_label),
         RegistryValue(info_key, "Icon", icon),
         RegistryValue(info_key + r"\command", "", info_command),
@@ -197,6 +197,16 @@ class WindowsDriveContextMenu:
                     registry.REG_DWORD if item.kind == "dword" else registry.REG_SZ
                 )
                 registry.SetValueEx(key, item.name, 0, value_type, item.value)
+        # Only one encrypted disk can be attached by the current MVP.  Hide
+        # the closed-container "open" verb while that slot is occupied; the
+        # mounted drive receives its exact, state-specific management menu.
+        with registry.CreateKeyEx(
+            registry.HKEY_CURRENT_USER,
+            CONTAINER_OPEN_VERB_KEY,
+            0,
+            registry.KEY_WRITE | view,
+        ) as key:
+            registry.SetValueEx(key, "LegacyDisable", 0, registry.REG_SZ, "")
         self._notify_shell()
 
     def remove(self) -> None:
@@ -204,6 +214,7 @@ class WindowsDriveContextMenu:
             return
         registry = self._registry_module()
         self._delete_existing(registry)
+        self._remove_container_open_suppression(registry)
         self._notify_shell()
 
     def _delete_existing(self, registry: Any) -> None:
@@ -214,6 +225,20 @@ class WindowsDriveContextMenu:
             SYSTEM_DRIVE_MENU_KEY,
             view=view,
         )
+
+    @staticmethod
+    def _remove_container_open_suppression(registry: Any) -> None:
+        view = getattr(registry, "KEY_WOW64_64KEY", 0)
+        try:
+            with registry.OpenKey(
+                registry.HKEY_CURRENT_USER,
+                CONTAINER_OPEN_VERB_KEY,
+                0,
+                registry.KEY_WRITE | view,
+            ) as key:
+                registry.DeleteValue(key, "LegacyDisable")
+        except (FileNotFoundError, OSError):
+            return
 
     def _registry_module(self) -> Any:
         if self._registry is None:

@@ -523,8 +523,10 @@ def _launch_elevated(command: list[str], timeout: float) -> int:
 def _validate_expected_disk(disk: WindowsDiskInfo) -> None:
     if disk.number < 0 or disk.size <= 0:
         raise MountUnavailableError("Параметры нового диска некорректны.")
-    if disk.partition_style.upper() != "MBR":
-        raise MountUnavailableError("Ожидалась таблица разделов MBR Clever PGP.")
+    if disk.partition_style.upper() not in ("RAW", "MBR"):
+        raise MountUnavailableError(
+            "Ожидался новый или подготовленный диск Clever PGP."
+        )
     if disk.is_boot or disk.is_system:
         raise MountUnavailableError(
             "Системный или загрузочный диск Windows форматировать запрещено."
