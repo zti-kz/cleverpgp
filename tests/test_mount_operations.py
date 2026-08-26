@@ -104,10 +104,10 @@ def test_windows_unmount_uses_system_disk_control_when_fuse_marker_is_absent(
             FakeControlStore.removed = selected
 
     class FakeContextMenu:
-        removed = False
+        removed: str | None = None
 
-        def remove(self) -> None:
-            type(self).removed = True
+        def remove(self, drive: str | None = None) -> None:
+            type(self).removed = drive
 
     drive_checks = iter((True, True, False, False))
     monkeypatch.setattr(
@@ -129,4 +129,4 @@ def test_windows_unmount_uses_system_disk_control_when_fuse_marker_is_absent(
 
     assert FakeControlStore.sent == (record, "stop")
     assert FakeControlStore.removed is record
-    assert FakeContextMenu.removed
+    assert FakeContextMenu.removed == "Z:"

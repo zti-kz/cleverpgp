@@ -8,6 +8,7 @@ if (-not (Test-Path -LiteralPath $PythonWindowed -PathType Leaf)) {
 
 $ClassesRoot = "HKCU:\Software\Classes"
 $EncryptVerb = Join-Path $ClassesRoot "*\shell\CleverPGP.Encrypt"
+$DecryptVerb = Join-Path $ClassesRoot "*\shell\CleverPGP.Decrypt"
 $SecureDeleteVerb = Join-Path $ClassesRoot "*\shell\CleverPGP.SecureDelete"
 $EncryptedExtension = Join-Path $ClassesRoot ".cpgp"
 $EncryptedType = Join-Path $ClassesRoot "CleverPGP.EncryptedFile"
@@ -24,9 +25,17 @@ New-Item -Path $EncryptVerb -Force | Out-Null
 Set-Item -Path $EncryptVerb -Value "Зашифровать с Clever PGP"
 New-ItemProperty -Path $EncryptVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
 New-ItemProperty -Path $EncryptVerb -Name "MultiSelectModel" -Value "Single" -PropertyType String -Force | Out-Null
-New-ItemProperty -Path $EncryptVerb -Name "AppliesTo" -Value "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk AND NOT System.FileExtension:=.cpgx" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $EncryptVerb -Name "AppliesTo" -Value 'NOT System.FileExtension:=".cpgp" AND NOT System.FileExtension:=".cpgv" AND NOT System.FileExtension:=".cpgk" AND NOT System.FileExtension:=".cpgx"' -PropertyType String -Force | Out-Null
 $EncryptCommand = New-Item -Path (Join-Path $EncryptVerb "command") -Force
 Set-Item -Path $EncryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --shell encrypt `"%1`""
+
+New-Item -Path $DecryptVerb -Force | Out-Null
+Set-Item -Path $DecryptVerb -Value "Расшифровать файл — Clever PGP"
+New-ItemProperty -Path $DecryptVerb -Name "Icon" -Value $PythonWindowed -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $DecryptVerb -Name "MultiSelectModel" -Value "Single" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $DecryptVerb -Name "AppliesTo" -Value 'System.FileExtension:=".cpgp"' -PropertyType String -Force | Out-Null
+$DirectDecryptCommand = New-Item -Path (Join-Path $DecryptVerb "command") -Force
+Set-Item -Path $DirectDecryptCommand.PSPath -Value "`"$PythonWindowed`" -m cleverpgp --shell decrypt `"%1`""
 
 New-Item -Path $SecureDeleteVerb -Force | Out-Null
 Set-Item -Path $SecureDeleteVerb -Value "Безвозвратно удалить файл — Clever PGP"

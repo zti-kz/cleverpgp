@@ -51,6 +51,7 @@ def drive_context_menu_values(
     algorithm_label: str | None = None,
 ) -> tuple[RegistryValue, ...]:
     normalized_drive = _normalize_drive(drive)
+    menu_key = drive_context_menu_key(normalized_drive)
     prefix = tuple(str(value) for value in command_prefix)
     if not prefix:
         raise ValueError("Application command prefix must not be empty.")
@@ -78,17 +79,17 @@ def drive_context_menu_values(
     info_command = subprocess.list2cmdline(
         [*prefix, "--disk-info", "%1"]
     )
-    info_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Info"
-    settings_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings"
-    password_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Password"
-    algorithm_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Algorithm"
-    resize_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize"
-    unmount_key = SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount"
+    info_key = menu_key + r"\shell\Info"
+    settings_key = menu_key + r"\shell\Settings"
+    password_key = menu_key + r"\shell\Password"
+    algorithm_key = menu_key + r"\shell\Algorithm"
+    resize_key = menu_key + r"\shell\Resize"
+    unmount_key = menu_key + r"\shell\Unmount"
     values = [
-        RegistryValue(SYSTEM_DRIVE_MENU_KEY, "MUIVerb", "Clever PGP"),
-        RegistryValue(SYSTEM_DRIVE_MENU_KEY, "Icon", icon),
-        RegistryValue(SYSTEM_DRIVE_MENU_KEY, "AppliesTo", applies_to),
-        RegistryValue(SYSTEM_DRIVE_MENU_KEY, "SubCommands", ""),
+        RegistryValue(menu_key, "MUIVerb", "Clever PGP"),
+        RegistryValue(menu_key, "Icon", icon),
+        RegistryValue(menu_key, "AppliesTo", applies_to),
+        RegistryValue(menu_key, "SubCommands", ""),
         RegistryValue(info_key, "MUIVerb", info_label),
         RegistryValue(info_key, "Icon", icon),
         RegistryValue(info_key + r"\command", "", info_command),
@@ -154,6 +155,7 @@ class WindowsDriveContextMenu:
         self._notifier = notifier
         self._command_prefix = tuple(command_prefix or application_command_prefix())
         self._icon_path = Path(icon_path or self._command_prefix[0]).resolve()
+        self._registered_drives: set[str] = set()
 
     def register(
         self,
@@ -172,9 +174,12 @@ class WindowsDriveContextMenu:
                 "Контекстное меню виртуального диска доступно только в Windows."
             )
         registry = self._registry_module()
-        self._delete_existing(registry)
+        normalized_drive = _normalize_drive(drive)
+        self._delete_drive(registry, normalized_drive)
+        self._delete_legacy_menu(registry)
+        self._remove_container_open_suppression(registry)
         values = drive_context_menu_values(
-            drive,
+            normalized_drive,
             command_prefix=self._command_prefix,
             icon_path=self._icon_path,
             open_label=open_label,
@@ -197,27 +202,35 @@ class WindowsDriveContextMenu:
                     registry.REG_DWORD if item.kind == "dword" else registry.REG_SZ
                 )
                 registry.SetValueEx(key, item.name, 0, value_type, item.value)
-        # Only one encrypted disk can be attached by the current MVP.  Hide
-        # the closed-container "open" verb while that slot is occupied; the
-        # mounted drive receives its exact, state-specific management menu.
-        with registry.CreateKeyEx(
-            registry.HKEY_CURRENT_USER,
-            CONTAINER_OPEN_VERB_KEY,
-            0,
-            registry.KEY_WRITE | view,
-        ) as key:
-            registry.SetValueEx(key, "LegacyDisable", 0, registry.REG_SZ, "")
+        self._registered_drives.add(normalized_drive)
         self._notify_shell()
 
-    def remove(self) -> None:
+    def remove(self, drive: str | None = None) -> None:
         if sys.platform != "win32" and self._registry is None:
             return
         registry = self._registry_module()
-        self._delete_existing(registry)
+        if drive is None:
+            targets = tuple(self._registered_drives)
+        else:
+            targets = (_normalize_drive(drive),)
+        for target in targets:
+            self._delete_drive(registry, target)
+            self._registered_drives.discard(target)
+        self._delete_legacy_menu(registry)
         self._remove_container_open_suppression(registry)
         self._notify_shell()
 
-    def _delete_existing(self, registry: Any) -> None:
+    def _delete_drive(self, registry: Any, drive: str) -> None:
+        view = getattr(registry, "KEY_WOW64_64KEY", 0)
+        _delete_registry_tree(
+            registry,
+            registry.HKEY_CURRENT_USER,
+            drive_context_menu_key(drive),
+            view=view,
+        )
+
+    @staticmethod
+    def _delete_legacy_menu(registry: Any) -> None:
         view = getattr(registry, "KEY_WOW64_64KEY", 0)
         _delete_registry_tree(
             registry,
@@ -311,3 +324,10 @@ def _normalize_drive(drive: str) -> str:
     ):
         raise ValueError("Invalid disk drive letter.")
     return normalized
+
+
+def drive_context_menu_key(drive: str) -> str:
+    """Return an independent Explorer verb key for one mounted drive."""
+
+    normalized = _normalize_drive(drive)
+    return f"{SYSTEM_DRIVE_MENU_KEY}.{normalized[0]}"

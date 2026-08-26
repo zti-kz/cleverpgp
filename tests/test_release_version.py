@@ -20,8 +20,8 @@ def _load_release_checker():
 def test_release_version_is_consistent() -> None:
     checker = _load_release_checker()
 
-    assert checker.checked_release_version("v0.15.0") == "0.15.0"
-    assert set(checker.release_versions().values()) == {"0.15.0"}
+    assert checker.checked_release_version("v0.15.1") == "0.15.1"
+    assert set(checker.release_versions().values()) == {"0.15.1"}
 
 
 def test_release_tag_must_match_project_version() -> None:

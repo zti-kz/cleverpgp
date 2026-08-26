@@ -2,6 +2,7 @@
 $ClassesRoot = "HKCU:\Software\Classes"
 $Targets = @(
     (Join-Path $ClassesRoot "*\shell\CleverPGP.Encrypt"),
+    (Join-Path $ClassesRoot "*\shell\CleverPGP.Decrypt"),
     (Join-Path $ClassesRoot "*\shell\CleverPGP.SecureDelete"),
     (Join-Path $ClassesRoot ".cpgp"),
     (Join-Path $ClassesRoot "CleverPGP.EncryptedFile"),

@@ -901,8 +901,15 @@ class MainWindow(QMainWindow):
         source_name, _ = QFileDialog.getOpenFileName(self, tr("Выберите файл"))
         if not source_name:
             return
-        dialog = ShellOperationDialog(self.repository, "encrypt", Path(source_name))
-        dialog.exec()
+        try:
+            dialog = ShellOperationDialog(
+                self.repository, "encrypt", Path(source_name)
+            )
+            dialog.exec()
+        except Exception as error:
+            self._show_error(
+                tr("Не удалось подготовить операцию с файлом:\n{error}", error=error)
+            )
 
     def _decrypt_file(self) -> None:
         source_name, _ = QFileDialog.getOpenFileName(
@@ -912,8 +919,15 @@ class MainWindow(QMainWindow):
         )
         if not source_name:
             return
-        dialog = ShellOperationDialog(self.repository, "decrypt", Path(source_name))
-        dialog.exec()
+        try:
+            dialog = ShellOperationDialog(
+                self.repository, "decrypt", Path(source_name)
+            )
+            dialog.exec()
+        except Exception as error:
+            self._show_error(
+                tr("Не удалось подготовить операцию с файлом:\n{error}", error=error)
+            )
 
     def _show_contacts(self) -> None:
         KeyManagerDialog(self.repository, self).exec()

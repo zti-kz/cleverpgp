@@ -80,6 +80,18 @@ def main(argv: list[str] | None = None) -> int:
                 encoding="utf-8",
             )
             return 1
+    if arguments[:1] == ["--file-shell-check"] and len(arguments) == 2:
+        marker = Path(arguments[1])
+        try:
+            from cleverpgp.runtime_check import run_file_shell
+
+            return run_file_shell(marker)
+        except BaseException as error:
+            marker.write_text(
+                f"Clever PGP file shell check failed: {error!r}",
+                encoding="utf-8",
+            )
+            return 1
     if arguments[:1] == ["--block-create-check-child"] and len(arguments) == 2:
         marker = Path(arguments[1])
         try:

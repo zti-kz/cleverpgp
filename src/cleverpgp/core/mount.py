@@ -458,7 +458,7 @@ def unmount_drive(drive: str, *, timeout: float = 12.0) -> str:
         try:
             from cleverpgp.core.windows_shell import WindowsDriveContextMenu
 
-            WindowsDriveContextMenu().remove()
+            WindowsDriveContextMenu().remove(normalized)
         except OSError:
             pass
     return normalized

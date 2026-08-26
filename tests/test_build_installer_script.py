@@ -12,6 +12,15 @@ def test_windows_installer_build_forces_utf8_python_output() -> None:
     assert script.index("$env:PYTHONUTF8") < script.index("scripts\\download_models.py")
 
 
+def test_windows_installer_excludes_host_runtime_dlls_from_path() -> None:
+    script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
+
+    assert "$BuildPathEntries" in script
+    assert "codex-runtimes" in script
+    assert "$env:PATH = $BuildPathEntries" in script
+    assert script.index("$BuildPathEntries") < script.index("-m PyInstaller")
+
+
 def test_windows_installer_verifies_vendor_hashes_and_signatures() -> None:
     script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
 

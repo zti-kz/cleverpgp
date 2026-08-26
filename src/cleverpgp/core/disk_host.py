@@ -639,7 +639,10 @@ def _launch_elevated_windows_process(command: list[str]) -> HostProcess:
     shell32.ShellExecuteExW.restype = wintypes.BOOL
     info = ShellExecuteInfo()
     info.cbSize = ctypes.sizeof(info)
-    info.fMask = 0x00000040  # SEE_MASK_NOCLOSEPROCESS
+    info.fMask = (
+        0x00000040  # SEE_MASK_NOCLOSEPROCESS
+        | 0x00000400  # SEE_MASK_FLAG_NO_UI
+    )
     info.lpVerb = "runas"
     info.lpFile = command[0]
     info.lpParameters = subprocess.list2cmdline(command[1:])

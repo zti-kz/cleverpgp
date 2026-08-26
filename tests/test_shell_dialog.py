@@ -4,7 +4,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QCloseEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from cleverpgp.core.storage import ProfileRepository  # noqa: E402
@@ -44,7 +44,9 @@ def test_shell_worker_encrypts_path_with_spaces(tmp_path: Path) -> None:
     assert dialog.running
     assert not dialog.cancel_button.isEnabled()
     assert not dialog.choose_button.isEnabled()
-    assert not dialog.windowFlags() & Qt.WindowType.WindowCloseButtonHint
+    close_event = QCloseEvent()
+    dialog.closeEvent(close_event)
+    assert not close_event.isAccepted()
     deadline = time.monotonic() + 10
     while dialog.running and time.monotonic() < deadline:
         application.processEvents()
@@ -54,7 +56,6 @@ def test_shell_worker_encrypts_path_with_spaces(tmp_path: Path) -> None:
     encrypted = tmp_path / "report with spaces.txt.cpgp"
     assert encrypted.is_file()
     assert dialog.status.objectName() == "success"
-    assert dialog.windowFlags() & Qt.WindowType.WindowCloseButtonHint
     dialog.close()
     application.processEvents()
 

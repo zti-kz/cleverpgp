@@ -1772,7 +1772,28 @@ class WindowsSystemDiskManager:
                 active.append(record)
         for record in stale:
             self._control_store.remove(record)
+            try:
+                self._context_menu.remove(record.drive)
+            except OSError:
+                pass
         if active:
+            # Explorer verbs are per-user registry state, not part of the
+            # background disk host. Recreate them whenever a new GUI shell
+            # adopts disks that survived an application exit or upgrade.
+            for record in active:
+                try:
+                    self._context_menu.register(
+                        record.drive,
+                        open_label="Открыть зашифрованный диск",
+                        info_label="Сведения о диске",
+                        settings_label="Настройки доступа",
+                        resize_label="Увеличить диск",
+                        unmount_label="Отключить зашифрованный диск",
+                        password_label="Изменить пароль диска",
+                        algorithm_label=None,
+                    )
+                except OSError:
+                    pass
             self._control_record = active[0]
             self._drive = active[0].drive
             resolver = getattr(self._control_store, "container_path", None)
@@ -1782,11 +1803,6 @@ class WindowsSystemDiskManager:
                 except MountUnavailableError:
                     self._container_path = None
             return
-        if stale:
-            try:
-                self._context_menu.remove()
-            except OSError:
-                pass
 
     def _control_record_responds(self, record: DiskControlRecord) -> bool:
         for attempt in range(2):
@@ -1901,7 +1917,8 @@ class WindowsSystemDiskManager:
         if self._control_record is None:
             return
         try:
-            self._context_menu.remove()
+            drive = self._drive or getattr(self._control_record, "drive", None)
+            self._context_menu.remove(drive)
         except OSError:
             pass
         self._control_store.remove(self._control_record)

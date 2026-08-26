@@ -3,6 +3,19 @@
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
+# PyInstaller resolves generic DLL names from PATH.  Codex/document runtimes
+# may add an unrelated Poppler ICU build there; packaging that DLL beside Qt
+# makes QtCore fail at startup with WinError 127.  Build only against Windows
+# and the project's declared dependencies, never the host assistant runtime.
+$BuildPathEntries = @(
+    $env:PATH -split [IO.Path]::PathSeparator |
+        Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_) -and
+            $_ -notmatch '[\\/]\.cache[\\/]codex-runtimes[\\/]'
+        }
+)
+$env:PATH = $BuildPathEntries -join [IO.Path]::PathSeparator
+
 $OutputDirectory = ""
 for ($ArgumentIndex = 0; $ArgumentIndex -lt $args.Count; $ArgumentIndex++) {
     if (
@@ -42,7 +55,7 @@ $InnoUrl = "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innos
 $InnoSha256 = "0362A383ED217D4C4239B5933866DD96D3EB2102737DA92F80F6057A4B40DF2F"
 $InnoDirectory = Join-Path $ToolsDirectory "InnoSetup"
 $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
-$AppVersion = "0.15.0"
+$AppVersion = "0.15.1"
 $SignToolPath = $env:CLEVERPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:CLEVERPGP_SIGN_CERT_SHA1
 $ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:CLEVERPGP_SIGN_EXPECTED_NAME)) {
@@ -407,6 +420,31 @@ if (
     throw "Проверка фоновых операций собранного CleverPGP.exe не пройдена: $UiWorkerDetails"
 }
 Write-Host "Фоновые операции собранного приложения проверены."
+
+$FileShellMarker = Join-Path $BuildDirectory "file-shell-runtime-check.json"
+Assert-ProjectChild $FileShellMarker
+if (Test-Path -LiteralPath $FileShellMarker) {
+    Remove-Item -LiteralPath $FileShellMarker -Force
+}
+$FileShellArguments = @("--file-shell-check", "`"$FileShellMarker`"")
+$FileShellProcess = Start-Process `
+    -FilePath $BundledExecutable `
+    -ArgumentList $FileShellArguments `
+    -Wait `
+    -PassThru `
+    -WindowStyle Hidden
+if (
+    $FileShellProcess.ExitCode -ne 0 -or
+    -not (Test-Path -LiteralPath $FileShellMarker -PathType Leaf)
+) {
+    $FileShellDetails = if (Test-Path -LiteralPath $FileShellMarker) {
+        Get-Content -LiteralPath $FileShellMarker -Raw
+    } else {
+        "Проверочный файл не создан."
+    }
+    throw "Проверка шифрования файлов собранного CleverPGP.exe не пройдена: $FileShellDetails"
+}
+Write-Host "Шифрование и расшифрование файлов в собранном приложении проверены."
 
 $WinSpdRuntimeMarker = Join-Path $BuildDirectory "winspd-runtime-check.json"
 Assert-ProjectChild $WinSpdRuntimeMarker

@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.15.0"
+  #define AppVersion "0.15.1"
 #endif
 #ifndef AppSourceDirectory
   #error AppSourceDirectory must be defined by build_installer.ps1
@@ -88,8 +88,13 @@ Root: HKLM; Subkey: "Software\Classes\.bpgv"; ValueType: none; Flags: deletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: ""; ValueData: "Зашифровать файл — Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"
-Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "NOT System.FileExtension:=.cpgp AND NOT System.FileExtension:=.cpgv AND NOT System.FileExtension:=.cpgk AND NOT System.FileExtension:=.cpgx"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "NOT System.FileExtension:="".cpgp"" AND NOT System.FileExtension:="".cpgv"" AND NOT System.FileExtension:="".cpgk"" AND NOT System.FileExtension:="".cpgx"""
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Encrypt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell encrypt ""%1"""
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Decrypt"; ValueType: string; ValueName: ""; ValueData: "Расшифровать файл — Clever PGP"; Flags: uninsdeletekey
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Decrypt"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Decrypt"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Decrypt"; ValueType: string; ValueName: "AppliesTo"; ValueData: "System.FileExtension:="".cpgp"""
+Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.Decrypt\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExecutable}"" --shell decrypt ""%1"""
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete"; ValueType: string; ValueName: ""; ValueData: "Безвозвратно удалить файл — Clever PGP"; Flags: uninsdeletekey
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\{#AppExecutable},0"
 Root: HKLM; Subkey: "Software\Classes\*\shell\CleverPGP.SecureDelete"; ValueType: string; ValueName: "MultiSelectModel"; ValueData: "Single"

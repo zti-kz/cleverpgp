@@ -315,7 +315,7 @@ def test_windows_backend_can_atomically_change_algorithm(tmp_path: Path) -> None
         assert reopened.read_blocks(9, 1) == marker
 
 
-def test_hidden_windows_image_prepares_both_partition_views(
+def test_hidden_windows_image_leaves_both_partition_views_raw(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "hidden-windows.cpgv"
@@ -325,7 +325,12 @@ def test_hidden_windows_image_prepares_both_partition_views(
             memlimit=pwhash.argon2id.MEMLIMIT_MIN,
         )
     )
-    library = PartitionLibrary()
+    class UnexpectedPartitionLibrary(PartitionLibrary):
+        def define_partition_table(self, partitions: list[Partition]) -> bytes:
+            del partitions
+            raise AssertionError("partition table must be created by formatter")
+
+    library = UnexpectedPartitionLibrary()
     progress: list[tuple[int, int]] = []
 
     headers = create_hidden_windows_block_volume(
@@ -347,40 +352,11 @@ def test_hidden_windows_image_prepares_both_partition_views(
         headers.outer,
         protected_hidden_descriptor=headers.hidden.hidden_descriptor,
     ) as outer:
-        assert outer.read_blocks(0, 1)[510:512] == b"\x55\xaa"
+        assert outer.read_blocks(0, 1) == bytes(LOGICAL_BLOCK_SIZE)
         assert not outer.damage_prevented
     with OpaqueBlockVolume.open_with_header(path, headers.hidden) as hidden:
-        assert hidden.read_blocks(0, 1)[510:512] == b"\x55\xaa"
-
-
-def test_hidden_windows_image_is_removed_when_partition_creation_fails(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "failed-hidden-windows.cpgv"
-    store = OpaqueVolumeHeaderStore(
-        HeaderKdfParameters(
-            opslimit=pwhash.argon2id.OPSLIMIT_MIN,
-            memlimit=pwhash.argon2id.MEMLIMIT_MIN,
-        )
-    )
-
-    class FailingPartitionLibrary(PartitionLibrary):
-        def define_partition_table(self, partitions: list[Partition]) -> bytes:
-            del partitions
-            raise RuntimeError("partition failure")
-
-    with pytest.raises(RuntimeError, match="partition failure"):
-        create_hidden_windows_block_volume(
-            path,
-            "outer correct horse battery staple",
-            "hidden correct horse battery staple",
-            outer_capacity=66 * 1024 * 1024,
-            hidden_capacity=32 * 1024 * 1024,
-            library=FailingPartitionLibrary(),  # type: ignore[arg-type]
-            header_store=store,
-        )
-
-    assert not path.exists()
+        assert hidden.read_blocks(0, 1) == bytes(LOGICAL_BLOCK_SIZE)
+    assert library.partitions == []
 
 
 def test_hidden_windows_creation_never_deletes_existing_container(

@@ -374,7 +374,7 @@ def create_hidden_windows_block_volume(
     header_store: OpaqueVolumeHeaderStore | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> HiddenWindowsVolumeHeaders:
-    """Prepare both v6 partition views before either filesystem is formatted."""
+    """Create both v6 views as RAW disks for silent Windows formatting."""
 
     if outer_capacity < MIN_WINDOWS_DISK_CAPACITY:
         raise ValidationError(
@@ -384,6 +384,9 @@ def create_hidden_windows_block_volume(
         raise ValidationError(
             "Скрытый виртуальный диск должен быть не меньше 32 МБ."
         )
+    # Loading the WinSpd library before this call validates the runtime.  The
+    # partition table is deliberately created later by the elevated formatter.
+    del library
     store = header_store or OpaqueVolumeHeaderStore()
     target = resolve_file_hosted_container_path(path)
     cover_blocks = outer_capacity // LOGICAL_BLOCK_SIZE
@@ -452,22 +455,12 @@ def create_hidden_windows_block_volume(
         if progress is not None:
             progress(84, 100)
 
-        with OpaqueBlockVolume.open_with_header(
-            target,
-            outer_header,
-        ) as protected_outer:
-            initialize_windows_partition(protected_outer, library)
-            if protected_outer.damage_prevented:
-                raise BlockVolumeError(
-                    "Таблица разделов попыталась затронуть скрытый диск."
-                )
+        # Both projections must remain RAW until the elevated formatting helper
+        # attaches them without a drive letter.  Writing an MBR here lets Windows
+        # auto-mount the still-unformatted partition and display its own format
+        # prompt before Clever PGP can format it silently.
         if progress is not None:
             progress(92, 100)
-        with OpaqueBlockVolume.open_with_header(
-            target,
-            hidden_header,
-        ) as hidden:
-            initialize_windows_partition(hidden, library)
         if progress is not None:
             progress(100, 100)
         return HiddenWindowsVolumeHeaders(outer_header, hidden_header)

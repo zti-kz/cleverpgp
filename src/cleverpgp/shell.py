@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from cleverpgp.config import APP_NAME, ORGANIZATION_NAME, database_path
@@ -53,17 +53,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    dialog = ShellOperationDialog(
-        repository, arguments.operation, source
-    )
+    try:
+        dialog = ShellOperationDialog(
+            repository, arguments.operation, source
+        )
+    except Exception as error:
+        QMessageBox.critical(
+            None,
+            "Clever PGP",
+            tr("Не удалось подготовить операцию с файлом:\n{error}", error=error),
+        )
+        return 2
     # Explorer can keep its own window in the foreground after launching a
     # classic context-menu command.  Keep this explicitly requested compact
     # operation visible instead of making it look as if the command did not run.
     dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
     dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-    dialog.show()
-    dialog.raise_()
-    dialog.activateWindow()
+    QTimer.singleShot(0, dialog.raise_)
+    QTimer.singleShot(0, dialog.activateWindow)
     return 0 if dialog.exec() else 1
 
 

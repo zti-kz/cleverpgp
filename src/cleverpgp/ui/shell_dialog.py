@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -125,6 +126,8 @@ class ShellFileWorker(QObject):
 
 
 class ShellOperationDialog(QDialog):
+    operation_finished = Signal(bool)
+
     def __init__(
         self,
         repository: ProfileRepository,
@@ -367,8 +370,6 @@ class ShellOperationDialog(QDialog):
         self.choose_button.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.action_button.setEnabled(False)
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-        self.show()
         self.progress.show()
         self.progress.setValue(1)
         self.progress.setFormat(tr("1% — Запуск операции"))
@@ -434,8 +435,6 @@ class ShellOperationDialog(QDialog):
     def _thread_finished(self) -> None:
         self.progress.hide()
         self.running = False
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
-        self.show()
         self.worker = None
         self.thread = None
         self.cancel_button.setEnabled(True)
@@ -448,11 +447,21 @@ class ShellOperationDialog(QDialog):
             self.choose_button.setEnabled(True)
             self.action_button.setEnabled(True)
             self.password_input.setFocus()
+        self.operation_finished.emit(bool(self.operation_succeeded))
 
     def reject(self) -> None:
         if self.running:
             return
         super().reject()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        # Changing native title-bar flags while a modal Qt window is visible
+        # can recreate or crash the Windows window. Keep the title bar stable
+        # and reject its close request while the worker owns the file.
+        if self.running:
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _mode_changed(self) -> None:
         if self.mode_combo is not None:

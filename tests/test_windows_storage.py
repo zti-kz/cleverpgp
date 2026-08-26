@@ -838,7 +838,7 @@ def test_system_manager_disconnects_before_changing_active_v4_password(
         removed = False
 
         @classmethod
-        def remove(cls) -> None:
+        def remove(cls, _drive: str | None = None) -> None:
             cls.removed = True
 
     process = FakeProcessManager()
@@ -1017,7 +1017,7 @@ def test_system_manager_publishes_and_removes_external_control_state(
                 unmount_label,
             )
 
-        def remove(self) -> None:
+        def remove(self, _drive: str | None = None) -> None:
             type(self).removed = True
 
     with (
@@ -1127,7 +1127,10 @@ def test_system_manager_recovers_and_unmounts_detached_host(
     class ContextMenu:
         removed = False
 
-        def remove(self) -> None:
+        def register(self, _drive: str, **_labels: object) -> None:
+            pass
+
+        def remove(self, _drive: str | None = None) -> None:
             self.removed = True
 
     store = RecoverableStore()
@@ -1191,7 +1194,10 @@ def test_system_manager_removes_stale_detached_host_state(
     class ContextMenu:
         removed = False
 
-        def remove(self) -> None:
+        def register(self, _drive: str, **_labels: object) -> None:
+            pass
+
+        def remove(self, _drive: str | None = None) -> None:
             self.removed = True
 
     menu = ContextMenu()

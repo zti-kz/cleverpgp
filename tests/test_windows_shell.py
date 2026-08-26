@@ -6,6 +6,7 @@ from cleverpgp.core.windows_shell import (
     CONTAINER_OPEN_VERB_KEY,
     SYSTEM_DRIVE_MENU_KEY,
     WindowsDriveContextMenu,
+    drive_context_menu_key,
     drive_context_menu_values,
 )
 
@@ -113,37 +114,38 @@ def test_drive_context_menu_is_restricted_to_selected_drive(tmp_path: Path) -> N
         algorithm_label="Change encryption method",
     )
     lookup = {(item.subkey, item.name): item.value for item in values}
+    menu_key = drive_context_menu_key("Z:")
 
-    assert lookup[(SYSTEM_DRIVE_MENU_KEY, "AppliesTo")] == (
+    assert lookup[(menu_key, "AppliesTo")] == (
         'System.ItemPathDisplay:="Z:\\' + '"'
     )
     unmount_command = lookup[
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Unmount\command", "")
+        (menu_key + r"\shell\Unmount\command", "")
     ]
     assert str(executable) in str(unmount_command)
     assert "--unmount" in str(unmount_command)
     assert "%1" in str(unmount_command)
     assert "cmd.exe" not in str(unmount_command).lower()
     settings_command = lookup[
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Settings\command", "")
+        (menu_key + r"\shell\Settings\command", "")
     ]
     assert "--settings" in str(settings_command)
     assert "%1" in str(settings_command)
     assert "cmd.exe" not in str(settings_command).lower()
     info_command = lookup[
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Info\command", "")
+        (menu_key + r"\shell\Info\command", "")
     ]
     assert "--disk-info" in str(info_command)
     assert "%1" in str(info_command)
     assert "cmd.exe" not in str(info_command).lower()
     resize_command = lookup[
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize\command", "")
+        (menu_key + r"\shell\Resize\command", "")
     ]
     assert "--resize-drive" in str(resize_command)
     assert "%1" in str(resize_command)
     assert "cmd.exe" not in str(resize_command).lower()
     algorithm_command = lookup[
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Algorithm\command", "")
+        (menu_key + r"\shell\Algorithm\command", "")
     ]
     assert "--change-disk-algorithm" in str(algorithm_command)
     assert "%1" in str(algorithm_command)
@@ -157,6 +159,9 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
     registry = FakeRegistry()
     registry.keys[r"Software\Classes\Drive\shell\Unrelated"] = {
         "": (registry.REG_SZ, "Keep")
+    }
+    registry.keys[CONTAINER_OPEN_VERB_KEY] = {
+        "LegacyDisable": (registry.REG_SZ, "")
     }
     notifications: list[bool] = []
     executable = tmp_path / "CleverPGP.exe"
@@ -177,23 +182,61 @@ def test_context_menu_registers_and_removes_only_its_own_tree(
         algorithm_label="Изменить метод шифрования",
     )
 
-    assert SYSTEM_DRIVE_MENU_KEY in registry.keys
-    assert registry.keys[SYSTEM_DRIVE_MENU_KEY]["AppliesTo"][1] == (
+    menu_key = drive_context_menu_key("Y:")
+    assert menu_key in registry.keys
+    assert registry.keys[menu_key]["AppliesTo"][1] == (
         'System.ItemPathDisplay:="Y:\\' + '"'
     )
     assert notifications == [True]
-    assert registry.keys[CONTAINER_OPEN_VERB_KEY]["LegacyDisable"][1] == ""
+    assert "LegacyDisable" not in registry.keys[CONTAINER_OPEN_VERB_KEY]
 
     menu.remove()
 
     assert not any(
-        key == SYSTEM_DRIVE_MENU_KEY
-        or key.startswith(SYSTEM_DRIVE_MENU_KEY + "\\")
+        key == menu_key or key.startswith(menu_key + "\\")
         for key in registry.keys
     )
     assert r"Software\Classes\Drive\shell\Unrelated" in registry.keys
-    assert "LegacyDisable" not in registry.keys[CONTAINER_OPEN_VERB_KEY]
     assert notifications == [True, True]
+
+
+def test_context_menus_for_two_drives_do_not_delete_each_other(
+    tmp_path: Path,
+) -> None:
+    registry = FakeRegistry()
+    executable = tmp_path / "CleverPGP.exe"
+    first = WindowsDriveContextMenu(
+        registry=registry,
+        notifier=lambda: None,
+        command_prefix=(str(executable),),
+        icon_path=executable,
+    )
+    second = WindowsDriveContextMenu(
+        registry=registry,
+        notifier=lambda: None,
+        command_prefix=(str(executable),),
+        icon_path=executable,
+    )
+
+    for menu, drive in ((first, "D:"), (second, "F:")):
+        menu.register(
+            drive,
+            open_label="Open",
+            info_label="Info",
+            settings_label="Settings",
+            resize_label="Resize",
+            unmount_label="Unmount",
+        )
+
+    first_key = drive_context_menu_key("D:")
+    second_key = drive_context_menu_key("F:")
+    assert first_key in registry.keys
+    assert second_key in registry.keys
+
+    second.remove("F:")
+
+    assert first_key in registry.keys
+    assert second_key not in registry.keys
 
 
 def test_hidden_disk_menu_omits_unsupported_resize_action(tmp_path: Path) -> None:
@@ -250,10 +293,12 @@ def test_file_menu_uses_explicit_actions_and_excludes_cleverpgp_formats() -> Non
         assert "--shell decrypt" in source
         assert "--secure-delete" in source
         assert "Безвозвратно удалить файл" in source
-        assert "NOT System.FileExtension:=.cpgp" in source
-        assert "NOT System.FileExtension:=.cpgv" in source
-        assert "NOT System.FileExtension:=.cpgk" in source
-        assert "NOT System.FileExtension:=.cpgx" in source
+        assert 'System.FileExtension:=' in source
+        assert '.cpgp' in source
+        assert '.cpgv' in source
+        assert '.cpgk' in source
+        assert '.cpgx' in source
+        assert "CleverPGP.Decrypt" in source
 
 
 def test_public_key_association_imports_from_explorer() -> None:

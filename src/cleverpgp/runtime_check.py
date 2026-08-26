@@ -36,7 +36,7 @@ def run(marker: Path) -> int:
     from cleverpgp.core.file_crypto import FileCryptoService
     from cleverpgp.core.winspd import WinSpdLibrary
     from cleverpgp.core.windows_shell import (
-        SYSTEM_DRIVE_MENU_KEY,
+        drive_context_menu_key,
         drive_context_menu_values,
     )
 
@@ -83,17 +83,18 @@ def run(marker: Path) -> int:
     shell_lookup = {
         (value.subkey, value.name): value.value for value in shell_values
     }
-    if shell_lookup.get((SYSTEM_DRIVE_MENU_KEY, "AppliesTo")) != (
+    shell_menu_key = drive_context_menu_key("Z:")
+    if shell_lookup.get((shell_menu_key, "AppliesTo")) != (
         'System.ItemPathDisplay:="Z:\\' + '"'
     ):
         raise RuntimeError("Проверка контекстного меню виртуального диска не пройдена.")
     resize_command = shell_lookup.get(
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Resize\command", "")
+        (shell_menu_key + r"\shell\Resize\command", "")
     )
     if "--resize-drive" not in str(resize_command):
         raise RuntimeError("Команда увеличения виртуального диска не упакована.")
     password_command = shell_lookup.get(
-        (SYSTEM_DRIVE_MENU_KEY + r"\shell\Password\command", "")
+        (shell_menu_key + r"\shell\Password\command", "")
     )
     if "--change-disk-password" not in str(password_command):
         raise RuntimeError("Команда смены пароля диска не упакована.")
@@ -234,6 +235,80 @@ def run_ui_worker(marker: Path) -> int:
 
     marker.write_text(
         json.dumps({"status": "ok", **state}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return 0
+
+
+def run_file_shell(marker: Path) -> int:
+    """Exercise the same modal worker used by the app and Explorer verbs."""
+
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWidgets import QApplication
+
+    from cleverpgp.core.storage import ProfileRepository
+    from cleverpgp.ui.shell_dialog import ShellOperationDialog
+
+    application = QApplication.instance() or QApplication([])
+    password = "Packaged-File-Test@2026"
+
+    def execute(dialog: ShellOperationDialog) -> None:
+        loop = QEventLoop()
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+        result: dict[str, object] = {}
+
+        def completed(success: bool) -> None:
+            result["success"] = success
+            loop.quit()
+
+        dialog.operation_finished.connect(completed)
+        timeout.timeout.connect(loop.quit)
+        dialog.password_input.setText(password)
+        if dialog.password_repeat_input is not None:
+            dialog.password_repeat_input.setText(password)
+        dialog._start()
+        timeout.start(30_000)
+        loop.exec()
+        timeout.stop()
+        if result.get("success") is not True:
+            raise RuntimeError(
+                dialog.status.text() or "Операция с файлом не завершилась."
+            )
+
+    with tempfile.TemporaryDirectory(
+        prefix="cleverpgp-file-shell-check-"
+    ) as directory:
+        root = Path(directory)
+        source = root / "Explorer file with spaces.txt"
+        payload = b"Clever PGP packaged file shell integration check\n" * 4096
+        source.write_bytes(payload)
+        repository = ProfileRepository(root / "cleverpgp.sqlite3")
+        repository.initialize()
+
+        encryption = ShellOperationDialog(repository, "encrypt", source)
+        execute(encryption)
+        encrypted = encryption.target
+        if not encrypted.is_file():
+            raise RuntimeError("Окно шифрования не создало файл .cpgp.")
+
+        decryption = ShellOperationDialog(repository, "decrypt", encrypted)
+        execute(decryption)
+        restored = decryption.target
+        if not restored.is_file() or restored.read_bytes() != payload:
+            raise RuntimeError("Окно расшифрования не восстановило исходный файл.")
+
+    marker.write_text(
+        json.dumps(
+            {
+                "status": "ok",
+                "encrypted": True,
+                "decrypted": True,
+                "bytes": len(payload),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     return 0
@@ -498,9 +573,15 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
                 process_id=process_id,
             )
 
+            registered_menus: list[str] = []
+
             class NoopContextMenu:
                 @staticmethod
-                def remove() -> None:
+                def register(drive: str, **_labels: object) -> None:
+                    registered_menus.append(drive)
+
+                @staticmethod
+                def remove(_drive: str | None = None) -> None:
                     pass
 
             def provider_running(_drive: str) -> bool:
@@ -519,6 +600,10 @@ def run_winspd_pipe(marker: Path, stgtest_path: Path) -> int:
             if recovered.mounted_drive != "Z:":
                 raise RuntimeError(
                     "Новый менеджер не восстановил самостоятельный дисковый процесс."
+                )
+            if registered_menus != ["Z:"]:
+                raise RuntimeError(
+                    "Контекстное меню восстановленного диска не создано."
                 )
             recovered.unmount()
             if record.path.exists():
