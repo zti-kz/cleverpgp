@@ -6,6 +6,7 @@ import pytest
 from nacl import pwhash
 
 from cleverpgp.core.errors import AuthenticationError
+from cleverpgp.core.key_validity import key_is_expired
 from cleverpgp.core.identity import IdentityService, read_public_identity
 from cleverpgp.core.file_crypto import FileCryptoService
 from cleverpgp.core.portable_keys import PortableKeyService
@@ -29,6 +30,8 @@ def test_key_is_password_protected_and_private_export_requires_password(
     record = service.create_key("Алмас Өскенбай", "FriendlyKey@2026")
     stored = repository.get_user_key(record.key_id)
     assert stored is not None
+    assert stored.expires_at is not None
+    assert key_is_expired(stored.expires_at) is False
 
     with service.unlock_key(record, "FriendlyKey@2026") as unlocked:
         private = unlocked.encryption_private_key_copy()
@@ -44,6 +47,18 @@ def test_key_is_password_protected_and_private_export_requires_password(
     assert not (tmp_path / "alice.cpgx").exists()
 
 
+def test_key_deletion_requires_its_password(tmp_path: Path) -> None:
+    repository, service = _service(tmp_path / "delete.sqlite3")
+    record = service.create_key("Alice", "FriendlyKey@2026")
+
+    with pytest.raises(AuthenticationError):
+        service.delete_key(record, "WrongPassword@2026")
+    assert repository.get_user_key(record.key_id) is not None
+
+    assert service.delete_key(record, "FriendlyKey@2026") is True
+    assert repository.get_user_key(record.key_id) is None
+
+
 def test_private_key_round_trip_requires_password_on_import(tmp_path: Path) -> None:
     alice_repository, alice = _service(tmp_path / "alice.sqlite3")
     record = alice.create_key("Alice", "FriendlyKey@2026")
@@ -55,6 +70,7 @@ def test_private_key_round_trip_requires_password_on_import(tmp_path: Path) -> N
         bob.import_private_key(bundle, "WrongPassword@2026")
     imported = bob.import_private_key(bundle, "FriendlyKey@2026")
     assert imported.fingerprint == record.fingerprint
+    assert imported.expires_at == record.expires_at
     assert alice_repository.list_user_keys() == (record,)
 
 
@@ -71,10 +87,24 @@ def test_public_key_is_self_signed_and_can_be_added_as_recipient(
     )
     public_identity = read_public_identity(public_bundle)
     assert public_identity.fingerprint == record.fingerprint
+    assert public_identity.expires_at == record.expires_at
 
     bob_repository, _bob = _service(tmp_path / "bob.sqlite3")
     contact = IdentityService(bob_repository).import_contact(public_bundle)
     assert contact.fingerprint == record.fingerprint
+    assert contact.expires_at == record.expires_at
+
+
+def test_key_can_be_created_without_expiration(tmp_path: Path) -> None:
+    repository, service = _service(tmp_path / "no-expiration.sqlite3")
+    record = service.create_key(
+        "Alice",
+        "FriendlyKey@2026",
+        validity_days=None,
+    )
+
+    assert record.expires_at is None
+    assert repository.get_user_key(record.key_id) == record
 
 
 def test_file_can_be_encrypted_for_multiple_password_protected_keys(

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
+    QComboBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -12,6 +14,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -20,6 +24,10 @@ from PySide6.QtWidgets import (
 
 from cleverpgp.core.errors import BioPGPError
 from cleverpgp.core.identity import IdentityService, formatted_fingerprint
+from cleverpgp.core.key_validity import (
+    DEFAULT_KEY_VALIDITY_DAYS,
+    key_is_expired,
+)
 from cleverpgp.core.portable_keys import (
     MINIMUM_KEY_PASSWORD_LENGTH,
     PRIVATE_KEY_EXTENSION,
@@ -44,6 +52,7 @@ class KeyPasswordDialog(QDialog):
         self.create = create
         self.password = ""
         self.display_name = ""
+        self.validity_days: int | None = DEFAULT_KEY_VALIDITY_DAYS
         self.setWindowTitle(title)
         self.setMinimumWidth(500)
         self.setStyleSheet(KEY_MANAGER_STYLESHEET)
@@ -60,6 +69,16 @@ class KeyPasswordDialog(QDialog):
             self.name_input = QLineEdit()
             self.name_input.setPlaceholderText("Например: Almas Oskenbay")
             form.addRow("Владелец ключа", self.name_input)
+            self.validity_input = QComboBox()
+            self.validity_input.addItem("1 год", 365)
+            self.validity_input.addItem("2 года (рекомендуется)", 730)
+            self.validity_input.addItem("3 года", 1095)
+            self.validity_input.addItem("5 лет", 1825)
+            self.validity_input.addItem("Без ограничения срока", None)
+            self.validity_input.setCurrentIndex(
+                self.validity_input.findData(DEFAULT_KEY_VALIDITY_DAYS)
+            )
+            form.addRow("Срок действия", self.validity_input)
         self.password_input = QLineEdit()
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setPlaceholderText(
@@ -108,6 +127,11 @@ class KeyPasswordDialog(QDialog):
             self._error("Пароли ключа не совпадают.")
             return
         self.display_name = name
+        if self.create:
+            selected_validity = self.validity_input.currentData()
+            self.validity_days = (
+                None if selected_validity is None else int(selected_validity)
+            )
         self.password = password
         self.password_input.clear()
         if self.repeat_input is not None:
@@ -176,8 +200,23 @@ class KeyManagerDialog(QDialog):
         layout.setContentsMargins(14, 16, 14, 14)
         layout.setSpacing(10)
         self.key_list = QListWidget()
-        self.key_list.currentItemChanged.connect(self._key_selection_changed)
+        self.key_list.setWordWrap(True)
+        self.key_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.key_list.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.key_list.customContextMenuRequested.connect(
+            self._show_key_context_menu
+        )
         layout.addWidget(self.key_list, 1)
+        hint = QLabel(
+            "Щёлкните ключ правой кнопкой мыши, чтобы экспортировать или удалить его."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         row = QHBoxLayout()
         create = QPushButton("Создать ключ")
         create.setIcon(line_icon("key"))
@@ -185,15 +224,9 @@ class KeyManagerDialog(QDialog):
         import_private = QPushButton("Импорт закрытого ключа")
         import_private.setIcon(line_icon("file_open"))
         import_private.clicked.connect(lambda: self._import_private())
-        self.export_private_button = QPushButton("Экспорт закрытого ключа")
-        self.export_private_button.clicked.connect(self._export_private)
-        self.export_public_button = QPushButton("Экспорт открытого ключа")
-        self.export_public_button.clicked.connect(self._export_public)
         row.addWidget(create)
         row.addWidget(import_private)
         row.addStretch()
-        row.addWidget(self.export_private_button)
-        row.addWidget(self.export_public_button)
         layout.addLayout(row)
         return page
 
@@ -203,6 +236,10 @@ class KeyManagerDialog(QDialog):
         layout.setContentsMargins(14, 16, 14, 14)
         layout.setSpacing(10)
         self.contact_list = QListWidget()
+        self.contact_list.setWordWrap(True)
+        self.contact_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.contact_list.currentItemChanged.connect(
             lambda current, _previous: self.delete_contact_button.setEnabled(
                 current is not None
@@ -226,8 +263,9 @@ class KeyManagerDialog(QDialog):
     def _reload(self) -> None:
         self.key_list.clear()
         for key in self.repository.list_user_keys():
+            validity = self._validity_text(key.expires_at)
             item = QListWidgetItem(
-                f"{key.display_name}\n{formatted_fingerprint(key.fingerprint)}"
+                f"{key.display_name}\n{formatted_fingerprint(key.fingerprint)}\n{validity}"
             )
             item.setData(Qt.ItemDataRole.UserRole, key.key_id)
             self.key_list.addItem(item)
@@ -237,8 +275,10 @@ class KeyManagerDialog(QDialog):
             self.key_list.addItem(item)
         self.contact_list.clear()
         for contact in self.repository.list_contacts():
+            validity = self._validity_text(contact.expires_at)
             item = QListWidgetItem(
-                f"{contact.display_name}\n{formatted_fingerprint(contact.fingerprint)}"
+                f"{contact.display_name}\n"
+                f"{formatted_fingerprint(contact.fingerprint)}\n{validity}"
             )
             item.setData(Qt.ItemDataRole.UserRole, contact.contact_id)
             self.contact_list.addItem(item)
@@ -246,26 +286,43 @@ class KeyManagerDialog(QDialog):
             item = QListWidgetItem("Открытые ключи получателей ещё не импортированы")
             item.setFlags(Qt.ItemFlag.NoItemFlags)
             self.contact_list.addItem(item)
-        self._key_selection_changed(self.key_list.currentItem(), None)
         self.delete_contact_button.setEnabled(False)
 
     def _selected_key_id(self) -> str | None:
         item = self.key_list.currentItem()
         return None if item is None else item.data(Qt.ItemDataRole.UserRole)
 
-    def _key_selection_changed(self, current, _previous) -> None:
-        enabled = current is not None and bool(
-            current.data(Qt.ItemDataRole.UserRole)
-        )
-        self.export_private_button.setEnabled(enabled)
-        self.export_public_button.setEnabled(enabled)
+    def _show_key_context_menu(self, position) -> None:
+        item = self.key_list.itemAt(position)
+        if item is None or not item.data(Qt.ItemDataRole.UserRole):
+            return
+        self.key_list.setCurrentItem(item)
+        menu = QMenu(self)
+        export_public = menu.addAction(tr("Экспорт открытого ключа"))
+        export_public.setIcon(line_icon("key"))
+        export_private = menu.addAction(tr("Экспорт закрытого ключа"))
+        export_private.setIcon(line_icon("file_lock"))
+        menu.addSeparator()
+        delete_key = menu.addAction(tr("Удалить цифровой ключ"))
+        delete_key.setIcon(line_icon("trash"))
+        selected = menu.exec(self.key_list.viewport().mapToGlobal(position))
+        if selected is export_public:
+            self._export_public()
+        elif selected is export_private:
+            self._export_private()
+        elif selected is delete_key:
+            self._delete_key()
 
     def _create_key(self) -> None:
         dialog = KeyPasswordDialog("Создание цифрового ключа", create=True, parent=self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            key = self.service.create_key(dialog.display_name, dialog.password)
+            key = self.service.create_key(
+                dialog.display_name,
+                dialog.password,
+                validity_days=dialog.validity_days,
+            )
         except (BioPGPError, OSError) as error:
             self._show_status(str(error), error=True)
             return
@@ -374,6 +431,43 @@ class KeyManagerDialog(QDialog):
         except (BioPGPError, OSError) as error:
             self._show_status(str(error), error=True)
 
+    def _delete_key(self) -> None:
+        key_id = self._selected_key_id()
+        if not key_id:
+            return
+        key = self.repository.get_user_key(key_id)
+        if key is None:
+            self._show_status("Цифровой ключ не найден.", error=True)
+            return
+        confirmation = QMessageBox.question(
+            self,
+            tr("Удалить цифровой ключ"),
+            tr(
+                "Удалить ключ «{name}»? Без его закрытой части файлы, "
+                "зашифрованные только для этого ключа, открыть будет невозможно.",
+                name=key.display_name,
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+        password = self._password_for_key("Удаление цифрового ключа")
+        if password is None:
+            return
+        try:
+            deleted = self.service.delete_key(key_id, password)
+        except (BioPGPError, OSError) as error:
+            self._show_status(str(error), error=True)
+            return
+        finally:
+            password = ""
+        if not deleted:
+            self._show_status("Цифровой ключ не найден.", error=True)
+            return
+        self._reload()
+        self._show_status("Цифровой ключ удалён.", error=False)
+
     def _delete_contact(self) -> None:
         item = self.contact_list.currentItem()
         contact_id = None if item is None else item.data(Qt.ItemDataRole.UserRole)
@@ -387,6 +481,18 @@ class KeyManagerDialog(QDialog):
         self.status.style().unpolish(self.status)
         self.status.style().polish(self.status)
         self.status.show()
+
+    @staticmethod
+    def _validity_text(expires_at: str | None) -> str:
+        if expires_at is None:
+            return tr("Срок действия: без ограничения")
+        try:
+            date_text = datetime.fromisoformat(expires_at).date().isoformat()
+        except ValueError:
+            return tr("Срок действия: неизвестен")
+        if key_is_expired(expires_at):
+            return tr("Срок действия истёк: {date}", date=date_text)
+        return tr("Действует до: {date}", date=date_text)
 
 
 KEY_MANAGER_STYLESHEET = """

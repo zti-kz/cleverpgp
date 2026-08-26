@@ -21,6 +21,7 @@ from cleverpgp.core.errors import (
     ProfileNotFoundError,
     ValidationError,
 )
+from cleverpgp.core.key_validity import normalize_expiration
 from cleverpgp.core.models import (
     Contact,
     CryptographicIdentity,
@@ -195,6 +196,7 @@ class IdentityService:
             encryption_public_key=public_identity.encryption_public_key,
             signing_public_key=public_identity.signing_public_key,
             created_at=datetime.now(UTC).isoformat(),
+            expires_at=public_identity.expires_at,
         )
         self.repository.save_contact(contact)
         return contact
@@ -315,6 +317,7 @@ def public_identity_from_contact(contact: Contact) -> PublicIdentity:
         fingerprint=expected,
         encryption_public_key=contact.encryption_public_key,
         signing_public_key=contact.signing_public_key,
+        expires_at=contact.expires_at,
     )
 
 
@@ -343,6 +346,7 @@ def decode_public_identity(data: bytes) -> PublicIdentity:
         )
         fingerprint = _validate_fingerprint(str(payload["fingerprint"]))
         signature = base64.b64decode(payload["self_signature"], validate=True)
+        expires_at = normalize_expiration(payload.get("expires_at"))
     except (
         UnicodeDecodeError,
         json.JSONDecodeError,
@@ -374,6 +378,7 @@ def decode_public_identity(data: bytes) -> PublicIdentity:
         fingerprint=fingerprint,
         encryption_public_key=encryption_public_key,
         signing_public_key=signing_public_key,
+        expires_at=expires_at,
     )
 
 
@@ -422,6 +427,7 @@ def _public_bundle_payload(identity: PublicIdentity) -> dict[str, object]:
         raise CryptographicIdentityError("Открытая идентичность повреждена.")
     return {
         "display_name": _validate_display_name(identity.display_name),
+        "expires_at": normalize_expiration(identity.expires_at),
         "encryption_algorithm": ENCRYPTION_ALGORITHM,
         "encryption_public_key": base64.b64encode(
             identity.encryption_public_key

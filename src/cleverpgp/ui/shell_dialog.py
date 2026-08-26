@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from cleverpgp.core.errors import ValidationError
 from cleverpgp.core.file_crypto import FileCryptoService
+from cleverpgp.core.key_validity import key_is_expired
 from cleverpgp.core.portable_keys import PortableKeyService
 from cleverpgp.core.storage import ProfileRepository
 from cleverpgp.localization import localize_widget_tree, set_language, tr
@@ -80,6 +82,21 @@ class ShellFileWorker(QObject):
                     for contact_id in self.recipient_ids
                     if contact_id in contacts_by_id
                 )
+                selected_key = self.repository.get_user_key(self.key_id)
+                if (
+                    self.operation == "encrypt"
+                    and selected_key is not None
+                    and key_is_expired(selected_key.expires_at)
+                ):
+                    raise ValidationError(
+                        "Срок действия выбранного цифрового ключа истёк."
+                    )
+                if self.operation == "encrypt" and any(
+                    key_is_expired(contact.expires_at) for contact in recipients
+                ):
+                    raise ValidationError(
+                        "Срок действия открытого ключа одного из получателей истёк."
+                    )
                 with key_service.unlock_key(self.key_id, self.password) as identity:
                     if self.operation == "encrypt":
                         result = service.encrypt_file_with_identity(
@@ -211,6 +228,8 @@ class ShellOperationDialog(QDialog):
         self.key_label = QLabel("Ваш цифровой ключ")
         self.key_combo = QComboBox()
         for key in self.repository.list_user_keys():
+            if self.operation == "encrypt" and key_is_expired(key.expires_at):
+                continue
             self.key_combo.addItem(
                 f"{key.display_name} — {key.fingerprint[:16]}", key.key_id
             )
@@ -218,6 +237,8 @@ class ShellOperationDialog(QDialog):
         self.recipient_list = QListWidget()
         self.recipient_list.setMaximumHeight(150)
         for contact in self.repository.list_contacts():
+            if self.operation == "encrypt" and key_is_expired(contact.expires_at):
+                continue
             item = QListWidgetItem(
                 f"{contact.display_name} — {contact.fingerprint[:16]}"
             )

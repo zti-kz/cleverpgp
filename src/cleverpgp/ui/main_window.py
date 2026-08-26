@@ -61,7 +61,6 @@ from cleverpgp.core.windows_shell import application_command_prefix
 from cleverpgp.core.winspd import MIN_WINDOWS_DISK_CAPACITY
 from cleverpgp.localization import (
     current_language,
-    install_language_pack,
     localize_widget_tree,
     set_language,
     tr,
@@ -610,22 +609,6 @@ class MainWindow(QMainWindow):
                 self.close()
             return
         request = dialog.request
-        if request.operation == "install_language" and request.language_pack_path:
-            try:
-                language = install_language_pack(request.language_pack_path)
-                self.repository.set_setting("language", language.code)
-            except (OSError, TypeError, ValueError) as error:
-                self._show_error(str(error))
-                return
-            if not self._compact_settings_launch:
-                self._set_dashboard_status(
-                    tr(
-                        "Язык {name} установлен. Clever PGP перезапускается.",
-                        name=language.native_name,
-                    )
-                )
-            QTimer.singleShot(0, self._restart_application)
-            return
         if request.operation == "language" and request.language_code:
             self.repository.set_setting("language", request.language_code)
             if request.language_code == current_language():

@@ -60,6 +60,7 @@ class PublicIdentity:
     fingerprint: str
     encryption_public_key: bytes
     signing_public_key: bytes
+    expires_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +71,7 @@ class Contact:
     encryption_public_key: bytes
     signing_public_key: bytes
     created_at: str
+    expires_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,3 +88,4 @@ class UserKey:
     kdf_memlimit: int
     encrypted_private_bundle: bytes
     created_at: str
+    expires_at: str | None = None

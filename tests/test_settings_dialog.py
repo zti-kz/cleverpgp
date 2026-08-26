@@ -32,9 +32,10 @@ def test_settings_dialog_uses_title_bar_for_closing() -> None:
     assert "Отмена" not in button_texts
     assert button_texts == {
         "Сохранить язык",
-        "Установить перевод…",
-        "Создать шаблон перевода…",
+        "Проверить обновления",
     }
+    assert "Установить перевод" not in " ".join(button_texts)
+    assert "шаблон перевода" not in " ".join(button_texts).lower()
 
     dialog.close()
     application.processEvents()

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
-    QFileDialog,
     QFrame,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -21,13 +19,13 @@ from cleverpgp.core.models import UnlockMode
 from cleverpgp.localization import (
     available_languages,
     current_language,
-    export_language_template,
     localize_widget_tree,
     tr,
 )
 from cleverpgp.ui.adaptive import scrollable_dialog_layout
 from cleverpgp.ui.icons import line_icon
 from cleverpgp.ui.password_generator import add_password_generator_action
+from cleverpgp.ui.update_widget import UpdateWidget
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +35,6 @@ class AccessSettingsRequest:
     current_password: str = ""
     new_password: str = ""
     language_code: str = ""
-    language_pack_path: Path | None = None
 
 
 class AccessSettingsDialog(QDialog):
@@ -59,7 +56,7 @@ class AccessSettingsDialog(QDialog):
         self.setWindowTitle("Настройки — Clever PGP")
         self.setModal(True)
         self.setMinimumWidth(420)
-        self.resize(760, 760)
+        self.resize(760, 700)
         self.setStyleSheet(SETTINGS_STYLESHEET)
         self._build_ui(
             current_mode,
@@ -81,8 +78,11 @@ class AccessSettingsDialog(QDialog):
         outer.setContentsMargins(30, 26, 30, 28)
         outer.setSpacing(14)
 
-        header = QHBoxLayout()
+        header_widget = QWidget()
+        header = QHBoxLayout(header_widget)
+        header.setContentsMargins(0, 0, 0, 0)
         identity = QVBoxLayout()
+        identity.setSpacing(4)
         brand = QLabel("Clever PGP")
         brand.setObjectName("brand")
         title = QLabel("Настройки")
@@ -94,7 +94,7 @@ class AccessSettingsDialog(QDialog):
         icon = QLabel()
         icon.setPixmap(line_icon("settings", "#7dd3fc").pixmap(42, 42))
         header.addWidget(icon)
-        outer.addLayout(header)
+        outer.addWidget(header_widget)
 
         if drive is not None:
             selected_disk = QLabel(tr("Подключённый диск: {drive}", drive=drive))
@@ -123,19 +123,15 @@ class AccessSettingsDialog(QDialog):
             max(0, self.language_input.findData(selected_language))
         )
         language_layout.addWidget(self.language_input)
-        language_button = QPushButton("Сохранить язык")
-        language_button.setIcon(line_icon("language"))
-        language_button.clicked.connect(self._request_language_change)
-        language_layout.addWidget(language_button)
-        add_language_button = QPushButton("Установить перевод…")
-        add_language_button.setIcon(line_icon("language"))
-        add_language_button.clicked.connect(self._request_language_installation)
-        language_layout.addWidget(add_language_button)
-        template_button = QPushButton("Создать шаблон перевода…")
-        template_button.setIcon(line_icon("file_lock"))
-        template_button.clicked.connect(self._export_language_template)
-        language_layout.addWidget(template_button)
+        self.language_button = QPushButton("Сохранить язык")
+        self.language_button.setIcon(line_icon("language"))
+        self.language_button.clicked.connect(self._request_language_change)
+        language_layout.addWidget(self.language_button)
         outer.addWidget(language_card)
+
+        self.update_widget = UpdateWidget(self)
+        self.update_widget.busy_changed.connect(self._update_busy_changed)
+        outer.addWidget(self.update_widget)
 
         if not show_profile_controls:
             self.error_label = QLabel()
@@ -143,6 +139,7 @@ class AccessSettingsDialog(QDialog):
             self.error_label.setWordWrap(True)
             self.error_label.hide()
             outer.addWidget(self.error_label)
+            outer.addStretch(1)
             return
 
         mode_card = self._card()
@@ -229,6 +226,7 @@ class AccessSettingsDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.hide()
         outer.addWidget(self.error_label)
+        outer.addStretch(1)
 
     @staticmethod
     def _card() -> QFrame:
@@ -291,60 +289,6 @@ class AccessSettingsDialog(QDialog):
         )
         self.accept()
 
-    def _request_language_installation(self) -> None:
-        selected, _filter = QFileDialog.getOpenFileName(
-            self,
-            tr("Добавить язык Clever PGP"),
-            "",
-            tr("Языковой пакет Clever PGP (*.cpg-lang *.json)"),
-        )
-        if not selected:
-            return
-        self.request = AccessSettingsRequest(
-            "install_language",
-            language_pack_path=Path(selected).expanduser().resolve(),
-        )
-        self.accept()
-
-    def _export_language_template(self) -> None:
-        code, accepted = QInputDialog.getText(
-            self,
-            tr("Новый перевод Clever PGP"),
-            tr("Код языка и страны (например, de_DE):"),
-        )
-        if not accepted:
-            return
-        native_name, accepted = QInputDialog.getText(
-            self,
-            tr("Новый перевод Clever PGP"),
-            tr("Название языка на этом языке (например, Deutsch):"),
-        )
-        if not accepted:
-            return
-        default_name = f"{code.strip() or 'translation'}.cpg-lang"
-        selected, _filter = QFileDialog.getSaveFileName(
-            self,
-            tr("Сохранить шаблон перевода"),
-            default_name,
-            tr("Языковой пакет Clever PGP (*.cpg-lang *.json)"),
-        )
-        if not selected:
-            return
-        try:
-            export_language_template(
-                Path(selected),
-                code=code,
-                native_name=native_name,
-            )
-        except (OSError, ValueError) as error:
-            self._show_error(str(error))
-            return
-        self.error_label.setObjectName("success")
-        self.error_label.setText(
-            tr("Шаблон перевода сохранён: {path}", path=selected)
-        )
-        self.error_label.show()
-
     def _request_password_change(self) -> None:
         current_password = self.current_password_input.text()
         new_password = self.new_password_input.text()
@@ -365,8 +309,22 @@ class AccessSettingsDialog(QDialog):
         self.accept()
 
     def _show_error(self, message: str) -> None:
+        self.error_label.setObjectName("error")
         self.error_label.setText(tr(message))
+        self.error_label.style().unpolish(self.error_label)
+        self.error_label.style().polish(self.error_label)
         self.error_label.show()
+
+    def _update_busy_changed(self, busy: bool) -> None:
+        for button in self.findChildren(QPushButton):
+            if button is not self.update_widget.button:
+                button.setEnabled(not busy)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.update_widget.busy:
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 SETTINGS_STYLESHEET = """
@@ -425,4 +383,13 @@ QPushButton#primary {
     font-weight: 600;
 }
 QPushButton#primary:hover { background: #0ea5e9; }
+QProgressBar {
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    color: #f8fafc;
+    min-height: 28px;
+    text-align: center;
+}
+QProgressBar::chunk { background: #0284c7; border-radius: 7px; }
 """

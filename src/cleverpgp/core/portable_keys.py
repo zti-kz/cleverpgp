@@ -24,6 +24,11 @@ from cleverpgp.core.identity import (
     encode_public_identity,
     identity_fingerprint,
 )
+from cleverpgp.core.key_validity import (
+    DEFAULT_KEY_VALIDITY_DAYS,
+    expiration_from_validity_days,
+    normalize_expiration,
+)
 from cleverpgp.core.models import PublicIdentity, UserKey
 from cleverpgp.core.storage import ProfileRepository
 
@@ -50,9 +55,17 @@ class PortableKeyService:
         self.opslimit = int(opslimit)
         self.memlimit = int(memlimit)
 
-    def create_key(self, display_name: str, password: str) -> UserKey:
+    def create_key(
+        self,
+        display_name: str,
+        password: str,
+        *,
+        validity_days: int | None = DEFAULT_KEY_VALIDITY_DAYS,
+    ) -> UserKey:
         name = self._validate_display_name(display_name)
         password_bytes = self._validate_password(password)
+        created = datetime.now(UTC)
+        expires_at = expiration_from_validity_days(created, validity_days)
         encryption_private = public.PrivateKey.generate()
         signing_private = signing.SigningKey.generate()
         encryption_private_bytes = bytes(encryption_private)
@@ -75,6 +88,7 @@ class PortableKeyService:
             private_payload = PRIVATE_BUNDLE_MAGIC + self._canonical_json(
                 {
                     "display_name": name,
+                    "expires_at": expires_at,
                     "encryption_private_key": base64.b64encode(
                         encryption_private_bytes
                     ).decode("ascii"),
@@ -96,7 +110,8 @@ class PortableKeyService:
                 kdf_opslimit=self.opslimit,
                 kdf_memlimit=self.memlimit,
                 encrypted_private_bundle=encrypted_private,
-                created_at=datetime.now(UTC).isoformat(),
+                created_at=created.isoformat(),
+                expires_at=expires_at,
             )
             self.repository.save_user_key(record)
             return record
@@ -155,6 +170,9 @@ class PortableKeyService:
             protected_key_id = str(private_payload["key_id"])
             protected_name = str(private_payload["display_name"])
             protected_fingerprint = str(private_payload["fingerprint"])
+            protected_expiration = normalize_expiration(
+                private_payload.get("expires_at")
+            )
         except (
             UnicodeDecodeError,
             json.JSONDecodeError,
@@ -180,6 +198,7 @@ class PortableKeyService:
                 protected_fingerprint.encode("ascii"),
                 record.fingerprint.encode("ascii"),
             )
+            or protected_expiration != normalize_expiration(record.expires_at)
         ):
             raise CryptographicIdentityError(
                 "Защищённые сведения цифрового ключа не совпадают с заголовком."
@@ -209,6 +228,7 @@ class PortableKeyService:
                 fingerprint=record.fingerprint,
                 encryption_public_key=record.encryption_public_key,
                 signing_public_key=record.signing_public_key,
+                expires_at=record.expires_at,
             ),
             encryption_private,
             signing_seed,
@@ -255,6 +275,14 @@ class PortableKeyService:
             )
         return self._atomic_write(target_path, encoded, overwrite=overwrite)
 
+    def delete_key(self, key_or_id: UserKey | str, password: str) -> bool:
+        """Authenticate the owner before removing a local private key record."""
+
+        record = self._resolve_key(key_or_id)
+        with self.unlock_key(record, password):
+            pass
+        return self.repository.delete_user_key(record.key_id)
+
     def _resolve_key(self, key_or_id: UserKey | str) -> UserKey:
         if isinstance(key_or_id, UserKey):
             stored = self.repository.get_user_key(key_or_id.key_id)
@@ -269,6 +297,7 @@ class PortableKeyService:
         return {
             "created_at": record.created_at,
             "display_name": record.display_name,
+            "expires_at": normalize_expiration(record.expires_at),
             "encrypted_private_bundle": base64.b64encode(
                 record.encrypted_private_bundle
             ).decode("ascii"),
@@ -315,6 +344,7 @@ class PortableKeyService:
             key_id = str(payload["key_id"])
             created_at = str(payload["created_at"])
             display_name = self._validate_display_name(str(payload["display_name"]))
+            expires_at = normalize_expiration(payload.get("expires_at"))
             opslimit = int(payload["kdf_opslimit"])
             memlimit = int(payload["kdf_memlimit"])
         except (
@@ -350,6 +380,7 @@ class PortableKeyService:
             kdf_memlimit=memlimit,
             encrypted_private_bundle=encrypted_private,
             created_at=created_at,
+            expires_at=expires_at,
         )
 
     @staticmethod
@@ -418,6 +449,7 @@ class PortableKeyService:
 
 __all__ = [
     "MINIMUM_KEY_PASSWORD_LENGTH",
+    "DEFAULT_KEY_VALIDITY_DAYS",
     "PRIVATE_KEY_EXTENSION",
     "PortableKeyService",
 ]

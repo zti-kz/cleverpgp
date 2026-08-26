@@ -138,7 +138,7 @@ def test_schema_two_profile_is_upgraded_without_replacement(tmp_path: Path) -> N
     repository.initialize()
 
     assert repository.get_profile() == original_profile
-    assert repository.get_setting("schema_version") == "4"
+    assert repository.get_setting("schema_version") == "5"
     with sqlite3.connect(repository.path) as connection:
         tables = {
             str(row[0])
@@ -147,3 +147,50 @@ def test_schema_two_profile_is_upgraded_without_replacement(tmp_path: Path) -> N
             )
         }
     assert {"cryptographic_identity", "contact", "user_key"} <= tables
+
+
+def test_existing_key_tables_gain_optional_expiration_columns(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO metadata(key, value) VALUES('schema_version', '4');
+            CREATE TABLE contact (
+                contact_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                fingerprint TEXT NOT NULL UNIQUE,
+                encryption_public_key BLOB NOT NULL UNIQUE,
+                signing_public_key BLOB NOT NULL UNIQUE,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE user_key (
+                key_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                fingerprint TEXT NOT NULL UNIQUE,
+                encryption_public_key BLOB NOT NULL UNIQUE,
+                signing_public_key BLOB NOT NULL UNIQUE,
+                kdf_salt BLOB NOT NULL,
+                kdf_opslimit INTEGER NOT NULL,
+                kdf_memlimit INTEGER NOT NULL,
+                encrypted_private_bundle BLOB NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+
+    repository = ProfileRepository(path)
+    repository.initialize()
+
+    with sqlite3.connect(path) as connection:
+        contact_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(contact)")
+        }
+        key_columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(user_key)")
+        }
+    assert "expires_at" in contact_columns
+    assert "expires_at" in key_columns
+    assert repository.get_setting("schema_version") == "5"

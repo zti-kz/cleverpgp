@@ -13,7 +13,7 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     text = "\n".join(label.text() for label in dialog.findChildren(QLabel))
 
     assert "Clever PGP" in text
-    assert "Версия 0.15.2" in text
+    assert "Версия 0.15.3" in text
     assert ".cpgp" in text
     assert ".cpgv" in text
     assert "Алмас Оскенбаев" in text
@@ -37,9 +37,7 @@ def test_about_dialog_contains_product_and_developer_information() -> None:
     assert "XChaCha20" not in text
     assert "libsodium" not in text
     assert "лицо не превращается в криптографический ключ" in text.lower()
-    assert [button.text() for button in dialog.findChildren(QPushButton)] == [
-        "Проверить обновления"
-    ]
+    assert dialog.findChildren(QPushButton) == []
 
     dialog.close()
     application.processEvents()

@@ -15,7 +15,7 @@ from cleverpgp.core.models import (
     UnlockMode,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class ProfileRepository:
@@ -76,7 +76,8 @@ class ProfileRepository:
                     fingerprint TEXT NOT NULL UNIQUE,
                     encryption_public_key BLOB NOT NULL UNIQUE,
                     signing_public_key BLOB NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS user_key (
@@ -89,10 +90,13 @@ class ProfileRepository:
                     kdf_opslimit INTEGER NOT NULL,
                     kdf_memlimit INTEGER NOT NULL,
                     encrypted_private_bundle BLOB NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT
                 );
                 """
             )
+            self._add_column_if_missing(connection, "contact", "expires_at", "TEXT")
+            self._add_column_if_missing(connection, "user_key", "expires_at", "TEXT")
             connection.execute(
                 """
                 INSERT INTO metadata(key, value) VALUES('schema_version', ?)
@@ -343,8 +347,9 @@ class ProfileRepository:
                     """
                     INSERT INTO contact(
                         contact_id, display_name, fingerprint,
-                        encryption_public_key, signing_public_key, created_at
-                    ) VALUES(?, ?, ?, ?, ?, ?)
+                        encryption_public_key, signing_public_key, created_at,
+                        expires_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         contact.contact_id,
@@ -353,6 +358,7 @@ class ProfileRepository:
                         contact.encryption_public_key,
                         contact.signing_public_key,
                         contact.created_at,
+                        contact.expires_at,
                     ),
                 )
         except sqlite3.IntegrityError as error:
@@ -369,8 +375,8 @@ class ProfileRepository:
                         key_id, display_name, fingerprint,
                         encryption_public_key, signing_public_key,
                         kdf_salt, kdf_opslimit, kdf_memlimit,
-                        encrypted_private_bundle, created_at
-                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        encrypted_private_bundle, created_at, expires_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         key.key_id,
@@ -383,6 +389,7 @@ class ProfileRepository:
                         key.kdf_memlimit,
                         key.encrypted_private_bundle,
                         key.created_at,
+                        key.expires_at,
                     ),
                 )
         except sqlite3.IntegrityError as error:
@@ -397,7 +404,7 @@ class ProfileRepository:
                 SELECT key_id, display_name, fingerprint,
                        encryption_public_key, signing_public_key,
                        kdf_salt, kdf_opslimit, kdf_memlimit,
-                       encrypted_private_bundle, created_at
+                       encrypted_private_bundle, created_at, expires_at
                 FROM user_key
                 ORDER BY display_name COLLATE NOCASE, created_at
                 """
@@ -411,7 +418,7 @@ class ProfileRepository:
                 SELECT key_id, display_name, fingerprint,
                        encryption_public_key, signing_public_key,
                        kdf_salt, kdf_opslimit, kdf_memlimit,
-                       encrypted_private_bundle, created_at
+                       encrypted_private_bundle, created_at, expires_at
                 FROM user_key WHERE key_id = ?
                 """,
                 (key_id,),
@@ -425,7 +432,7 @@ class ProfileRepository:
                 SELECT key_id, display_name, fingerprint,
                        encryption_public_key, signing_public_key,
                        kdf_salt, kdf_opslimit, kdf_memlimit,
-                       encrypted_private_bundle, created_at
+                       encrypted_private_bundle, created_at, expires_at
                 FROM user_key WHERE fingerprint = ?
                 """,
                 (fingerprint,),
@@ -445,7 +452,8 @@ class ProfileRepository:
             rows = connection.execute(
                 """
                 SELECT contact_id, display_name, fingerprint,
-                       encryption_public_key, signing_public_key, created_at
+                       encryption_public_key, signing_public_key, created_at,
+                       expires_at
                 FROM contact
                 ORDER BY display_name COLLATE NOCASE, fingerprint
                 """
@@ -458,6 +466,7 @@ class ProfileRepository:
                 encryption_public_key=bytes(row["encryption_public_key"]),
                 signing_public_key=bytes(row["signing_public_key"]),
                 created_at=row["created_at"],
+                expires_at=row["expires_at"],
             )
             for row in rows
         )
@@ -467,7 +476,8 @@ class ProfileRepository:
             row = connection.execute(
                 """
                 SELECT contact_id, display_name, fingerprint,
-                       encryption_public_key, signing_public_key, created_at
+                       encryption_public_key, signing_public_key, created_at,
+                       expires_at
                 FROM contact
                 WHERE fingerprint = ?
                 """,
@@ -482,6 +492,7 @@ class ProfileRepository:
             encryption_public_key=bytes(row["encryption_public_key"]),
             signing_public_key=bytes(row["signing_public_key"]),
             created_at=row["created_at"],
+            expires_at=row["expires_at"],
         )
 
     def delete_contact(self, contact_id: str) -> bool:
@@ -505,7 +516,26 @@ class ProfileRepository:
             kdf_memlimit=int(row["kdf_memlimit"]),
             encrypted_private_bundle=bytes(row["encrypted_private_bundle"]),
             created_at=str(row["created_at"]),
+            expires_at=(
+                None if row["expires_at"] is None else str(row["expires_at"])
+            ),
         )
+
+    @staticmethod
+    def _add_column_if_missing(
+        connection: sqlite3.Connection,
+        table: str,
+        column: str,
+        declaration: str,
+    ) -> None:
+        existing = {
+            str(row["name"])
+            for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        if column not in existing:
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+            )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
