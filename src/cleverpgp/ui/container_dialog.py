@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QStandardPaths
+from PySide6.QtCore import QSignalBlocker, Qt, QStandardPaths
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -102,6 +102,8 @@ class ContainerCreationDialog(QDialog):
         self._maximum_capacity = self._selected_capacity
         self._capacity_choices = [self._minimum_capacity, self._selected_capacity]
         self._current_path: Path | None = None
+        self._automatic_path = True
+        self._automatic_label = True
         self.setWindowTitle("Новый зашифрованный диск — Clever PGP")
         self.setMinimumSize(560, 360)
         self.resize(
@@ -127,7 +129,9 @@ class ContainerCreationDialog(QDialog):
 
     @property
     def volume_label(self) -> str:
-        return self.label_input.text().strip() or "Clever PGP"
+        return self.label_input.text().strip() or self._capacity_name(
+            self._selected_capacity
+        )
 
     @property
     def file_system(self) -> str:
@@ -342,7 +346,7 @@ class ContainerCreationDialog(QDialog):
         path_title.setObjectName("fieldTitle")
         outer.addWidget(path_title)
         path_row = QHBoxLayout()
-        self.path_input = QLineEdit(str(self._default_path()))
+        self.path_input = QLineEdit(str(self._default_path(self._selected_capacity)))
         self.path_input.setPlaceholderText("Путь к файлу .cpgv")
         browse_button = QPushButton("Обзор…")
         browse_button.setIcon(line_icon("folder"))
@@ -463,7 +467,7 @@ class ContainerCreationDialog(QDialog):
 
         label_title = QLabel("Название диска")
         label_title.setObjectName("fieldTitle")
-        self.label_input = QLineEdit("Clever PGP")
+        self.label_input = QLineEdit(self._capacity_name(self._selected_capacity))
         self.label_input.setMaxLength(31)
         self.label_input.setPlaceholderText("Например, Личные документы")
         outer.addWidget(label_title)
@@ -493,7 +497,8 @@ class ContainerCreationDialog(QDialog):
         root.addWidget(button_bar)
 
         self.size_slider.valueChanged.connect(self._slider_changed)
-        self.path_input.textChanged.connect(self._update_storage_summary)
+        self.path_input.textChanged.connect(self._path_changed)
+        self.label_input.textChanged.connect(self._mark_label_custom)
         self.algorithm_input.currentIndexChanged.connect(
             self._update_algorithm_description
         )
@@ -670,6 +675,7 @@ class ContainerCreationDialog(QDialog):
         self._selected_capacity = self._slider_to_capacity(
             position
         )
+        self._refresh_automatic_names()
         self._update_size_summary()
         if self._current_path is not None:
             self._update_create_state(
@@ -683,6 +689,33 @@ class ContainerCreationDialog(QDialog):
             "служебные криптографические данные и может быть немного больше "
             "указанного объёма."
         ))
+
+    def _mark_path_custom(self, *_: object) -> None:
+        self._automatic_path = False
+
+    def _path_changed(self, *_: object) -> None:
+        self._mark_path_custom()
+        self._update_storage_summary()
+
+    def _mark_label_custom(self, *_: object) -> None:
+        self._automatic_label = False
+
+    def _refresh_automatic_names(self) -> None:
+        name = self._capacity_name(self._selected_capacity)
+        if self._automatic_label and self.label_input.text() != name:
+            blocker = QSignalBlocker(self.label_input)
+            self.label_input.setText(name)
+            del blocker
+        if self._automatic_path:
+            try:
+                directory = self._normalized_path().parent
+            except ValueError:
+                directory = self._default_directory()
+            target = self._available_capacity_path(directory, self._selected_capacity)
+            if self.path_input.text() != str(target):
+                blocker = QSignalBlocker(self.path_input)
+                self.path_input.setText(str(target))
+                del blocker
 
     def _update_storage_summary(self, *_: object) -> None:
         self.storage_warning.hide()
@@ -701,6 +734,9 @@ class ContainerCreationDialog(QDialog):
         self._current_path = path
         slider_maximum = max(self._minimum_capacity, maximum_capacity)
         self._configure_slider(slider_maximum)
+        if self._automatic_path:
+            path = self._normalized_path()
+            self._current_path = path
 
         drive_name = path.anchor.rstrip("\\/") or str(path.parent)
         self.storage_location.setText(
@@ -748,6 +784,7 @@ class ContainerCreationDialog(QDialog):
         self.size_slider.setValue(position)
         self.size_slider.blockSignals(False)
         self._selected_capacity = self._slider_to_capacity(position)
+        self._refresh_automatic_names()
         self.minimum_size_label.setText(
             tr(
                 "Минимум: {size}",
@@ -810,18 +847,36 @@ class ContainerCreationDialog(QDialog):
         return f"{size} {tr('байт')}"
 
     @staticmethod
-    def _default_path() -> Path:
+    def _capacity_name(capacity: int) -> str:
+        for suffix, factor in (
+            ("TB", TEBIBYTE),
+            ("GB", GIBIBYTE),
+            ("MB", MEBIBYTE),
+        ):
+            if capacity >= factor and capacity % factor == 0:
+                return f"CPGP_{capacity // factor}{suffix}"
+        return f"CPGP_{max(1, round(capacity / MEBIBYTE))}MB"
+
+    @staticmethod
+    def _default_directory() -> Path:
         documents = QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.DocumentsLocation
         )
-        base = Path(documents) if documents else Path.cwd()
-        stem = tr("Защищённый диск")
-        candidate = base / f"{stem}{CONTAINER_SUFFIX}"
+        return Path(documents) if documents else Path.cwd()
+
+    @classmethod
+    def _available_capacity_path(cls, directory: Path, capacity: int) -> Path:
+        stem = cls._capacity_name(capacity)
+        candidate = directory / f"{stem}{CONTAINER_SUFFIX}"
         index = 2
         while candidate.exists():
-            candidate = base / f"{stem} ({index}){CONTAINER_SUFFIX}"
+            candidate = directory / f"{stem}_{index}{CONTAINER_SUFFIX}"
             index += 1
         return candidate
+
+    @classmethod
+    def _default_path(cls, capacity: int = DEFAULT_CAPACITY) -> Path:
+        return cls._available_capacity_path(cls._default_directory(), capacity)
 
 
 CONTAINER_DIALOG_STYLESHEET = """

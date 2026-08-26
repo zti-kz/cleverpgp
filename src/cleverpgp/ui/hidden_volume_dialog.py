@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QProgressBar,
     QSlider,
     QVBoxLayout,
 )
@@ -170,7 +172,7 @@ class HiddenVolumeCreationDialog(QDialog):
             self.hidden_password_repeat,
         )
 
-        self.hidden_label = QLineEdit("Clever PGP Hidden")
+        self.hidden_label = QLineEdit(self._hidden_capacity_name())
         self.hidden_label.setMaxLength(31)
         self.hidden_label.setPlaceholderText("Название скрытого диска")
         layout.addWidget(self.hidden_label)
@@ -261,6 +263,14 @@ class HiddenVolumeCreationDialog(QDialog):
                 ),
             )
         )
+        if hasattr(self, "hidden_label") and not self.hidden_label.isModified():
+            self.hidden_label.setText(self._hidden_capacity_name())
+
+    def _hidden_capacity_name(self) -> str:
+        capacity_name = ContainerCreationDialog._capacity_name(
+            self.hidden_capacity
+        ).removeprefix("CPGP_")
+        return f"CPGP_HIDDEN_{capacity_name}"
 
     @staticmethod
     def _password_input(placeholder: str) -> QLineEdit:
@@ -315,6 +325,12 @@ class OpaqueVolumeUnlockDialog(QDialog):
         self.password.returnPressed.connect(self.accept)
         layout.addWidget(self.password)
 
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.hide()
+        layout.addWidget(self.progress)
+
         self.error_label = QLabel()
         self.error_label.setObjectName("error")
         self.error_label.setWordWrap(True)
@@ -322,16 +338,16 @@ class OpaqueVolumeUnlockDialog(QDialog):
         layout.addWidget(self.error_label)
 
         buttons = QHBoxLayout()
-        cancel = QPushButton("Отмена")
-        cancel.setIcon(line_icon("close"))
-        cancel.clicked.connect(self.reject)
-        unlock = QPushButton("Разблокировать диск")
-        unlock.setObjectName("primary")
-        unlock.setIcon(line_icon("unlock"))
-        unlock.clicked.connect(self.accept)
+        self.cancel_button = QPushButton("Отмена")
+        self.cancel_button.setIcon(line_icon("close"))
+        self.cancel_button.clicked.connect(self.reject)
+        self.unlock_button = QPushButton("Разблокировать диск")
+        self.unlock_button.setObjectName("primary")
+        self.unlock_button.setIcon(line_icon("unlock"))
+        self.unlock_button.clicked.connect(self.accept)
         buttons.addStretch()
-        buttons.addWidget(cancel)
-        buttons.addWidget(unlock)
+        buttons.addWidget(self.cancel_button)
+        buttons.addWidget(self.unlock_button)
         layout.addLayout(buttons)
         localize_widget_tree(self)
         self.password.setFocus()
@@ -348,9 +364,48 @@ class OpaqueVolumeUnlockDialog(QDialog):
         super().accept()
 
     def reject(self) -> None:
+        if not self.cancel_button.isEnabled():
+            return
         self.request = None
         self.password.clear()
         super().reject()
+
+    def begin_operation(self) -> None:
+        self.error_label.hide()
+        self.password.setEnabled(False)
+        self.cancel_button.setEnabled(False)
+        self.unlock_button.setEnabled(False)
+        self.progress.setValue(1)
+        self.progress.setFormat(tr("1% — Проверка пароля и подключение"))
+        self.progress.show()
+
+    def update_progress(self, value: int, message: str) -> None:
+        self.progress.setValue(value)
+        suffix = f" — {tr(message)}" if message else ""
+        self.progress.setFormat(f"{value}%{suffix}")
+
+    def operation_failed(self, message: str) -> None:
+        self.request = None
+        self.password.clear()
+        self.password.setEnabled(True)
+        self.cancel_button.setEnabled(True)
+        self.unlock_button.setEnabled(True)
+        self.error_label.setText(tr(message or "Неверный пароль диска."))
+        self.error_label.show()
+        self.password.setFocus()
+
+    def operation_succeeded(self) -> None:
+        self.progress.setValue(100)
+        self.progress.setFormat(tr("100% — Диск подключён"))
+        self.password.clear()
+        self.cancel_button.setEnabled(True)
+        self.close()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if not self.cancel_button.isEnabled():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
 
 HIDDEN_DIALOG_STYLESHEET = """
@@ -424,4 +479,14 @@ QSlider#capacitySlider::handle:horizontal {
     width: 22px;
     margin: -8px 0;
 }
+QProgressBar {
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    color: #f8fafc;
+    min-height: 28px;
+    text-align: center;
+    font-weight: 650;
+}
+QProgressBar::chunk { background: #0284c7; border-radius: 7px; }
 """

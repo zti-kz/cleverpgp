@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import stat
 
 import pytest
 
@@ -35,3 +36,13 @@ def test_secure_delete_overwrites_every_pass_before_unlink(
 def test_secure_delete_rejects_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="не найден"):
         secure_delete_file(tmp_path / "missing.txt")
+
+
+def test_secure_delete_removes_a_read_only_file(tmp_path: Path) -> None:
+    source = tmp_path / "read-only.txt"
+    source.write_bytes(b"sensitive")
+    source.chmod(stat.S_IREAD)
+
+    secure_delete_file(source, passes=1)
+
+    assert source.exists() is False

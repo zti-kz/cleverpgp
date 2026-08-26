@@ -309,7 +309,7 @@ def test_direct_container_open_uses_compact_window(tmp_path: Path) -> None:
         result = application_main(container)
 
     assert result == 0
-    window_type.return_value.show.assert_called_once_with()
+    window_type.return_value.hide.assert_called_once_with()
     window_type.return_value.showMaximized.assert_not_called()
 
 

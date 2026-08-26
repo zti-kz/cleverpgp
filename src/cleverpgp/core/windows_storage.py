@@ -1786,7 +1786,7 @@ class WindowsSystemDiskManager:
                         record.drive,
                         open_label="Открыть зашифрованный диск",
                         info_label="Сведения о диске",
-                        settings_label="Настройки доступа",
+                        settings_label=None,
                         resize_label="Увеличить диск",
                         unmount_label="Отключить зашифрованный диск",
                         password_label="Изменить пароль диска",
@@ -1837,7 +1837,7 @@ class WindowsSystemDiskManager:
         if context_menu_labels is None:
             open_label = "Открыть зашифрованный диск"
             info_label = "Сведения о диске"
-            settings_label = "Настройки доступа"
+            settings_label = ""
             resize_label = "Увеличить диск"
             password_label = None
             algorithm_label = (
@@ -1849,7 +1849,7 @@ class WindowsSystemDiskManager:
         elif len(context_menu_labels) == 2:
             open_label, unmount_label = context_menu_labels
             info_label = "Сведения о диске"
-            settings_label = "Настройки доступа"
+            settings_label = ""
             resize_label = "Увеличить диск"
             password_label = None
             algorithm_label = None

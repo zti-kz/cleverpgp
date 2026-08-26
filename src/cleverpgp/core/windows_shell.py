@@ -44,7 +44,7 @@ def drive_context_menu_values(
     icon_path: Path,
     open_label: str,
     info_label: str,
-    settings_label: str,
+    settings_label: str | None,
     resize_label: str | None,
     unmount_label: str,
     password_label: str | None = None,
@@ -63,9 +63,6 @@ def drive_context_menu_values(
     del open_label
     unmount_command = subprocess.list2cmdline(
         [*prefix, "--unmount", "%1"]
-    )
-    settings_command = subprocess.list2cmdline(
-        [*prefix, "--settings", "%1"]
     )
     password_command = subprocess.list2cmdline(
         [*prefix, "--change-disk-password", "%1"]
@@ -93,10 +90,18 @@ def drive_context_menu_values(
         RegistryValue(info_key, "MUIVerb", info_label),
         RegistryValue(info_key, "Icon", icon),
         RegistryValue(info_key + r"\command", "", info_command),
-        RegistryValue(settings_key, "MUIVerb", settings_label),
-        RegistryValue(settings_key, "Icon", icon),
-        RegistryValue(settings_key + r"\command", "", settings_command),
     ]
+    if settings_label:
+        settings_command = subprocess.list2cmdline(
+            [*prefix, "--settings", "%1"]
+        )
+        values.extend(
+            [
+                RegistryValue(settings_key, "MUIVerb", settings_label),
+                RegistryValue(settings_key, "Icon", icon),
+                RegistryValue(settings_key + r"\command", "", settings_command),
+            ]
+        )
     if password_label:
         values.extend(
             [
@@ -163,7 +168,7 @@ class WindowsDriveContextMenu:
         *,
         open_label: str,
         info_label: str,
-        settings_label: str,
+        settings_label: str | None,
         resize_label: str | None,
         unmount_label: str,
         password_label: str | None = None,

@@ -1,17 +1,29 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from pathlib import Path
+
+from PySide6.QtCore import QThread, Qt, Signal, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from cleverpgp import __version__
+from cleverpgp.core.update_service import (
+    UpdateCheckResult,
+    check_for_update,
+    download_update,
+    launch_update_installer,
+)
 from cleverpgp.localization import localize_widget_tree, tr
 from cleverpgp.ui.icons import line_icon
 
@@ -31,11 +43,44 @@ WINSPD_NOTICE = (
 )
 
 
+class UpdateCheckThread(QThread):
+    checked = Signal(object)
+    failed = Signal(str)
+
+    def run(self) -> None:
+        try:
+            self.checked.emit(check_for_update(__version__))
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
+class UpdateDownloadThread(QThread):
+    downloaded = Signal(object)
+    failed = Signal(str)
+    progress = Signal(int, str)
+
+    def __init__(self, result: UpdateCheckResult, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.result = result
+
+    def run(self) -> None:
+        try:
+            target = download_update(
+                self.result,
+                progress=lambda value, message: self.progress.emit(value, message),
+            )
+            self.downloaded.emit(target)
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
 class AboutDialog(QDialog):
     """Product information presented inside the application."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._update_result: UpdateCheckResult | None = None
+        self._update_thread: QThread | None = None
         self.setWindowTitle("О программе Clever PGP")
         self.setModal(True)
         self.resize(960, 840)
@@ -122,6 +167,30 @@ class AboutDialog(QDialog):
             "Открытая временная папка на диске не создаётся.",
             "vault",
         ))
+        update_card = QFrame()
+        update_card.setObjectName("aboutSection")
+        update_layout = QVBoxLayout(update_card)
+        update_layout.setContentsMargins(18, 15, 18, 16)
+        update_layout.setSpacing(9)
+        update_title = QLabel("Обновление Clever PGP")
+        update_title.setObjectName("sectionTitle")
+        self.update_status = QLabel(
+            "Проверка выполняется только по запросу пользователя."
+        )
+        self.update_status.setObjectName("sectionText")
+        self.update_status.setWordWrap(True)
+        self.update_progress = QProgressBar()
+        self.update_progress.setRange(0, 100)
+        self.update_progress.hide()
+        self.update_button = QPushButton("Проверить обновления")
+        self.update_button.setObjectName("updateButton")
+        self.update_button.setIcon(line_icon("shield"))
+        self.update_button.clicked.connect(self._update_action)
+        update_layout.addWidget(update_title)
+        update_layout.addWidget(self.update_status)
+        update_layout.addWidget(self.update_progress)
+        update_layout.addWidget(self.update_button)
+        outer.addWidget(update_card)
         outer.addStretch()
 
         copyright_label = QLabel(COPYRIGHT_TEXT)
@@ -154,6 +223,108 @@ class AboutDialog(QDialog):
         outer.addWidget(winspd_label)
         scroll.setWidget(body)
         root.addWidget(scroll)
+
+    def _update_action(self) -> None:
+        if self._update_thread is not None:
+            return
+        if self._update_result is not None and self._update_result.update_available:
+            self._download_selected_update()
+            return
+        self._update_result = None
+        self.update_button.setEnabled(False)
+        self.update_status.setText(tr("Проверяем доступную версию…"))
+        self.update_progress.setRange(0, 0)
+        self.update_progress.setFormat("")
+        self.update_progress.show()
+        worker = UpdateCheckThread(self)
+        self._update_thread = worker
+        worker.checked.connect(self._update_checked)
+        worker.failed.connect(self._update_failed)
+        worker.finished.connect(self._update_thread_finished)
+        worker.start()
+
+    @Slot(object)
+    def _update_checked(self, result: object) -> None:
+        if not isinstance(result, UpdateCheckResult):
+            self._update_failed("Сервер вернул неверные данные о версии.")
+            return
+        self._update_result = result
+        self.update_progress.hide()
+        self.update_button.setEnabled(True)
+        if result.update_available:
+            self.update_status.setText(
+                tr(
+                    "Доступна версия {version}. Установщик будет загружен с официального сайта.",
+                    version=result.latest_version or "",
+                )
+            )
+            self.update_button.setText(tr("Скачать и установить"))
+        elif result.status == "unavailable":
+            self.update_status.setText(
+                tr("Установщик на сервере пока недоступен. Попробуйте позже.")
+            )
+            self.update_button.setText(tr("Проверить снова"))
+        else:
+            self.update_status.setText(tr("Установлена актуальная версия Clever PGP."))
+            self.update_button.setText(tr("Проверить снова"))
+
+    def _download_selected_update(self) -> None:
+        assert self._update_result is not None
+        self.update_button.setEnabled(False)
+        self.update_status.setText(tr("Загрузка обновления с официального сайта…"))
+        self.update_progress.setRange(0, 100)
+        self.update_progress.setValue(1)
+        self.update_progress.setFormat(tr("1% — Подготовка загрузки"))
+        self.update_progress.show()
+        worker = UpdateDownloadThread(self._update_result, self)
+        self._update_thread = worker
+        worker.progress.connect(self._download_progress)
+        worker.downloaded.connect(self._update_downloaded)
+        worker.failed.connect(self._update_failed)
+        worker.finished.connect(self._update_thread_finished)
+        worker.start()
+
+    @Slot(int, str)
+    def _download_progress(self, value: int, message: str) -> None:
+        self.update_progress.setValue(value)
+        self.update_progress.setFormat(f"{value}% — {tr(message)}")
+
+    @Slot(object)
+    def _update_downloaded(self, installer: object) -> None:
+        try:
+            launch_update_installer(Path(str(installer)))
+        except Exception as error:
+            self._update_failed(str(error))
+            return
+        self.update_progress.setValue(100)
+        self.update_progress.setFormat(tr("100% — Установщик запущен"))
+        self.update_status.setText(
+            tr("Установщик обновления запущен. Clever PGP завершает работу.")
+        )
+        application = QApplication.instance()
+        if application is not None:
+            application.quit()
+
+    @Slot(str)
+    def _update_failed(self, message: str) -> None:
+        self._update_result = None
+        self.update_progress.hide()
+        self.update_status.setText(tr(message or "Не удалось проверить обновления."))
+        self.update_button.setText(tr("Проверить снова"))
+        self.update_button.setEnabled(True)
+
+    @Slot()
+    def _update_thread_finished(self) -> None:
+        worker = self._update_thread
+        self._update_thread = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._update_thread is not None:
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     @staticmethod
     def _section(title: str, text: str, icon_name: str) -> QFrame:
@@ -210,4 +381,23 @@ QFrame#aboutSection {
 }
 QLabel#sectionTitle { color: #f9fafb; font-size: 16px; font-weight: 650; }
 QLabel#sectionText { color: #cbd5e1; }
+QPushButton#updateButton {
+    background: #0284c7;
+    border: 1px solid #0ea5e9;
+    border-radius: 9px;
+    color: white;
+    min-height: 40px;
+    padding: 0 16px;
+    font-weight: 650;
+}
+QPushButton#updateButton:disabled { background: #1e293b; color: #64748b; }
+QProgressBar {
+    background: #1e293b;
+    border: 1px solid #475569;
+    border-radius: 8px;
+    color: #f8fafc;
+    min-height: 28px;
+    text-align: center;
+}
+QProgressBar::chunk { background: #0284c7; border-radius: 7px; }
 """

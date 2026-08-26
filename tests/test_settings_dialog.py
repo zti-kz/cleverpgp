@@ -32,10 +32,8 @@ def test_settings_dialog_uses_title_bar_for_closing() -> None:
     assert "Отмена" not in button_texts
     assert button_texts == {
         "Сохранить язык",
-        "Добавить язык…",
-        "Применить режим",
-        "Обновить данные лица",
-        "Изменить мастер-пароль",
+        "Установить перевод…",
+        "Создать шаблон перевода…",
     }
 
     dialog.close()
@@ -74,8 +72,8 @@ def test_settings_dialog_identifies_selected_disk_and_profile_scope() -> None:
     )
 
     assert "Подключённый диск: Z:" in visible_text
-    assert "относятся к локальному профилю" in visible_text
-    assert "изменяются отдельной командой" in visible_text
+    assert "мастер-парол" not in visible_text.casefold()
+    assert "настройки доступа" not in visible_text.casefold()
 
     dialog.close()
     application.processEvents()
@@ -86,6 +84,7 @@ def test_face_dependent_mode_is_rejected_until_face_is_enrolled() -> None:
     dialog = AccessSettingsDialog(
         UnlockMode.PASSWORD_ONLY,
         biometric_enrolled=False,
+        show_profile_controls=True,
     )
     dialog.mode_input.setCurrentIndex(
         dialog.mode_input.findData(UnlockMode.PASSWORD_AND_FACE.value)
@@ -105,6 +104,7 @@ def test_password_request_requires_matching_confirmation_and_clears_fields() -> 
     dialog = AccessSettingsDialog(
         UnlockMode.PASSWORD_ONLY,
         biometric_enrolled=False,
+        show_profile_controls=True,
     )
     dialog.current_password_input.setText("correct horse battery staple")
     dialog.new_password_input.setText("new correct horse battery staple")

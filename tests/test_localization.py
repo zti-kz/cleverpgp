@@ -24,6 +24,7 @@ from cleverpgp.core.profile_service import KdfParameters, ProfileService  # noqa
 from cleverpgp.core.storage import ProfileRepository  # noqa: E402
 from cleverpgp.localization import (  # noqa: E402
     available_languages,
+    export_language_template,
     install_language_pack,
     reload_language_catalogs,
     set_language,
@@ -100,6 +101,23 @@ def test_text_only_language_pack_can_be_added_from_settings(
         assert installed.is_file()
     reload_language_catalogs()
     set_language("ru")
+
+
+def test_translation_template_contains_locale_metadata_and_messages(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "de_DE.cpg-lang"
+
+    exported = export_language_template(
+        target,
+        code="de_DE",
+        native_name="Deutsch",
+    )
+    payload = json.loads(exported.read_text(encoding="utf-8"))
+
+    assert payload["code"] == "de_DE"
+    assert payload["native_name"] == "Deutsch"
+    assert payload["translations"]["Зашифровать файл"] == "Зашифровать файл"
 
 
 def test_author_and_institute_names_are_localized_exactly() -> None:

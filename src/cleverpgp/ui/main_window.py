@@ -747,7 +747,7 @@ class MainWindow(QMainWindow):
         self._compact_result_message = message
         self._compact_result_error = error
         page, content = self._base_page(
-            "Настройки доступа",
+            "Настройки",
             "Подключённый диск продолжает работать.",
             compact=True,
             page_icon="settings",
@@ -1063,7 +1063,7 @@ class MainWindow(QMainWindow):
                     context_menu_labels=(
                         tr("Открыть зашифрованный диск"),
                         tr("Сведения о диске"),
-                        tr("Настройки доступа"),
+                        "",
                         tr("Изменить пароль диска"),
                         "",
                         tr("Отключить зашифрованный диск"),
@@ -1197,7 +1197,7 @@ class MainWindow(QMainWindow):
                                 context_menu_labels=(
                                     tr("Открыть зашифрованный диск"),
                                     tr("Сведения о диске"),
-                                    tr("Настройки доступа"),
+                                    "",
                                     tr("Изменить пароль диска"),
                                     "",
                                     tr("Отключить зашифрованный диск"),
@@ -1289,7 +1289,7 @@ class MainWindow(QMainWindow):
         return (
             tr("Открыть зашифрованный диск"),
             tr("Сведения о диске"),
-            tr("Настройки доступа"),
+            "",
             tr("Изменить пароль диска"),
             tr("Изменить метод шифрования"),
             tr("Увеличить диск"),
@@ -1386,8 +1386,12 @@ class MainWindow(QMainWindow):
         # with the password stored in that disk's own key slot.
         self._prompt_opaque_volume_password(source)
 
-    def _prompt_opaque_volume_password(self, source: Path) -> None:
-        dialog = OpaqueVolumeUnlockDialog(source, self)
+    def _prompt_opaque_volume_password(
+        self,
+        source: Path,
+        dialog: OpaqueVolumeUnlockDialog | None = None,
+    ) -> None:
+        dialog = dialog or OpaqueVolumeUnlockDialog(source, self)
         if (
             dialog.exec() != QDialog.DialogCode.Accepted
             or dialog.request is None
@@ -1400,6 +1404,15 @@ class MainWindow(QMainWindow):
                     self._close_background_window()
             return
         request = dialog.request
+        password_field = getattr(dialog, "password", None)
+        if password_field is not None:
+            password_field.clear()
+        begin_operation = getattr(dialog, "begin_operation", None)
+        if callable(begin_operation):
+            begin_operation()
+            dialog.show()
+            dialog.raise_()
+            dialog.activateWindow()
         passwords: list[str | None] = [request.password]
         profile_key = (
             bytearray(self.session.master_key_copy())
@@ -1433,7 +1446,7 @@ class MainWindow(QMainWindow):
                     context_menu_labels=(
                         tr("Открыть зашифрованный диск"),
                         tr("Сведения о диске"),
-                        tr("Настройки доступа"),
+                        "",
                         tr("Изменить пароль диска"),
                         "",
                         tr("Отключить зашифрованный диск"),
@@ -1445,7 +1458,31 @@ class MainWindow(QMainWindow):
                 if profile_key is not None:
                     profile_key[:] = b"\x00" * len(profile_key)
 
-        self._start_progress_task(mount_opaque, self._container_mounted)
+        def mounted(result: object) -> None:
+            operation_succeeded = getattr(dialog, "operation_succeeded", None)
+            if callable(operation_succeeded):
+                operation_succeeded()
+            self._container_mounted(result)
+
+        def mount_failed(message: str) -> None:
+            operation_failed = getattr(dialog, "operation_failed", None)
+            if callable(operation_failed):
+                operation_failed(message)
+                QTimer.singleShot(
+                    0,
+                    lambda: self._prompt_opaque_volume_password(source, dialog),
+                )
+            else:
+                self._show_error(message)
+
+        self._start_progress_task(
+            mount_opaque,
+            mounted,
+            on_failure=mount_failed,
+        )
+        update_progress = getattr(dialog, "update_progress", None)
+        if self._task_thread is not None and callable(update_progress):
+            self._task_thread.progress.connect(update_progress)
 
     def _container_mounted(self, result: object) -> None:
         drive = str(result)

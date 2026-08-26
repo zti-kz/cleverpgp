@@ -3,7 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -77,19 +78,11 @@ class SecureDeleteDialog(QDialog):
         path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(path)
         explanation = QLabel(
-            "Clever PGP выполнит три прохода перезаписи содержимого и затем удалит файл. "
-            "Операцию нельзя отменить."
+            "Clever PGP перезапишет содержимое, удалит запись файла и обновит "
+            "Проводник. Операцию нельзя отменить."
         )
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
-        limitation = QLabel(
-            "Ограничение SSD: из-за резервных ячеек, TRIM и выравнивания износа "
-            "физическое уничтожение всех прежних копий не может быть гарантировано. "
-            "Для SSD основным методом защиты является шифрование данных до записи."
-        )
-        limitation.setObjectName("warning")
-        limitation.setWordWrap(True)
-        layout.addWidget(limitation)
         self.confirmation = QCheckBox(
             "Я понимаю, что выбранный файл будет удалён без возможности восстановления"
         )
@@ -127,8 +120,6 @@ class SecureDeleteDialog(QDialog):
         self.confirmation.setEnabled(False)
         self.cancel_button.setEnabled(False)
         self.delete_button.setEnabled(False)
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
-        self.show()
         self.progress.setValue(1)
         self.progress.setFormat("1% — Проверка выбранного файла")
         self.progress.show()
@@ -152,6 +143,8 @@ class SecureDeleteDialog(QDialog):
 
     @Slot()
     def _succeeded(self) -> None:
+        self.progress.setValue(100)
+        self.progress.setFormat("100% — Файл безвозвратно удалён")
         self.status.setObjectName("success")
         self.status.setText("Файл безвозвратно удалён.")
         self.status.show()
@@ -168,9 +161,6 @@ class SecureDeleteDialog(QDialog):
     @Slot()
     def _finished(self) -> None:
         self.running = False
-        self.progress.hide()
-        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
-        self.show()
         self.cancel_button.setEnabled(True)
         self.delete_button.setEnabled(True)
         self.worker = None
@@ -180,6 +170,12 @@ class SecureDeleteDialog(QDialog):
         if not self.running:
             super().reject()
 
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.running:
+            event.ignore()
+            return
+        super().closeEvent(event)
+
 
 def run_secure_delete_dialog(source: Path) -> int:
     application = QApplication(sys.argv)
@@ -188,8 +184,7 @@ def run_secure_delete_dialog(source: Path) -> int:
     install_screen_bounds(application)
     dialog = SecureDeleteDialog(source)
     dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-    dialog.show()
-    fit_window_to_screen(dialog)
+    QTimer.singleShot(0, lambda: fit_window_to_screen(dialog))
     return 0 if dialog.exec() else 1
 
 
@@ -199,7 +194,6 @@ QLabel { background: transparent; }
 QLabel#brand { color: #7dd3fc; font-size: 22px; font-weight: 700; }
 QLabel#title { color: #f9fafb; font-size: 20px; font-weight: 700; }
 QLabel#path { background: #182235; border: 1px solid #2d3b52; border-radius: 8px; padding: 10px 14px; color: #cbd5e1; }
-QLabel#warning { color: #fde68a; background: #422006; border: 1px solid #a16207; border-radius: 9px; padding: 12px 14px; }
 QLabel#success { color: #99f6e4; background: #052e2b; border: 1px solid #0f766e; border-radius: 9px; padding: 10px 14px; }
 QLabel#error { color: #fca5a5; background: #3f151b; border: 1px solid #991b1b; border-radius: 9px; padding: 10px 14px; }
 QCheckBox { spacing: 10px; padding: 8px 2px; }

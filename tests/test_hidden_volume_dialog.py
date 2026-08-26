@@ -72,3 +72,25 @@ def test_opaque_unlock_only_requests_the_selected_disk_password(
     assert not hasattr(dialog, "protection_password")
     dialog.close()
     application.processEvents()
+
+
+def test_opaque_unlock_reuses_one_window_for_progress_and_error(
+    tmp_path: Path,
+) -> None:
+    application = QApplication.instance() or QApplication([])
+    dialog = OpaqueVolumeUnlockDialog(tmp_path / "CPGP_2GB.cpgv")
+    dialog.show()
+
+    dialog.begin_operation()
+    dialog.update_progress(42, "Подключение диска")
+
+    assert dialog.progress.isVisible()
+    assert dialog.progress.value() == 42
+    assert dialog.unlock_button.isEnabled() is False
+
+    dialog.operation_failed("Неверный пароль диска.")
+
+    assert dialog.error_label.text() == "Неверный пароль диска."
+    assert dialog.unlock_button.isEnabled() is True
+    dialog.close()
+    application.processEvents()

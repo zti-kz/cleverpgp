@@ -1001,7 +1001,7 @@ def test_system_disk_creation_uses_winspd_lifecycle_manager(
     assert manager.create_call["context_menu_labels"] == (
             "Открыть зашифрованный диск",
             "Сведения о диске",
-            "Настройки доступа",
+            "",
             "Изменить пароль диска",
         "Изменить метод шифрования",
         "Увеличить диск",
@@ -1111,7 +1111,7 @@ def test_direct_open_auto_routes_system_disk_and_hides_to_tray(
     assert manager.mount_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
         "Сведения о диске",
-        "Настройки доступа",
+            "",
         "Изменить пароль диска",
         "",
         "Отключить зашифрованный диск",
@@ -1430,7 +1430,7 @@ def test_hidden_disk_creation_uses_dual_password_windows_workflow(
     assert manager.hidden_call["context_menu_labels"] == (
         "Открыть зашифрованный диск",
         "Сведения о диске",
-        "Настройки доступа",
+            "",
         "Изменить пароль диска",
         "",
         "Отключить зашифрованный диск",

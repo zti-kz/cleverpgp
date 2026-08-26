@@ -110,6 +110,10 @@ def main(
         # The regular application uses the whole available desktop while
         # keeping the taskbar and standard window controls accessible.
         window.showMaximized()
+    elif container_path is not None:
+        # A double-click opens only the disk authentication window. The hidden
+        # controller keeps serving the disk without flashing a second shell.
+        window.hide()
     else:
         # Direct container and Explorer operations show only the compact
         # authentication window. Mounting or resizing then returns to tray.

@@ -30,7 +30,7 @@ _lock = RLock()
 _catalogs: dict[str, dict[str, str]] | None = None
 _languages: tuple[Language, ...] = ()
 _current_language = "ru"
-_LANGUAGE_CODE = re.compile(r"^[a-z]{2,3}(?:-[A-Z]{2})?$")
+_LANGUAGE_CODE = re.compile(r"^[a-z]{2,3}(?:[_-][A-Z]{2})?$")
 _MAX_LANGUAGE_PACK_BYTES = 2 * 1024 * 1024
 _MAX_TRANSLATIONS = 5000
 _dynamic_messages = (
@@ -172,6 +172,49 @@ def install_language_pack(source: Path) -> Language:
             pass
     reload_language_catalogs()
     return language
+
+
+def export_language_template(
+    destination: Path,
+    *,
+    code: str,
+    native_name: str,
+) -> Path:
+    """Write a complete text-only translation template for a new locale."""
+
+    normalized_code = code.strip()
+    normalized_name = native_name.strip()
+    if _LANGUAGE_CODE.fullmatch(normalized_code) is None:
+        raise ValueError("Код языка должен иметь вид de_DE или de.")
+    if not normalized_name or len(normalized_name) > 80 or "\x00" in normalized_name:
+        raise ValueError("Введите название языка на этом языке.")
+    built_in = {item.code for item in _built_in_languages()}
+    if normalized_code in built_in:
+        raise ValueError("Для встроенного языка шаблон не требуется.")
+
+    _load_catalogs()
+    assert _catalogs is not None
+    source_messages = sorted(
+        {
+            message
+            for catalog in _catalogs.values()
+            for message in catalog
+        }
+    )
+    payload = {
+        "code": normalized_code,
+        "native_name": normalized_name,
+        # Russian source text is retained until a translator replaces a value.
+        # This keeps incomplete packs readable instead of producing blank labels.
+        "translations": {message: message for message in source_messages},
+    }
+    selected = Path(destination).expanduser().resolve()
+    selected.parent.mkdir(parents=True, exist_ok=True)
+    selected.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return selected
 
 
 def reload_language_catalogs() -> None:

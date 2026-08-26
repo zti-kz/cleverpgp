@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -20,6 +21,7 @@ from cleverpgp.core.models import UnlockMode
 from cleverpgp.localization import (
     available_languages,
     current_language,
+    export_language_template,
     localize_widget_tree,
     tr,
 )
@@ -48,13 +50,13 @@ class AccessSettingsDialog(QDialog):
         biometric_enrolled: bool,
         drive: str | None = None,
         selected_language: str | None = None,
-        show_profile_controls: bool = True,
+        show_profile_controls: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._biometric_enrolled = biometric_enrolled
         self.request: AccessSettingsRequest | None = None
-        self.setWindowTitle("Настройки доступа — Clever PGP")
+        self.setWindowTitle("Настройки — Clever PGP")
         self.setModal(True)
         self.setMinimumWidth(420)
         self.resize(760, 760)
@@ -83,7 +85,7 @@ class AccessSettingsDialog(QDialog):
         identity = QVBoxLayout()
         brand = QLabel("Clever PGP")
         brand.setObjectName("brand")
-        title = QLabel("Настройки доступа")
+        title = QLabel("Настройки")
         title.setObjectName("title")
         identity.addWidget(brand)
         identity.addWidget(title)
@@ -98,18 +100,6 @@ class AccessSettingsDialog(QDialog):
             selected_disk = QLabel(tr("Подключённый диск: {drive}", drive=drive))
             selected_disk.setObjectName("path")
             outer.addWidget(selected_disk)
-
-        scope_note = QLabel(
-            "Пароли принадлежат отдельным файлам и дискам. Clever PGP не требует "
-            "общего мастер-пароля при запуске."
-            if not show_profile_controls
-            else "Эти настройки относятся к локальному профилю Clever PGP. "
-            "Пароли внешнего и скрытого дисков изменяются "
-            "отдельной командой в контекстном меню."
-        )
-        scope_note.setObjectName("muted")
-        scope_note.setWordWrap(True)
-        outer.addWidget(scope_note)
 
         language_card = self._card()
         language_layout = QVBoxLayout(language_card)
@@ -137,10 +127,14 @@ class AccessSettingsDialog(QDialog):
         language_button.setIcon(line_icon("language"))
         language_button.clicked.connect(self._request_language_change)
         language_layout.addWidget(language_button)
-        add_language_button = QPushButton("Добавить язык…")
+        add_language_button = QPushButton("Установить перевод…")
         add_language_button.setIcon(line_icon("language"))
         add_language_button.clicked.connect(self._request_language_installation)
         language_layout.addWidget(add_language_button)
+        template_button = QPushButton("Создать шаблон перевода…")
+        template_button.setIcon(line_icon("file_lock"))
+        template_button.clicked.connect(self._export_language_template)
+        language_layout.addWidget(template_button)
         outer.addWidget(language_card)
 
         if not show_profile_controls:
@@ -311,6 +305,45 @@ class AccessSettingsDialog(QDialog):
             language_pack_path=Path(selected).expanduser().resolve(),
         )
         self.accept()
+
+    def _export_language_template(self) -> None:
+        code, accepted = QInputDialog.getText(
+            self,
+            tr("Новый перевод Clever PGP"),
+            tr("Код языка и страны (например, de_DE):"),
+        )
+        if not accepted:
+            return
+        native_name, accepted = QInputDialog.getText(
+            self,
+            tr("Новый перевод Clever PGP"),
+            tr("Название языка на этом языке (например, Deutsch):"),
+        )
+        if not accepted:
+            return
+        default_name = f"{code.strip() or 'translation'}.cpg-lang"
+        selected, _filter = QFileDialog.getSaveFileName(
+            self,
+            tr("Сохранить шаблон перевода"),
+            default_name,
+            tr("Языковой пакет Clever PGP (*.cpg-lang *.json)"),
+        )
+        if not selected:
+            return
+        try:
+            export_language_template(
+                Path(selected),
+                code=code,
+                native_name=native_name,
+            )
+        except (OSError, ValueError) as error:
+            self._show_error(str(error))
+            return
+        self.error_label.setObjectName("success")
+        self.error_label.setText(
+            tr("Шаблон перевода сохранён: {path}", path=selected)
+        )
+        self.error_label.show()
 
     def _request_password_change(self) -> None:
         current_password = self.current_password_input.text()
