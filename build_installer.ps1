@@ -58,17 +58,43 @@ $InnoCompiler = Join-Path $InnoDirectory "ISCC.exe"
 $AppVersion = "0.15.3"
 $SignToolPath = $env:CLEVERPGP_SIGNTOOL
 $SigningCertificateThumbprint = $env:CLEVERPGP_SIGN_CERT_SHA1
+$ArtifactSigningDlibPath = $env:CLEVERPGP_ARTIFACT_SIGNING_DLIB
+$ArtifactSigningMetadataPath = $env:CLEVERPGP_ARTIFACT_SIGNING_METADATA
 $ExpectedSigningIdentity = if ([string]::IsNullOrWhiteSpace($env:CLEVERPGP_SIGN_EXPECTED_NAME)) {
     "Almas Oskenbay"
 } else {
     $env:CLEVERPGP_SIGN_EXPECTED_NAME.Trim()
 }
+$CertificateStoreSigningEnabled = -not [string]::IsNullOrWhiteSpace(
+    $SigningCertificateThumbprint
+)
+$ArtifactSigningConfigured = (
+    -not [string]::IsNullOrWhiteSpace($ArtifactSigningDlibPath) -or
+    -not [string]::IsNullOrWhiteSpace($ArtifactSigningMetadataPath)
+)
+$ArtifactSigningEnabled = (
+    -not [string]::IsNullOrWhiteSpace($ArtifactSigningDlibPath) -and
+    -not [string]::IsNullOrWhiteSpace($ArtifactSigningMetadataPath)
+)
+if ($ArtifactSigningConfigured -and -not $ArtifactSigningEnabled) {
+    throw (
+        "Для Microsoft Artifact Signing одновременно задайте " +
+        "CLEVERPGP_ARTIFACT_SIGNING_DLIB и CLEVERPGP_ARTIFACT_SIGNING_METADATA."
+    )
+}
+if ($CertificateStoreSigningEnabled -and $ArtifactSigningEnabled) {
+    throw "Нельзя одновременно использовать сертификат Windows и Microsoft Artifact Signing."
+}
+$SigningEnabled = $CertificateStoreSigningEnabled -or $ArtifactSigningEnabled
 $TimestampUrl = if ([string]::IsNullOrWhiteSpace($env:CLEVERPGP_TIMESTAMP_URL)) {
-    "http://time.certum.pl"
+    if ($ArtifactSigningEnabled) {
+        "http://timestamp.acs.microsoft.com"
+    } else {
+        "http://time.certum.pl"
+    }
 } else {
     $env:CLEVERPGP_TIMESTAMP_URL.Trim()
 }
-$SigningEnabled = -not [string]::IsNullOrWhiteSpace($SigningCertificateThumbprint)
 $SigningCertificateStoreArguments = @()
 
 function Assert-ProjectChild([string]$Path) {
@@ -168,12 +194,6 @@ function Initialize-CodeSigning {
     }
 
     $script:SignToolPath = Resolve-SignToolPath
-    $NormalizedThumbprint = $SigningCertificateThumbprint.Replace(" ", "").ToUpperInvariant()
-    if ($NormalizedThumbprint -notmatch '^[0-9A-F]{40}$') {
-        throw "CLEVERPGP_SIGN_CERT_SHA1 должен содержать 40-значный отпечаток сертификата."
-    }
-    $script:SigningCertificateThumbprint = $NormalizedThumbprint
-
     $TimestampUri = $null
     if (
         -not [Uri]::TryCreate($TimestampUrl, [UriKind]::Absolute, [ref]$TimestampUri) -or
@@ -181,6 +201,69 @@ function Initialize-CodeSigning {
     ) {
         throw "CLEVERPGP_TIMESTAMP_URL должен содержать полный HTTP(S)-адрес службы RFC 3161."
     }
+
+    if ($ArtifactSigningEnabled) {
+        $script:ArtifactSigningDlibPath = [IO.Path]::GetFullPath(
+            $ArtifactSigningDlibPath
+        )
+        $script:ArtifactSigningMetadataPath = [IO.Path]::GetFullPath(
+            $ArtifactSigningMetadataPath
+        )
+        if (
+            -not (Test-Path -LiteralPath $ArtifactSigningDlibPath -PathType Leaf) -or
+            [IO.Path]::GetFileName($ArtifactSigningDlibPath) -ne
+                "Azure.CodeSigning.Dlib.dll"
+        ) {
+            throw (
+                "CLEVERPGP_ARTIFACT_SIGNING_DLIB должен указывать на " +
+                "Azure.CodeSigning.Dlib.dll из официальных клиентских средств Microsoft."
+            )
+        }
+        if (-not (Test-Path -LiteralPath $ArtifactSigningMetadataPath -PathType Leaf)) {
+            throw "Файл метаданных Microsoft Artifact Signing не найден."
+        }
+        try {
+            $ArtifactMetadata = Get-Content `
+                -LiteralPath $ArtifactSigningMetadataPath `
+                -Raw |
+                ConvertFrom-Json
+        } catch {
+            throw "Файл метаданных Microsoft Artifact Signing содержит некорректный JSON."
+        }
+        foreach ($RequiredProperty in @(
+            "Endpoint",
+            "CodeSigningAccountName",
+            "CertificateProfileName"
+        )) {
+            if ([string]::IsNullOrWhiteSpace([string]$ArtifactMetadata.$RequiredProperty)) {
+                throw "В метаданных Microsoft Artifact Signing отсутствует $RequiredProperty."
+            }
+        }
+        $ArtifactEndpoint = $null
+        if (
+            -not [Uri]::TryCreate(
+                [string]$ArtifactMetadata.Endpoint,
+                [UriKind]::Absolute,
+                [ref]$ArtifactEndpoint
+            ) -or
+            $ArtifactEndpoint.Scheme -ne "https" -or
+            -not $ArtifactEndpoint.Host.EndsWith(
+                ".codesigning.azure.net",
+                [StringComparison]::OrdinalIgnoreCase
+            )
+        ) {
+            throw "Endpoint Microsoft Artifact Signing должен принадлежать codesigning.azure.net."
+        }
+        Write-Host "Microsoft Artifact Signing настроен: $($ArtifactMetadata.CodeSigningAccountName)"
+        Write-Host "Профиль сертификата: $($ArtifactMetadata.CertificateProfileName)"
+        return
+    }
+
+    $NormalizedThumbprint = $SigningCertificateThumbprint.Replace(" ", "").ToUpperInvariant()
+    if ($NormalizedThumbprint -notmatch '^[0-9A-F]{40}$') {
+        throw "CLEVERPGP_SIGN_CERT_SHA1 должен содержать 40-значный отпечаток сертификата."
+    }
+    $script:SigningCertificateThumbprint = $NormalizedThumbprint
 
     $Stores = @(
         [PSCustomObject]@{
@@ -249,14 +332,21 @@ function Invoke-CodeSigning([string]$Path) {
     }
 
     Write-Host "Цифровая подпись: $Path"
-    & $SignToolPath sign `
-        @SigningCertificateStoreArguments `
-        /sha1 $SigningCertificateThumbprint `
-        /fd SHA256 `
-        /tr $TimestampUrl `
-        /td SHA256 `
-        /v `
-        $Path
+    $SignArguments = @("sign", "/fd", "SHA256", "/tr", $TimestampUrl, "/td", "SHA256")
+    if ($ArtifactSigningEnabled) {
+        $SignArguments += @(
+            "/dlib",
+            $ArtifactSigningDlibPath,
+            "/dmdf",
+            $ArtifactSigningMetadataPath,
+            "/debug"
+        )
+    } else {
+        $SignArguments += $SigningCertificateStoreArguments
+        $SignArguments += @("/sha1", $SigningCertificateThumbprint)
+    }
+    $SignArguments += @("/v", $Path)
+    & $SignToolPath $SignArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Не удалось подписать файл: $Path"
     }
@@ -285,6 +375,87 @@ function Invoke-CodeSigning([string]$Path) {
     ) {
         throw "Подпись, издатель или доверенная метка времени не подтверждены: $Path"
     }
+}
+
+function Test-PortableExecutable([string]$Path) {
+    $Stream = $null
+    $Reader = $null
+    try {
+        $Stream = [IO.File]::Open(
+            $Path,
+            [IO.FileMode]::Open,
+            [IO.FileAccess]::Read,
+            [IO.FileShare]::ReadWrite
+        )
+        if ($Stream.Length -lt 64) {
+            return $false
+        }
+        $Reader = [IO.BinaryReader]::new($Stream)
+        if ($Reader.ReadUInt16() -ne 0x5A4D) {
+            return $false
+        }
+        $Stream.Position = 0x3C
+        $PeOffset = $Reader.ReadUInt32()
+        if ($PeOffset -gt $Stream.Length - 4) {
+            return $false
+        }
+        $Stream.Position = $PeOffset
+        return $Reader.ReadUInt32() -eq 0x00004550
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $Reader) {
+            $Reader.Dispose()
+        } elseif ($null -ne $Stream) {
+            $Stream.Dispose()
+        }
+    }
+}
+
+function Invoke-ApplicationBundleSigning([string]$ApplicationRoot) {
+    if (-not $SigningEnabled) {
+        return
+    }
+    $PortableExecutables = @(
+        Get-ChildItem -LiteralPath $ApplicationRoot -File -Recurse |
+            Where-Object { Test-PortableExecutable $_.FullName } |
+            Sort-Object -Property FullName
+    )
+    if ($PortableExecutables.Count -eq 0) {
+        throw "В собранном приложении не найдены PE-файлы для проверки подписи."
+    }
+
+    $SignedCount = 0
+    $PreservedCount = 0
+    foreach ($File in $PortableExecutables) {
+        $ExistingSignature = Get-AuthenticodeSignature -LiteralPath $File.FullName
+        if ($ExistingSignature.Status -eq [System.Management.Automation.SignatureStatus]::Valid) {
+            $PreservedCount++
+            continue
+        }
+        if (
+            $ExistingSignature.Status -ne
+                [System.Management.Automation.SignatureStatus]::NotSigned
+        ) {
+            throw (
+                "Обнаружена повреждённая или недоверенная существующая подпись " +
+                "$($File.FullName): $($ExistingSignature.Status)."
+            )
+        }
+        Invoke-CodeSigning $File.FullName
+        $SignedCount++
+    }
+
+    foreach ($File in $PortableExecutables) {
+        $FinalSignature = Get-AuthenticodeSignature -LiteralPath $File.FullName
+        if ($FinalSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "PE-файл остался без доверенной подписи: $($File.FullName)"
+        }
+    }
+    Write-Host (
+        "PE-файлы приложения проверены: подписано $SignedCount, " +
+        "сохранено доверенных подписей поставщиков $PreservedCount."
+    )
 }
 
 function Expand-VerifiedWinSpdPackage {
@@ -370,9 +541,12 @@ if ($LASTEXITCODE -ne 0) { throw "Сборка CleverPGP.exe завершила�
 $BundledApplication = Join-Path $ApplicationDirectory "CleverPGP"
 $BundledExecutable = Join-Path $BundledApplication "CleverPGP.exe"
 if ($SigningEnabled) {
-    Invoke-CodeSigning $BundledExecutable
+    Invoke-ApplicationBundleSigning $BundledApplication
 } else {
-    Write-Host "Цифровая подпись пропущена: сертификат Code Signing ещё не настроен."
+    Write-Host (
+        "Цифровая подпись пропущена: сертификат Code Signing или " +
+        "Microsoft Artifact Signing ещё не настроен."
+    )
 }
 $RuntimeMarker = Join-Path $BuildDirectory "runtime-check.json"
 Assert-ProjectChild $RuntimeMarker

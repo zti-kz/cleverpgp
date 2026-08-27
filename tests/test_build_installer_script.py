@@ -60,6 +60,30 @@ def test_windows_installer_verifies_timestamped_output_and_writes_checksum() -> 
     assert "Set-Content -LiteralPath $SetupChecksum -Encoding ascii" in script
 
 
+def test_windows_installer_supports_microsoft_artifact_signing() -> None:
+    script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
+
+    assert "CLEVERPGP_ARTIFACT_SIGNING_DLIB" in script
+    assert "CLEVERPGP_ARTIFACT_SIGNING_METADATA" in script
+    assert '"Azure.CodeSigning.Dlib.dll"' in script
+    assert '".codesigning.azure.net"' in script
+    assert '"/dlib"' in script
+    assert '"/dmdf"' in script
+    assert '"http://timestamp.acs.microsoft.com"' in script
+
+
+def test_windows_installer_signs_every_unsigned_portable_executable() -> None:
+    script = (PROJECT_ROOT / "build_installer.ps1").read_text(encoding="utf-8-sig")
+
+    assert "function Test-PortableExecutable" in script
+    assert "function Invoke-ApplicationBundleSigning" in script
+    assert "[System.Management.Automation.SignatureStatus]::NotSigned" in script
+    assert "Invoke-ApplicationBundleSigning $BundledApplication" in script
+    assert script.index("Invoke-ApplicationBundleSigning $BundledApplication") < script.index(
+        "$RuntimeMarker ="
+    )
+
+
 def test_elevated_winspd_check_preserves_diagnostic_details() -> None:
     script = (PROJECT_ROOT / "scripts" / "run_winspd_windows_check.ps1").read_text(
         encoding="utf-8-sig"
